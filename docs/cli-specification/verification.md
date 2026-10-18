@@ -96,6 +96,8 @@ The reference PNG was visually inspected: full-width status bar, centered block
 title, left-aligned centered option group, bright selected label/account accent,
 Back beside first option, hints below list and unused lower terminal area.
 This validates the source-layout finding; it is not Ana's target geometry.
+Binary metadata inspection confirms the checked-in GIF has 201 frames at 50 ms
+and both media assets are 920×520. No media was copied or regenerated in this audit.
 
 `preview-frames.bash` selects an installed UTF-8 locale (fails if absent), sets
 80×24, seed 1967, fixed date/host/path, fake availability, reads actual menu labels

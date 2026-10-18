@@ -64,4 +64,3 @@ no dependency installation or provider invocation was needed for this audit.
 The reference tree has no LICENSE file. This specification records provenance
 without importing source/assets; attribution and license for a literal port are
 an explicit [architecture discussion](architecture.md) item.
-

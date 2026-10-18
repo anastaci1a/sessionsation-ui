@@ -88,6 +88,7 @@ sizes. Next port inline forms and picker keys, then connect the existing public
 plan client. Final gate is the authorized future-terminal deployment with rollback,
 plus actual HERDR viewer review. No new model usage is part of these slices.
 
-The active GitHub issue owns acceptance status and dot's responses. Approval of
+[Issue 5](https://github.com/anastaci1a/sessionsation-ui/issues/5) owns acceptance
+status and dot's responses. Approval of
 this audit is not Agent DM adapter acceptance or authorization to alter pins,
 original receipts, root supervisor, accounts or live sessions.

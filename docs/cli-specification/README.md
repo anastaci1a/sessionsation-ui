@@ -41,4 +41,5 @@ and review; a similar-looking mockup is insufficient.
   are outside this rebuild.
 
 The architecture proposal is awaiting discussion with dot before implementation.
-Tasks and acceptance gates belong to the linked GitHub issue, not a growing log here.
+[Issue 5](https://github.com/anastaci1a/sessionsation-ui/issues/5) owns decisions,
+tasks and acceptance gates; this directory owns the specification.
