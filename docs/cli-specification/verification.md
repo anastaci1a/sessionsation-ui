@@ -56,8 +56,8 @@ Read-only inspection on Satellite, 2026-10-18:
 | Two isolated `herdr config check` invocations | Both exit 0, `config: ok`: qualified plugin action and direct popup with 80% dimensions, each bound to `prefix+shift+l` |
 
 Configuration checks used separate temporary TOML files selected with
-`HERDR_CONFIG_PATH`. The plugin-action fixture is the proposed example in
-[architecture](architecture.md#preferred-host-flow-popup-to-a-new-normal-tab).
+`HERDR_CONFIG_PATH`. The plugin-action fixture used `key = "prefix+shift+l"`,
+`type = "plugin_action"`, `command = "sessionsation.launcher"`.
 The direct-popup fixture replaced its type/command with `popup` and `/bin/true`,
 and added `width = "80%"`, `height = "80%"`. The checker did not execute either
 command. These results validate parsing, not plugin installation, key delivery,

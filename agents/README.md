@@ -21,6 +21,8 @@
   Do not retry mutations automatically or map legacy receipts without coordination.
 - Execute opaque backend launcher argv without shell interpolation. Closing the
   management viewer must never stop an agent. Preserve a host shell for restart.
+- Rust changes: run `scripts/check-rust.sh` (format, Clippy, tests in the offline
+  build container). `target-ui/` is isolated from installed/review backend artifacts.
 - Run `npm test` and `npm run check`. Use isolated config and fake backend fixtures;
   live tests target only explicitly owned disposable HERDR sessions.
 - Docs-only changes need `npm run check`, not runtime tests. Validate examples.

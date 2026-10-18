@@ -30,7 +30,7 @@ standalone Plain Shell, nested Herdr, shell Exit, jobs and management are exclud
 Preserve visual focus/navigation, not irrelevant action wiring. Installed `manage`
 and the numbered launcher remain unchanged while the replacement is discussed.
 The planned HERDR entry and exit behavior is specified in
-[architecture](architecture.md#preferred-host-flow-popup-to-a-new-normal-tab):
+[architecture](architecture.md#user-flow):
 the popup requests a separate normal tab, then exits after confirmed handoff.
 Today's opaque exec plans alone do not implement that flow.
 

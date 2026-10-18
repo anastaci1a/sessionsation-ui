@@ -31,7 +31,7 @@ and review; a similar-looking mockup is insufficient.
   Plain Shell and management are outside this replacement's scope.
 - Preferred entry is a HERDR plugin popup with an installer-chosen keybinding;
   selection creates a normal tab, then the popup exits. It never hosts/promotes an
-  agent. The proposed contract and Ana's binding are in [architecture](architecture.md#preferred-host-flow-popup-to-a-new-normal-tab).
+  agent. The proposed contract and Ana's binding are in [architecture](architecture.md#user-flow).
 - No decorative title, ASCII lettering, replacement brand heading or blank title
   reservation. Functional page labels and the reference status bar are distinct.
 - Star field, density and fade extend to the **terminal bottom**, independent of
@@ -45,6 +45,7 @@ and review; a similar-looking mockup is insufficient.
   inert fixtures; Agent DM's pinned acceptance, original receipts and live agents
   are outside this rebuild.
 
-The architecture proposal is awaiting discussion with dot before implementation.
+Ana approved the Rust design and editable-summary flow. Implementation and
+verification follow the architecture document; the installed launcher is unchanged.
 [Issue 5](https://github.com/anastaci1a/sessionsation-ui/issues/5) owns decisions,
 tasks and acceptance gates; this directory owns the specification.

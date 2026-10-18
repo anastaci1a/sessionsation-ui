@@ -1,198 +1,96 @@
-# Architecture discussion for dot
+# Rust launcher design
 
-Status: proposal for discussion before rebuilding. The reference audit is
-complete; no new renderer or frontend framework is selected by this document.
-The [current architecture](../architecture.md) remains the installed contract.
+Ana approved Rust and this interaction model. Implementation is incremental; the
+installed numbered launcher remains described in [current architecture](../architecture.md).
+[Issue 5](https://github.com/anastaci1a/sessionsation-ui/issues/5) owns acceptance.
 
-## Language decision
+## User flow
 
-Ana prioritizes speed, consistency and fewer bugs. Dot leans toward a separate
-Rust frontend; the language is **not finalized**. Keep Bash limited to necessary,
-tested host bootstrap. Whichever
-runtime is selected must port the reference algorithms and form state machines
-faithfully, using cell traces and interaction fixtures before product adaptation.
+The HERDR plugin opens a half-terminal popup. Ana uses `prefix+shift+l`; each
+installer chooses a binding without replacing unrelated keys or the user's prefix.
+Main menu: New Session and Configuration. No decorative title or reserved title
+area. Stars/gradient cover the entire popup PTY; only options scroll. Back and hints
+stay at the bottom. No existing-session operations or standalone shell action.
 
-The previous attempt failed as a specification/parity exercise: it simplified
-motion, changed picker semantics, omitted inline path completion/name flow and
-introduced a different page layout. Changing language alone does not fix those
-differences. The source rules and reviewed comparison evidence must lead the port.
+New Session is an editable summary: Account, Space, Name, Directory. Pickers open
+as separate pages. Start Session uses the reference Sessions page's separator
+before Session Manager, anchored above bottom navigation. It is gray/struck through
+and disabled until all fields are valid. Back preserves draft choices.
 
-| Option | Fit here | Cost/risk to resolve |
-| --- | --- | --- |
-| Rust terminal frontend | Existing backend language; explicit types and integer behavior; possible single UI executable | Separate frontend build/deployment; do not link private backend lifecycle/storage internals; current host lacks native Cargo and uses offline build container |
-| Node ESM + JSDoc or TypeScript | Existing Node client, argv validation, config and tests; async subprocess/filesystem I/O; terminal state isolated from backend | Exact integer/PRNG behavior needs care; TypeScript adds compiler/build artifacts if chosen; must handle backpressure and grapheme widths explicitly |
-| Bash runtime port | Closest initial source behavior | Dynamic scope, shell job coupling, subprocess-heavy layout and duplicate lifecycle glue; contrary to avoiding an all-Bash rebuild |
+- Space starts with the originating Space when known. Existing choices use IDs;
+  proposed new names reject duplicates. Creation waits until Start.
+- Name is the unique backend name and normal tab label, also a valid single path
+  component. No silent slugification.
+- Directory is `<unset>` until a valid name/root yields `root/name`. Automatically
+  derived paths follow Name/Space changes; manually chosen paths remain unchanged.
+  An existing automatic path requires explicit selection. Every Create Directory
+  action stages intent, including configuration pickers; no directory is created
+  before Start. Enter accepts a child, Right/Tab browses, and the path stays typable.
+- Account remembers the last successful launch. Backend-computed fresh usage and
+  existing limits govern prefill; otherwise show `<unset>`. Manual selection may
+  override this preference restriction when the backend permits launch. Never
+  silently substitute an account or infer permission to spend purchased credits.
 
-No new dependency is needed to finish the audit. Framework adoption is undecided:
-generic list widgets can change spacing, focus, timing and rendering semantics.
-A minimal terminal driver with pure core is preferable unless a framework proves
-exact control without making every frame a full-screen redraw.
-
-## Preferred host flow: popup to a new normal tab
-
-Ana requests a HERDR plugin terminal popup opened by a configurable keybinding.
-Each installer chooses its own binding. Her preference is prefix then uppercase L:
-the explicit modifier spelling is `prefix+shift+l`. Preserve the user's prefix
-and unrelated bindings; `prefix+l` is the default focus-right action. Installation
-must preview conflicts and retain a reversible configuration change.
-
-The proposed plugin declares a launcher action and a pane entrypoint with
-`placement = "popup"`. A `[[keys.command]]` with `type = "plugin_action"` invokes
-the qualified action, which opens that entrypoint. Binding an action alone does
-not make it a popup. HERDR also supports direct `type = "popup"` shell commands,
-but the plugin route keeps launcher identity and installation together. The
-existing manifest currently declares only the management overlay: neither this
-action nor a popup launcher is installed. [Verification](verification.md#herdr-popup-compatibility)
-records installed-version checks and the CLI-help discrepancy.
-
-Proposed configuration shape, **not an installation command**; the action ID
-below must be implemented before use:
-
-```toml
-[[keys.command]]
-key = "prefix+shift+l"
-type = "plugin_action"
-command = "sessionsation.launcher"
-description = "create a new session"
-```
-
-The popup is a terminal UI, not an agent pane. Official HERDR semantics give it
-no pane ID, pane lifecycle events, persistence or agent attachment; focus context
-still identifies the underlying tiled pane. Never substitute that underlying ID
-as the new agent target. Popup input, including Escape, belongs to its process.
-Normal cancellation restores the TTY and exits that process. Do not blindly issue
-global `popup.close`, which could close a replacement popup after a race.
-
-Selection requests a **new session in a separate normal tab in the chosen HERDR
-Space/workspace**, using the chosen directory, account and retained host shell.
-Only after confirmed creation/handoff does the popup exit; the model process is
-never launched inside it or promoted out of it. Errors stay visible; uncertain
-admission must be reconciled without automatic retry. Popup cancellation never
-means agent Stop. The replacement has no existing-session list, resume, attachment,
-account switching for running sessions, or standalone Plain Shell action.
-
-This needs a backend-owned public launch/host contract before wiring the UI:
-today `launcher new/resume/shell` returns an opaque argv plan for execution in the
-calling terminal. HERDR `tab.create` exposes cwd/env/label/focus but no command argv.
-Executing today's plan in the popup would put the agent in the wrong terminal.
-Coordinate a host adapter that creates and verifies the exact new tab/pane,
-launches the plan with the existing retained-shell/environment behavior, and
-reports stable session/runtime identities and failure/admission state. Do not
-inject reconstructed provider commands via terminal text. Preserve the existing
-launcher bypass so a newly created tab cannot recursively reopen the menu. The
-UI consumes this public operation; it owns neither a lifecycle engine nor a
-second data-root supervisor. Session naming should join the same atomic operation.
+Configuration has Global/Per-Space directory mode. Inactive controls use reference
+gray/strike styling; all values survive mode switches. Back saves atomically without
+Save/Cancel buttons. Missing per-Space roots require manual directory selection,
+not global fallback. Preferences own no credentials or lifecycle state.
 
 ## Destination and ownership
 
-The destination picker selects an existing **HERDR Space**, represented by a
-`workspace_id` in its public API. It is independent of the account and working
-directory choices. No separate Projects entity, project catalog or inferred
-directory-to-workspace hierarchy is part of this design. Creating/managing Spaces
-is not required by the picker. Page order and default selection remain for design
-discussion; the originating Space may be offered as an explicit visible default.
-
-| Component | Responsibility |
+| Component | Authority |
 | --- | --- |
-| Agent DM | Agent hierarchy and coordination |
-| sessionsation CLI | Accounts, credentials, session catalog and lifecycle; admission and host launch operation |
-| HERDR | Spaces/workspaces, normal tabs/panes and terminal presentation |
-| sessionsation-ui | Collect new-session choices and display public-contract results |
+| Agent DM | Hierarchy and coordination |
+| sessionsation | Account/authentication, catalog, lifecycle and launch admission |
+| HERDR | Spaces/workspaces and terminal presentation |
+| UI | Draft choices, preferences and public-contract results |
 
-HERDR's public workspace inventory supplies destination labels and IDs. Bind
-selection to the ID, scoped to the same HERDR instance/socket as creation, never
-to display order, label, directory or current focus. Labels may change or collide;
-refresh must retain the selected ID or clearly report that it disappeared. Check
-the destination at launch admission and return a structured error if it is gone;
-never silently use whichever workspace is now focused. The new tab and returned
-attachment must belong to that chosen workspace. Whether UI reads HERDR inventory
-directly or through a public backend host endpoint is a discussion item; either
-route preserves HERDR as its authority and adds no UI-owned catalog.
+No Projects entity is introduced. Workspace selections are scoped to the HERDR
+instance and stable workspace ID, never label/order/focus. Launch revalidates the
+chosen target; disappearing targets fail instead of falling back to current focus.
+The popup has no agent pane identity. Start creates a normal tab in the destination
+(or uses the initial normal tab of a newly created Space), with retained shell,
+chosen account environment and exact name/directory. The popup exits after confirmed
+handoff; cancellation/detachment never means Stop. No process promotion.
 
-The installed schema accepts an optional `workspace_id` for `tab.create`; this
-proposed launcher must pass the explicit chosen ID instead of relying on omission.
-The public launch contract still needs destination selection, directory, account
-and admission/identity behavior agreed before implementation. Workspace selection
-and tab presentation do not establish an Agent DM hierarchy or coordination link.
+## Implementation boundaries
 
-Full-height means the popup's **entire PTY content viewport**: field, gradient and
-bottom controls reach its terminal bottom independently of list length. The HERDR
-border is outside that viewport. Resize follows PTY dimensions, not the outer
-host's dimensions. Popup size remains a reviewed installer preference, not a new
-fixed geometry assumption. This is still creation-only with no decorative title.
+Use Rust 2024, Crossterm, Tokio, Serde and Unicode segmentation/width with locked
+dependencies. A pure reducer, cell renderer and shared picker/forms drive every
+screen. Bounded async effects perform filesystem/public API work; revision tokens
+reject stale completions. No backend calls on arrows or animation ticks, no history
+scan to list accounts, no synchronous I/O in the render/input loop.
 
-Official references: [configuration](https://herdr.dev/docs/configuration/),
-[plugin panes](https://herdr.dev/docs/plugins/),
-[socket API](https://herdr.dev/docs/socket-api/). Source/version evidence is in the
-linked verification section; no runtime popup acceptance is claimed yet.
+Backend public API additions own read-only launch validation, request-ID admission,
+status reconciliation and account prefill eligibility. Start alone creates planned
+resources. Serialize admissions, reserve the name, revalidate and retain durable
+outcomes. No automatic replay after uncertain delivery. Separate admission from
+running, and retain recoverable resources when ownership/execution is uncertain.
+Existing exec plans, legacy message receipts and sole root supervision remain intact.
 
-## Proposed module boundary
+## Visual fidelity and deliberate repairs
 
-1. **Model/reducer:** immutable page, option identity, focused control, text cursor,
-   picker path/history and pending request token. `input → state + effects`;
-   context-specific keys, not one universal Enter/Space handler.
-2. **Geometry/style:** pure terminal dimensions + model → reserved bars/fields,
-   option viewport, bottom controls, masks. Test reference geometry separately
-   from Ana's no-title/full-height adaptation. Text widths are terminal cells.
-3. **Animation:** seeded random source + monotonic time + geometry → baseline,
-   births, replacement debts, palette/sweep and final styled cells. Preserve
-   distributions and integer rounding. JS bitwise operators are signed 32-bit;
-   do not copy Bash 63-bit packed RGB/tag arithmetic blindly. Use explicit tuples
-   or BigInt and supplied random-draw fixtures.
-4. **Terminal driver:** only owner of raw input, focus/paste/wrap modes, resize,
-   diff output and cleanup. One bounded event queue; cancellation remains
-   responsive during asynchronous reads and output backpressure. Restores state
-   before any opaque plan handoff; never a provider supervisor.
-5. **Effects/adapters:** async directory enumeration/validation/explicit mkdir and
-   existing public backend client. No backend calls in animation ticks or arrows.
-   Request tokens reject stale read completions; mutation cancellation is not a
-   claim of rollback or non-admission. No automatic retry or duplicate sends.
-6. **Launcher coordinator:** new sessions only, consumes the agreed
-   public host-aware operation above and closes its popup after confirmed handoff.
-   Carries the selected account, directory and explicit destination workspace ID.
-   Lifecycle/account management remains in the CLI. Never executes an agent in
-   the popup or exposes existing-session operations.
+Preserve audited colors, shared hue cycles, shimmer timing/shape, twinkle density,
+replacement fades, masks and chooser/form keys. Reference source is attribution and
+behavior evidence; Rust implementation does not import its unlicensed source files.
+Fix pasted-newline activation, wide-text misalignment, tiny-window overlap, blocking
+reads and lost draft state. Staged mkdir, summary flow and full-height fixed stars
+are intentional adaptations. Tests separate reference geometry from target geometry.
 
-Use one renderer and one form/selection state machine shared across pages, with
-small explicit differences for directory navigation versus text cursor editing.
-Avoid per-page copies or an independent lifecycle implementation in the UI.
+## Performance and verification
 
-## Decisions requested from dot
+At 80×24 and 160×48, release-build targets are p95: first input-responsive paint
+100 ms; host plugin-to-popup 250 ms; ordinary key feedback 25 ms; page first paint
+50 ms; frame computation/diff 8 ms. Preserve 20 FPS animation; input paints between
+ticks. Esc allows 110 ms including sequence decoding. Measure data-ready time
+separately, report counts/p50/p95/max and bytes, and inject two-second I/O delays.
 
-- Finalize Rust versus the existing Node runtime and choose build/dependency
-  policy. Rust is dot's leading candidate, not an approved implementation choice.
-- Agree the plugin action → popup → backend-created normal tab contract, including
-  explicit workspace selection, inventory access, admission reconciliation, target
-  identity, recursive-launch bypass and retained shell. Resolve the installed
-  CLI-help mismatch with an isolated host test before
-  deployment; do not test by manipulating existing live panes.
-- Confirm target coordinate examples from [visuals](visuals.md#target-geometry):
-  no decorative title, functional status/page bars, full-height field and bottom
-  controls. The source's Back-at-first-option placement is explicitly overridden.
-- Reference asks for a session name before directory/account. Current public
-  `launcher new` plan uses backend-generated naming. Should backend add an atomic
-  public name parameter before this flow is ported? Do not fake it with a second
-  rename mutation, tmux name or UI catalog. Agree the account/directory/workspace
-  picker sequence without importing the reference's existing-session menu.
-- Confirm deliberate enhancements: safe bracketed paste, full grapheme width,
-  cancellation during async directory reads, minimum-size view. Retain reference
-  key semantics; no extra Home/End/Page/Delete behavior by accident.
-- Resolve attribution/license for literal source reuse before copying files or
-  tests: the inspected reference tree has **no LICENSE file**. Ana has requested
-  closer copying, but that does not identify the intended redistribution license.
-  This audit links source and summarizes behavior; it imports no source/assets.
-  Original Switcher/backend license obligations remain in their owning repository.
+Injected clock/random draws and decoded ANSI cells verify motion, masks and partial
+repair; resize/scroll must not move stars. PTYs cover typing/paste, paths, disabled
+controls, Back, cleanup and cancellation. Fixtures prove zero resource creation
+before Start, explicit existing-directory consent, stale targets and no duplicate
+Start. Isolated installed-HERDR tests use inert agents, separate config/socket/root,
+and verify handoff/environment/retained shell without models or live panes.
 
-## Suggested implementation order after discussion
-
-First build an inert reference-geometry renderer with injected clock/randomness
-and trace equality for motion, colors and cell masks. Then apply only the explicit
-no-title/full-height geometry changes and review real ANSI captures at multiple
-sizes. Next port inline forms and picker keys, then connect the agreed host-aware
-public client. Final gate is the authorized future-terminal deployment with
-rollback, plus actual HERDR viewer review. No new model usage is part of these slices.
-
-[Issue 5](https://github.com/anastaci1a/sessionsation-ui/issues/5) owns acceptance
-status and dot's responses. Approval of
-this audit is not Agent DM adapter acceptance or authorization to alter pins,
-original receipts, root supervisor, accounts or live sessions.
+Publish tests and artifact provenance before a reversible deployment. Preserve
+original installs, credentials, Agent DM pins/data, receipts and live sessions.

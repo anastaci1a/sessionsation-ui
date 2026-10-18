@@ -20,7 +20,7 @@ management viewer provides account/usage inspection and backend-driven operation
 The animated redesign has been rolled back. Its replacement is being specified
 from [cli-main-menu](docs/cli-specification/README.md) as a **new-session-only popup**:
 choose an account, directory and destination HERDR Space, then create a normal tab
-there. Architecture discussion precedes rebuilding.
+there. Ana approved the Rust replacement; it is being implemented and is not deployed.
 HERDR integration and future-terminal configuration are documented in
 [usage](docs/usage.md). See [documentation](docs/README.md) and
 [contributor instructions](agents/README.md).

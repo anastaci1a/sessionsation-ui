@@ -3,7 +3,7 @@ import {resolve, dirname} from 'node:path';
 import {execFileSync} from 'node:child_process';
 async function walk(dir) {
   for (const item of await readdir(dir, {withFileTypes:true})) {
-    if (item.name === '.git' || item.name === 'node_modules') continue;
+    if (item.name === '.git' || item.name === 'node_modules' || item.name === 'target-ui' || item.name === 'target') continue;
     const path = resolve(dir, item.name);
     if (item.isDirectory()) await walk(path);
     else if (path.endsWith('.mjs')) execFileSync(process.execPath, ['--check', path]);
