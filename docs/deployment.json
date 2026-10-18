@@ -3,18 +3,18 @@
   "kind": "Rust account/session popup; preserved original switcher and Agent DM selection",
   "artifacts": {
     "ui": {
-      "source_commit": "acc9281c3ebfdbbb9b8e2dd876c64280da130afa",
-      "path": "/mnt/user/live/packages/sessionsation-ui/releases/acc9281c3ebfdbbb9b8e2dd876c64280da130afa/sessionsation-ui",
-      "sha256": "aa523e0ed5c90310911f158ca4672ae88758387004856e8fecb652f17a54fcda",
+      "source_commit": "8809571e0d7970479750b922337e84b012ac95e2",
+      "path": "/mnt/user/live/packages/sessionsation-ui/releases/8809571e0d7970479750b922337e84b012ac95e2/sessionsation-ui",
+      "sha256": "092d5953397e02592f476947e8f070c2dde3098987ee11f52d2a23cba60f27ae",
       "cargo_lock_sha256": "91cbb0257cb3f9aca0b38fbfe5adb67af0f7e24510eadc232c9a39585f1e5e08",
       "profile": "release",
       "rust_version": "1.95.0",
       "minimum_rust_version": "1.88"
     },
     "backend": {
-      "source_commit": "95950a2f4d84677340414ad6be98dbb362391761",
-      "path": "/mnt/user/live/packages/sessionsation/popup/95950a2f4d84677340414ad6be98dbb362391761/sessionsation",
-      "sha256": "0d43e820ddd847c59bfaf4803b410743e1fe3b32b70e1714bbebfc41f4a7f5a1",
+      "source_commit": "4966eb2ac302f2d4861cbd27b10e0320216053fe",
+      "path": "/mnt/user/live/packages/sessionsation/popup/4966eb2ac302f2d4861cbd27b10e0320216053fe/sessionsation",
+      "sha256": "86f71c0fc31b160b8e9b5cc3cea8b432726ee5de17f9034c48689a324e3a225a",
       "cargo_lock_sha256": "13959dc2de624ff7f6bc4a7fed537b01b6d89572b61e8bb9238cb748afc17265",
       "profile": "release",
       "rust_version": "1.95.0",
@@ -49,28 +49,9 @@
     "reload_command": "herdr --session default server reload-config",
     "rollback_restores": "pre-popup default numbered launcher and exact HERDR configuration; removes popup client config; installed artifacts and UI preferences retained",
     "runtime_update": {
-      "backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/management-b9d269ac-4ea8-4433-98b8-3aea395475ba.json",
-      "previous_artifacts": {
-        "ui": {
-          "source_commit": "0cd38320698f3a716953b45a5fba4bd63222cec4",
-          "path": "/mnt/user/live/packages/sessionsation-ui/releases/0cd38320698f3a716953b45a5fba4bd63222cec4/sessionsation-ui",
-          "sha256": "ff24ddbc59806138453d4817d148eda431dcb0c542442e051acc7d3173cfab82",
-          "cargo_lock_sha256": "23c023cc7e9e3c1b1990ad39d0bed7e62085d7058a0e2340de5ea48ec4900dc8",
-          "profile": "release",
-          "rust_version": "1.95.0",
-          "minimum_rust_version": "1.88"
-        },
-        "backend": {
-          "source_commit": "8156e979e494683b6738acd13297458cad8388bf",
-          "path": "/mnt/user/live/packages/sessionsation/popup/8156e979e494683b6738acd13297458cad8388bf/sessionsation",
-          "sha256": "2de0981904d0ef403980be9392bd9c40b8a18277ba7f4c85830d26268bb0565b",
-          "cargo_lock_sha256": "13959dc2de624ff7f6bc4a7fed537b01b6d89572b61e8bb9238cb748afc17265",
-          "profile": "release",
-          "rust_version": "1.95.0",
-          "minimum_rust_version": "1.85"
-        }
-      },
-      "rollback": "Restore the previous UI symlink and exact popup client config bytes from the private receipt. No HERDR configuration or live process change is needed."
+      "ui_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/ui-6ed2649e-bd3b-4d02-9e1f-c621d9e4a106.json",
+      "backend_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/backend-2e4464e9-b94d-4179-9086-43385072c10b.json",
+      "rollback": "Restore the previous UI symlink or exact popup client config bytes from the corresponding private receipt; no HERDR configuration, account data or running agent change is needed."
     }
   },
   "preserved": {

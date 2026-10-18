@@ -200,8 +200,8 @@ ownership. This popup deployment is not an Agent DM adapter cutover.
 To roll back, run the record's rollback command, then reload its intended HERDR
 server. Exact original config/client bytes are restored; the numbered launcher
 becomes the future-tab default again. Artifacts and UI preferences remain available
-for recovery. The deployment check preserved all 31 captured agent/host PID/start
-identities. Other running HERDR servers are not automatically reloaded.
+for recovery. Current artifact hashes and process-identity checks are recorded in the deployment
+evidence. Other running HERDR servers are not automatically reloaded.
 
 Account deregistration previews open immediately while data loads. The confirmation
 shows the friendly provider-name label (for example `codex-personal`), which the UI

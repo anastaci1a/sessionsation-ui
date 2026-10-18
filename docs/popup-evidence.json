@@ -2,14 +2,14 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; isolated synthetic provider acceptance; no model turns or Agent DM activation",
   "source": {
-    "ui": "acc9281c3ebfdbbb9b8e2dd876c64280da130afa",
-    "backend": "95950a2f4d84677340414ad6be98dbb362391761"
+    "ui": "8809571e0d7970479750b922337e84b012ac95e2",
+    "backend": "4966eb2ac302f2d4861cbd27b10e0320216053fe"
   },
   "checks": {
     "rust": {
-      "unit_passed": 44,
+      "unit_passed": 57,
       "visual_snapshot_test_passed": 2,
-      "golden_frames": 9,
+      "golden_frames": 12,
       "failed": 0,
       "command": "scripts/check-rust.sh"
     },
@@ -23,24 +23,24 @@
       "command": "npm run check"
     },
     "backend": {
-      "standard_tests_passed": 228,
+      "standard_tests_passed": 230,
       "installed_herdr_test_passed": 1,
       "failed": 0,
       "standard_command": "scripts/check.sh",
       "host_test": "installed_herdr_new_tab_handoff_retains_exact_account_and_shell",
-      "standard_source": "95950a2f4d84677340414ad6be98dbb362391761",
+      "standard_source": "4966eb2ac302f2d4861cbd27b10e0320216053fe",
       "final_receipt_regression": {
-        "source": "95950a2f4d84677340414ad6be98dbb362391761",
+        "source": "4966eb2ac302f2d4861cbd27b10e0320216053fe",
         "passed": true,
         "checks": [
           "format",
           "Clippy all targets",
-          "isolated HERDR new/same-account resume/transferred resume/stale request/dedup/receipt after Stop"
+          "isolated HERDR normal /exit, new/same-account resume/transferred resume/stale request/dedup/receipt after Stop"
         ],
-        "duration_seconds": 12.57
+        "duration_seconds": 12.8
       },
       "tests": {
-        "unit": 117,
+        "unit": 119,
         "cli": 7,
         "external_move": 58,
         "external_move_ignored": 1,
@@ -55,15 +55,15 @@
   "pty": {
     "startup": {
       "samples": 20,
-      "p50_ms": 5.706558004021645,
-      "p95_ms": 7.928723935037851,
-      "max_ms": 7.928723935037851
+      "p50_ms": 5.2335120271891356,
+      "p95_ms": 5.433070939034224,
+      "max_ms": 5.433070939034224
     },
     "input": {
       "samples": 238,
-      "p50_ms": 0.36852096673101187,
-      "p95_ms": 0.901476014405489,
-      "max_ms": 1.2883610324934125
+      "p50_ms": 0.2652800176292658,
+      "p95_ms": 0.38033293094486,
+      "max_ms": 0.49738900270313025
     },
     "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
     "models": 0
@@ -71,12 +71,12 @@
   "herdr": {
     "keybind_startup": {
       "samples": 20,
-      "p50_ms": 175.96158606465906,
-      "p95_ms": 217.2491590026766,
-      "max_ms": 217.2491590026766
+      "p50_ms": 161.18683002423495,
+      "p95_ms": 183.61190403811634,
+      "max_ms": 183.61190403811634
     },
     "installed_herdr": "0.9.5",
-    "plugin_to_first_paint_ms": 264.5428440300748,
+    "plugin_to_first_paint_ms": 282.4352598981932,
     "popup_size": [
       117,
       28
@@ -100,36 +100,47 @@
       "height": 24,
       "width": 80,
       "samples": 600,
-      "p50_ms": 0.075119,
-      "p95_ms": 0.100626,
-      "max_ms": 0.370094,
+      "p50_ms": 0.079267,
+      "p95_ms": 0.105325,
+      "max_ms": 0.514511,
       "mean_bytes": 1079
     },
     {
       "height": 48,
       "width": 160,
       "samples": 600,
-      "p50_ms": 0.263227,
-      "p95_ms": 0.363071,
-      "max_ms": 0.555827,
+      "p50_ms": 0.297921,
+      "p95_ms": 0.412352,
+      "max_ms": 0.575844,
       "mean_bytes": 3480
     }
   ],
   "deployment": {
     "herdr_config": "unchanged; 90% width / 65% height and prefix+shift+l retained",
-    "protected_processes": 24,
     "changed_process_identities": 0,
     "model_sessions_started": 0,
     "protected_backend_hashes": "original switcher and Agent DM pin unchanged",
     "data_root": "/mnt/user/appdata/codex-switcher",
-    "supervisor": "existing original sole owner; no restart or competing owner"
+    "supervisor": "existing original sole owner; no restart or competing owner",
+    "tracked_codex_processes": 25,
+    "unchanged_codex_process_identities": 25,
+    "tracked_tmux_servers": 1,
+    "unchanged_tmux_process_identities": 1,
+    "tracked_herdr_processes": 2,
+    "unchanged_herdr_process_identities": 1,
+    "missing_herdr_process_identities": 1,
+    "process_signal_scope": "Only isolated test-owned processes received stop/signal operations; no production process was signalled"
   },
   "layout_regressions": [
     "Configuration labels and complete-fit optional directory previews",
     "Back beside top option; Home expands to Close",
     "Right/Tab action rows are no-ops",
     "Focused Space default; unset without focus; explicit choice and highlighted IDs survive refresh/reorder",
-    "Summary fields/separator/Start stay contiguous across heights"
+    "Summary fields/separator/Start stay contiguous across heights",
+    "connected capped line bars across all percentages/threshold positions, shared marker hue and visible-gray transitions",
+    "centered capped account/bar module, aligned percent/period columns",
+    "selected-only gray operation ID below centered range counter with explicit blank-line gaps",
+    "reference hint palette/fade shared by creation, management, dialogs and range counters"
   ],
   "management": {
     "passed": true,
@@ -141,7 +152,8 @@
       "resume captured identity and readonly directory",
       "background completion retains menu",
       "reopened receipt without resend",
-      "TTY restoration"
+      "TTY restoration",
+      "fast deletion intent and one confirmed CLI admission; detach never cancels/resends"
     ],
     "models": 0
   },
@@ -150,6 +162,6 @@
     "Claude preparation only",
     "HERDR outer border cannot follow animated status bar",
     "Dynamic/terminal HERDR themes use explicit configured-base approximation",
-    "External plugin invocation measured 264.54ms; configured keybind p95 met 250ms"
+    "External CLI plugin invocation measured 282.44ms; configured keybind p95 was 183.61ms"
   ]
 }

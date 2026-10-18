@@ -2,8 +2,8 @@
 
 ## Rust popup
 
-The expanded popup passes **46 Rust tests** (44 unit tests and two tests covering
-nine complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
+The expanded popup passes **59 Rust tests** (57 unit tests and two tests covering
+12 complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
 regressions**. Syntax, manifest fields and documentation links pass. The goldens
 exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,
 shared palette/shimmer, reference Back/Close placement and fixed field geometry.
@@ -29,11 +29,11 @@ passed. The separate backend test uses the real new-launch API with an inert com
 provider to verify exact account/UUID/socket, deduplication and retained shell.
 No acceptance test starts a model or touches production accounts/Agent DM state.
 
-Measured release p95: first responsive PTY paint **7.93 ms**, key feedback **0.90 ms**,
-keybind-to-popup paint **217.25 ms**, frame computation/diff **0.101 ms** at 80×24 and
-**0.363 ms** at 160×48 (600 frames each). These exclude provider startup/model response.
+Measured release p95: first responsive PTY paint **5.43 ms**, key feedback **0.38 ms**,
+keybind-to-popup paint **183.61 ms**, frame computation/diff **0.105 ms** at 80×24 and
+**0.412 ms** at 160×48 (600 frames each). These exclude provider startup/model response.
 CLI-triggered plugin invocation additionally pays the external command round trip;
-the measured invocation was 264.54 ms, whereas the configured key path met 250 ms.
+the measured invocation was 282.44 ms, whereas the configured key path met 250 ms.
 
 Run `scripts/check-rust.sh`, `npm test` and `npm run check`. The PTY/host scripts
 require Python 3; use the existing offline build container, mount only this checkout
