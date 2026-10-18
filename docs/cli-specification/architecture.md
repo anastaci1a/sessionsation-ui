@@ -116,9 +116,10 @@ original installs, credentials, Agent DM pins/data, receipts and live sessions.
 
 ## Account and session management
 
-Main options through Settings form their own centered block. Inline accounts start
-one cell from the left edge, without selector circles; selected names are bold with
-the normal full animated accent, and unselected names use its existing dimmed level. The inline module displays
+Main options through Settings form their own centered block. The inline account/bar
+module is centered independently, caps bar width at 24 cells and shrinks to fit
+the popup. Names have no selector circles; selected names are bold with the normal
+full animated accent, and unselected names use its existing dimmed level. The inline module displays
 all accounts or none, measuring the complete menu, one blank line, per-account
 height and bottom hints. Bars share a start derived from the longest displayed
 name; preferred width is 24 cells, minimum 12. Existing long names are ellipsized
@@ -128,8 +129,11 @@ remain selectable for management.
 
 Verified five-hour accounts show adjacent 5h/weekly remaining bars, then one blank
 line before the next account. Weekly-only accounts show their weekly bar. Missing observations show Loading….
-Unknown values remain explicit; stale observations are marked. Bars use solid rectangular blocks, one shaded fractional end block, gray empty
-blocks and a white threshold line. On the right, percentages come first in a
+Unknown values remain explicit; stale observations are marked. Bars use connected capped lines: heavy remaining segments and undepleted threshold
+crossings share the animated accent. Thin depleted segments and mixed-weight
+transitions are visible gray (RGB 144). The boundary uses `╾`; threshold crossings
+use `┿`, `┽` or `┼` as allowance depletes. Caps switch between `╺`/`╶` and `╸`/`╴`
+so adjacent stroke weights match even at 0%/100%. On the right, percentages come first in a
 right-aligned column, then left-aligned period labels. Shared percentage width
 uses three digits only when a displayed value is 100. Custom limits are vertical
 markers inside the bars, converted from maximum used to minimum remaining.
@@ -148,19 +152,26 @@ displayed number. Weekly-only rows align with the weekly column. Unknown values
 use `?`; freshness and full account ID appear in the selected-account note.
 
 Account action groups use dot/blank separators: Usage details and Limits; Log in
-and Enable/Disable; Deregister/Restore. Limits edit minimum remaining percentages with
+and Enable/Disable; Deregister/Restore/Delete. Limits edit minimum remaining percentages with
 explicit Save/Cancel; the backend converts/stores existing used thresholds through
 the sole owner, preserving plan review and leaving automation unchanged. Impactful
 Disable/Remove actions require confirmation. Removal first presents affected
 sessions/data and requires the exact account ID against a fresh preview revision;
-history and credentials remain recoverable, with no provider deletion or purge.
+history and credentials remain recoverable. Actual Delete is a separate public CLI
+action: its confirmation opens without account-file scanning, accepts the displayed
+friendly provider-name label and admits one durable request. Only after confirmation
+does the CLI check activity, preserve saved/archived conversations and delete local
+account files/credentials. Active accounts are blocked. The UI owns no deletion or
+history logic; an older running account owner explicitly gates this capability.
+Neither action deletes the upstream provider account.
 
 Manage Sessions lists running, saved and unavailable sessions. Selecting opens
 actions, never attaches. Details, Rename, Switch, Restart, Stop and Resume are
 capability-gated; Stop/Restart/Switch require confirmation. Switch uses the shared
 account picker. Focus tab explicitly verifies the current generation, HERDR target
 and foreground PID, then focuses the existing tab and exits. No messaging/steering
-controls belong here.
+controls belong here. Session `[account]` suffixes use the shared animated accent,
+dim/unbolded when unselected and full/bold when selected.
 
 Resume uses the shared summary with editable account, Space and name, read-only
 saved directory. Prefer the original Space only when its host/socket and ID still
@@ -177,7 +188,14 @@ including before the final page; late preview responses cannot reopen a dismisse
 dialog. Single-field forms keep the input editable while only buttons take selection.
 Validation colors come from actual validity, independently of focus. Continue in background returns
 to the menu, never cancels or steals focus later. Operations can reopen original
-New/Resume receipts and transfer jobs after closing the popup; uncertain outcomes
+New/Resume receipts, account deletions and transfer jobs after closing the popup.
+Only the selected operation displays its ID, retaining gray. When it cannot fit
+beside the option, center it below the list or scrolling range counter: one blank
+line above and at least one before bottom controls. Reserve list/counter space
+for it while scrolling; hide it if width/height still cannot fit it. Range counters
+are centered and share the bottom controls’ animated hint palette/fading. Dialog
+hints use the same renderer; no flat gray override.
+Uncertain outcomes
 are inspected, never replayed. Cancellation/recovery are separate backend actions.
 
 Account deregistration previews open immediately while data loads. The confirmation

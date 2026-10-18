@@ -316,7 +316,7 @@ impl Dialog {
         } else {
             "Esc: Back"
         };
-        canvas.text(x + 2, y + height - 2, &clip(hint, width - 4), style, false);
+        crate::widgets::paint_hint(canvas, x + 2, y + height - 2, &clip(hint, width - 4));
         for row in y..y + height {
             for col in x..x + width {
                 let cell = &mut canvas.cells[row * canvas.width + col];

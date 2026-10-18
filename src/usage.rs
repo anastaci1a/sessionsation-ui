@@ -102,58 +102,39 @@ impl Usage {
             2
         }
     }
+    pub fn width(&self, bar: usize, digits: usize) -> usize {
+        if self.windows.is_empty() {
+            8
+        } else {
+            bar + digits + 7 + if self.stale { 6 } else { 0 }
+        }
+    }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, digits: usize) {
         if self.windows.is_empty() {
             canvas.accent_text(x, y, "Loading…", Accent::default());
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
-            let filled = window.remaining.map(|p| bar as f64 * p / 100.);
-            if filled.is_none() {
+            let interior = bar.saturating_sub(2).max(1);
+            let filled = window.remaining.map(|p| interior as f64 * p / 100.);
+            let Some(filled) = filled else {
                 canvas.accent_text(x, y, "Loading…", Accent::default());
                 continue;
-            }
+            };
             let marker = window
                 .limit
-                .map(|p| ((bar.saturating_sub(1)) as f64 * p / 100.).round() as usize);
+                .map(|p| 1 + (interior.saturating_sub(1) as f64 * p / 100.).round() as usize);
             for col in 0..bar {
-                let glyph = if marker == Some(col) {
-                    "│"
-                } else if filled.is_some_and(|n| col < n.floor() as usize) {
-                    "█"
-                } else if let Some(n) = filled
-                    && col == n.floor() as usize
-                    && n.fract() > 0.000001
+                let glyph = bar_glyph(col, bar, filled, marker);
+                if matches!(glyph, "╾" | "┽" | "┼" | "─" | "╶")
+                    || (glyph == "╴" && filled < interior as f64)
                 {
-                    if n.fract() < 1. / 3. {
-                        "░"
-                    } else if n.fract() < 2. / 3. {
-                        "▒"
-                    } else {
-                        "▓"
-                    }
-                } else {
-                    "█"
-                };
-                if marker == Some(col) {
                     canvas.text(
                         x + col,
                         y + row,
                         glyph,
                         Cell {
-                            fg: [255; 3],
-                            bold: true,
-                            ..Cell::default()
-                        },
-                        false,
-                    );
-                } else if filled.is_some_and(|n| col as f64 >= n.ceil()) {
-                    canvas.text(
-                        x + col,
-                        y + row,
-                        glyph,
-                        Cell {
-                            fg: [108; 3],
+                            fg: [144; 3],
                             ..Cell::default()
                         },
                         false,
@@ -164,7 +145,7 @@ impl Usage {
                         y + row,
                         glyph,
                         Accent {
-                            brightness: if self.stale { 600 } else { 1000 },
+                            brightness: if self.stale { 300 } else { 1000 },
                             flash: false,
                             ..Accent::default()
                         },
@@ -183,6 +164,29 @@ impl Usage {
             );
             canvas.text(x + bar + 1, y + row, &label, Cell::default(), false);
         }
+    }
+}
+
+// Match horizontal weights at every cell boundary, including 0%/100% caps.
+// Character connections: https://www.unicode.org/charts/PDF/U2500.pdf
+fn bar_glyph(col: usize, width: usize, filled: f64, marker: Option<usize>) -> &'static str {
+    let interior = width.saturating_sub(2).max(1) as f64;
+    if col == 0 {
+        return if filled > 0. { "╺" } else { "╶" };
+    }
+    if col + 1 == width {
+        return if filled >= interior { "╸" } else { "╴" };
+    }
+    let position = (col - 1) as f64;
+    let left_heavy = filled > position;
+    let right_heavy = filled >= interior || filled > position + 1.;
+    match (marker == Some(col), left_heavy, right_heavy) {
+        (true, _, true) => "┿",
+        (true, true, false) => "┽",
+        (true, false, false) => "┼",
+        (false, _, true) => "━",
+        (false, true, false) => "╾",
+        (false, false, false) => "─",
     }
 }
 
@@ -229,7 +233,7 @@ impl AccountsLayout {
             return None;
         }
         let extra = (width - 2 - min_width).min(12);
-        let left = 1;
+        let left = width.saturating_sub(min_width + extra) / 2;
         Some(Self {
             left,
             bars: left + prefix,
@@ -277,6 +281,33 @@ mod tests {
     })).unwrap()
     }
     #[test]
+    fn every_bar_join_is_continuous_at_all_percentages_and_threshold_positions() {
+        let weights = |glyph| match glyph {
+            "╺" => (0, 2),
+            "╶" => (0, 1),
+            "╸" => (2, 0),
+            "╴" => (1, 0),
+            "━" | "┿" => (2, 2),
+            "╾" | "┽" => (2, 1),
+            "─" | "┼" => (1, 1),
+            _ => panic!("unexpected bar segment"),
+        };
+        for width in [3, 7, 24] {
+            for step in 0..=1000 {
+                let filled = (width - 2) as f64 * step as f64 / 1000.;
+                for marker in std::iter::once(None).chain((1..width - 1).map(Some)) {
+                    for col in 0..width - 1 {
+                        assert_eq!(
+                            weights(bar_glyph(col, width, filled, marker)).1,
+                            weights(bar_glyph(col + 1, width, filled, marker)).0,
+                            "width={width}, percentage={step}/10, marker={marker:?}, col={col}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[test]
     fn weekly_only_and_missing_data_never_replace_usage_with_ready() {
         let mut a = account();
         a.usage["short"] = serde_json::Value::Null;
@@ -291,27 +322,40 @@ mod tests {
         assert!(!text.contains("Ready"));
     }
     #[test]
-    fn fractional_blocks_keep_precision_and_thresholds_are_white() {
+    fn capped_line_bars_share_threshold_color_and_align_percentage_labels() {
         let mut a = account();
         a.usage["short"]["used_percent"] = json!(74.);
         a.details.remove("switch_thresholds");
         let u = Usage::account(&a);
         let mut c = Canvas::new(50, 5);
         u.paint(&mut c, 1, 1, 10, 2);
-        assert_eq!(c.cells[51].glyph, "█");
-        assert_eq!(c.cells[52].glyph, "█");
-        assert_eq!(c.cells[53].glyph, "▒");
-        assert_eq!(c.cells[54].fg, [108; 3]);
+        assert_eq!(c.cells[51].glyph, "╺");
+        assert_eq!(c.cells[52].glyph, "━");
+        assert_eq!(c.cells[53].glyph, "━");
+        assert_eq!(c.cells[54].glyph, "╾");
+        assert_eq!(c.cells[54].fg, [144; 3]);
+        assert_eq!(c.cells[55].glyph, "─");
+        assert_eq!(c.cells[55].fg, [144; 3]);
+        assert_eq!(c.cells[60].glyph, "╴");
         let u = Usage::account(&account());
         u.paint(&mut c, 1, 1, 10, 3);
         let marker = &c.cells[53];
-        assert_eq!(marker.glyph, "│");
-        assert_eq!(marker.fg, [255; 3]);
+        assert_eq!(marker.glyph, "┿");
+        assert_eq!(marker.fg, c.cells[52].fg);
         let text = c.cells[50..100]
             .iter()
             .map(|c| c.glyph.as_str())
             .collect::<String>();
         assert!(text.contains(" 80% 5h"));
+        let mut a = account();
+        a.usage["short"]["used_percent"] = json!(75.);
+        Usage::account(&a).paint(&mut c, 1, 1, 10, 3);
+        assert_eq!(c.cells[53].glyph, "┽");
+        assert_eq!(c.cells[53].fg, [144; 3]);
+        a.usage["short"]["used_percent"] = json!(90.);
+        Usage::account(&a).paint(&mut c, 1, 1, 10, 3);
+        assert_eq!(c.cells[53].glyph, "┼");
+        assert_eq!(c.cells[53].fg, [144; 3]);
     }
     #[test]
     fn markers_convert_used_thresholds_and_names_only_shorten_display() {
@@ -324,8 +368,8 @@ mod tests {
         assert_eq!(u.digits(), 3);
         let mut c = Canvas::new(60, 6);
         u.paint(&mut c, 3, 1, 11, 3);
-        assert_eq!(c.cells[60 + 5].glyph, "│");
-        assert_eq!(c.cells[120 + 4].glyph, "│");
+        assert_eq!(c.cells[60 + 6].glyph, "┿");
+        assert_eq!(c.cells[120 + 5].glyph, "┿");
     }
     #[test]
     fn no_five_hour_window_means_status_and_missing_weekly_is_unknown() {
@@ -346,6 +390,13 @@ mod tests {
         assert_eq!(l.digits, 3);
         assert!(AccountsLayout::fit(&accounts, 30, 40).is_none());
         assert!(l.bars + l.bar_width + 10 < 80);
+        assert_eq!(l.bar_width, 24);
+        let wide = AccountsLayout::fit(&accounts, 140, 5).unwrap();
+        assert_eq!(wide.bar_width, l.bar_width);
+        assert_eq!(wide.left, l.left + 30);
+        let narrow = AccountsLayout::fit(&accounts, 40, 5).unwrap();
+        assert!(narrow.bar_width < wide.bar_width);
+        assert!(narrow.left >= 1);
     }
 }
 

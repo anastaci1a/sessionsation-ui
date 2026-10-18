@@ -6,7 +6,7 @@ BACKEND='''#!/usr/bin/env python3
 import json,os,pathlib,sys,time
 root=pathlib.Path(os.environ['FIXTURE_ROOT']);args=sys.argv;api=args[args.index('api')+1:];api=api[2:] if api[:1]==['--api-version'] else api
 with (root/'calls.jsonl').open('a') as log:log.write(json.dumps(api)+'\\n')
-caps={'launch':{'version':1,'list':True},'resume':{'version':1,'list':True},'providers':[{'id':'codex','account_limits':True,'enrollment':True}]}
+caps={'launch':{'version':1,'list':True},'resume':{'version':1,'list':True},'providers':[{'id':'codex','account_limits':True,'enrollment':True,'account_deletion':True}]}
 accounts=[{'id':'codex:fixture'+str(i),'selectable':True,'enabled':True,'usage_fresh':True,'prefill':{'eligible':True,'valid_until':int(time.time())+60},'usage':{'observed_at':int(time.time()),'short':({'duration_minutes':300,'used_percent':95 if i==0 else 1} if i!=2 else None),'weekly':{'duration_minutes':10080,'used_percent':20 if i==0 else 94}},'switch_thresholds':{'customized':True,'short_percent':80,'weekly_percent':90}} for i in range(6)]
 session={'id':'11111111-1111-4111-8111-111111111111','generation':'captured','name':'Saved fixture','account_id':'codex:fixture0','account':'fixture0','availability':'saved','directory':str(root/'projects'),'capabilities':{'rename':True,'resume':True,'switch_account':False,'restart':False,'stop':False},'original_host':None}
 receipt=None
@@ -16,7 +16,12 @@ if api==['capabilities']:result=caps
 elif api==['account','list']:result=accounts
 elif api==['state']:result={'sessions':[session],'capabilities':caps}
 elif api[:1]==['session']:result=session
-elif api==['operations']:result=[]
+elif api==['operations']:result=([{'id':'deletion-fixture','kind':'account_delete','phase':'preserving_history','detail':'Preserving conversation history.','can_cancel':False}] if (root/'delete.json').exists() else [])
+elif api[:2]==['account','delete']:
+ if '--confirm' not in api:
+  time.sleep(.3);result={'account_id':api[2],'can_delete':True,'file_scanning':False}
+ else:
+  (root/'delete.json').write_text(json.dumps(api));result={'id':'deletion-fixture','kind':'account_delete','phase':'admitted','can_cancel':False}
 elif api[:2]==['account','remove']:
  time.sleep(2);result={'account_id':api[2],'revision':'preview','can_remove':True,'affected_sessions':[],'stored_data':{'files':3,'bytes':20,'history_files':1}}
 elif api[:2]==['account','limits']:result={'limits':{'short_percent':80,'weekly_percent':90}}
@@ -44,7 +49,11 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
   t.send(b'\x1b[B\x1b[B\x1b[B\r');start=time.perf_counter();t.wait('Loading…');assert time.perf_counter()-start<.2
   start=time.perf_counter();t.send(b'\r');t.wait('Usage details');assert time.perf_counter()-start<.2
   time.sleep(2.1);t.drain();assert not t.screen.contains('Type codex-fixture0')
-  t.send(b'\x1b');t.wait('<add account>');t.send(b'\x1b');t.wait('Manage Sessions')
+  # Actual deletion uses a fast intent preview, friendly confirmation and one CLI admission.
+  t.send(b'\x1b[B\r');t.wait('Loading…');t.wait('Type codex-fixture0');t.send(b'codex-fixture0\r');t.wait('Continue in background')
+  deadline=time.monotonic()+3
+  while not (root/'delete.json').exists() and time.monotonic()<deadline:t.drain();time.sleep(.01)
+  assert (root/'delete.json').exists();t.send(b'\r');t.wait('Manage Sessions')
   # Shared account picker right-aligns both percentages and slashes.
   t.send(b'\r\r');t.wait('Choose Account');t.wait('5h /');t.drain()
   rows=[''.join(row[:80]) for row in t.screen.grid[:24]]
@@ -70,6 +79,8 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
  finally:t.close()
  calls=[json.loads(line) for line in (root/'calls.jsonl').read_text().splitlines()]
  assert sum(c[:2]==['resume-launch','start'] for c in calls)==1
+ assert sum(c[:2]==['account','delete'] and '--confirm' in c for c in calls)==1
+ assert not any(c[:1]==['cancel-operation'] for c in calls)
  assert not any(c[0] in ['stop','restart','switch','send','submit','queue'] for c in calls)
  assert list((root/'projects').iterdir())==[]
 print(json.dumps({'passed':True,'models':0,'checks':['compact bars and separators','right-aligned mixed-window picker','saved selection never attaches','resume captures identity and fixes directory','background completion retains menu','reopened receipt without resend','TTY restoration']},indent=2))

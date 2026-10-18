@@ -76,6 +76,9 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("actions", 80, 24),
         ("picker", 60, 20),
         ("modal", 60, 24),
+        ("operations-wide", 120, 24),
+        ("operations-compact", 50, 20),
+        ("operations-tiny", 40, 10),
     ] {
         let mut m = Manager::default();
         m.inventory(accounts.clone());
@@ -83,6 +86,13 @@ fn management_geometry_usage_markers_and_picker_columns() {
         let mut f = Field::new(width, height, 1967);
         let mut c = f.paint(4060);
         match name {
+            "operations-wide" | "operations-compact" | "operations-tiny" => {
+                m.page = Page::Operations;
+                m.operations = vec![
+                    serde_json::json!({"id":"11111111-1111-4111-8111-111111111111","kind":"account_delete","phase":"preserving_history"}),
+                    serde_json::json!({"id":"22222222-2222-4222-8222-222222222222","kind":"switch","phase":"complete"}),
+                ];
+            }
             "compact" => {
                 m.page = Page::Accounts;
                 m.options.selected = 1;

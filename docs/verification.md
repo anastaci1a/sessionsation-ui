@@ -53,8 +53,10 @@ numbered launcher; it does not measure this Rust popup. Provider/lifecycle evide
 belongs to the [backend operational guidance](https://github.com/anastaci1a/sessionsation/blob/main/docs/operations.md).
 
 Creation and lifecycle are Codex-first; Claude remains preparation-only. No
-cross-provider conversation conversion, upstream account deletion, permanent purge
-menu or live model-start acceptance is included. New/Resume uncertainty stays
+cross-provider conversation conversion, upstream account deletion, arbitrary history
+purging or live model-start acceptance is included. Local account deletion delegates
+to the public CLI and preserves conversations; the production owner must advertise
+its capability before it can run. New/Resume uncertainty stays
 visible through the original request ID; no automatic retry or resource deletion
 is implemented. Continue in background detaches, not stops. Existing Agent DM pins,
 receipt semantics and sole-root ownership are unchanged.

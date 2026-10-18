@@ -14,30 +14,47 @@ what is installed.
 
 Home orders New Session, Manage Sessions, Add Account/Manage Accounts, a dot
 separator and Settings. If every account fits above the bottom controls, accounts
-appear inline, starting one cell from the left edge, without selector circles, and Add Account is available.
+appear inline without selector circles and Add Account is available. The account/bar
+block is centered, caps bar width at 24 cells and shrinks to fit narrower popups.
 Otherwise Manage Accounts provides a scrolling list with `<add account>` first.
 Its highlighted account's usage sits above the controls with a blank line between.
 Growing the screen returns that list to Home; forms remain open and Back chooses
 the appropriate current layout without losing their account selection.
 
 Verified 5-hour accounts show paired 5h/weekly bars; weekly-only accounts show their weekly bar. Bars measure remaining
-allowance, with custom limit markers inside them. Names share a bar start column;
+allowance using capped lines (`╺━┿━──╴`): the thick remaining portion and limit crossing share the animated accent; the thin depleted portion is visible gray. Mixed-weight transitions `╾`/`┽` are
+also gray; depleted threshold crossings use `┼`. Caps and joins remain continuous
+at empty, partial and full allowance. Names share a bar start column;
 percentages precede period labels, with shared right-/left-aligned columns. Missing observations show Loading… rather than Ready; stale observations are marked. In the selection picker,
 usage is a separate right-aligned `x% 5h / x% wkly` column with aligned percent signs
 and slashes. Weekly-only accounts omit the short period and slash; shared padding
 uses the largest displayed number. New account names are
 limited to 12 characters. Existing longer names are shortened only in list display.
 
-Account actions group Usage details/Limits, Login/Enable/Disable, and Deregister/Restore
-with dot separators. Limits edit minimum remaining percentages and use the owner's
-existing threshold settings. Removal shows affected data and requires the exact
-account ID; it preserves credentials/history and refuses active conflicts.
+Account actions group Usage details/Limits, Login/Enable/Disable, and
+Deregister/Restore/Delete with dot separators. Limits edit minimum remaining
+percentages through the existing owner. Deregister preserves credentials/history;
+Restore reverses deregistration. Delete removes local account files and credentials
+while preserving saved/archived conversations. The upstream provider account is
+unchanged. Both confirmations require the displayed friendly provider-name label.
+
+Delete opens an intent preview without scanning account files. The CLI checks
+activity, preserves history and deletes data only after confirmation. Active
+sessions block deletion. Progress offers Continue in background, which detaches
+the dialog without cancelling or resending the operation. The CLI owns every
+preservation/deletion step. An older account owner gates deletion until explicitly
+updated; changing the popup's client binary alone does not replace that owner.
 
 Manage Sessions selects an action menu, never implicitly attaches. Lifecycle
 actions carry the captured backend ID/generation. Stop, Restart, Switch, Disable
-and Remove require confirmation. Internal modal dialogs preserve their underlying
+and account deregistration/deletion require confirmation. Internal modal dialogs preserve their underlying
 page; Continue in background dismisses progress without cancelling backend work.
 Operations shows progress, fresh confirmation prompts and supported recovery.
+Only the selected operation shows its gray ID. If it does not fit beside the row,
+it is centered below the list (below the visible-range counter while scrolling),
+with one blank line above and at least one before the bottom controls. The list
+and counter move upward to reserve that space; if width/height cannot fit it,
+the ID stays hidden.
 It also lists original New/Resume receipts after reopening, without resending them.
 Resume has editable account, Space and name, plus the saved read-only directory.
 It prefers a verified original Space, then current focus, otherwise unset. Changing
@@ -128,8 +145,8 @@ The overlay targets that server's active pane. Choose sessions by their unique
 backend names; account switching uses the selected session's captured generation.
 Returned operations are admissions, not completion. Inspect Operations for progress
 or an explicit confirmation. Exiting the viewer never sends Stop. Usage displays
-only backend-reported data. Account removal shows the backend preview and requires
-typing the exact account ID; no credential/history purge is offered.
+only backend-reported data. Account confirmations use the friendly label shown
+above the always-editable input; only the buttons take navigation focus.
 
 ### Legacy future-terminal launcher
 

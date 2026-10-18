@@ -1096,20 +1096,8 @@ impl App {
                 self.options.back,
             );
         }
-        if rows.len() > capacity {
-            canvas.text(
-                left,
-                footer - 3,
-                &format!(
-                    "{}–{} of {}",
-                    self.options.scroll + 1,
-                    (self.options.scroll + capacity).min(rows.len()),
-                    rows.len()
-                ),
-                Cell::default(),
-                false,
-            );
-        }
+        self.options
+            .paint_range(&mut canvas, rows.len(), capacity, footer - 3);
         let note = if !self.error.is_empty() {
             self.error.clone()
         } else if self.page == Page::Accounts {
@@ -1142,25 +1130,7 @@ impl App {
             },
             false,
         );
-        let hint_width = hints
-            .iter()
-            .map(|s| unicode_width::UnicodeWidthStr::width(s.as_str()))
-            .max()
-            .unwrap_or(0);
-        let hint_left = width.saturating_sub(hint_width) / 2;
-        for (i, line) in hints.iter().enumerate() {
-            canvas.accent_text(
-                hint_left,
-                height - hints.len() + i,
-                line,
-                Accent {
-                    soft: true,
-                    brightness: 550,
-                    flash: false,
-                    ..Accent::default()
-                },
-            );
-        }
+        crate::widgets::paint_hints(&mut canvas, &hints);
         if self.launch_dialog
             && let Some(d) = &mut self.manager.dialog
         {

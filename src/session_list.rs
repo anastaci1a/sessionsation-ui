@@ -227,6 +227,16 @@ mod tests {
             assert_eq!(lines[0].find(']'), lines[1].find(']'));
             assert!(lines[0].contains("[a]"));
             assert!(lines[1].contains("[personal]"));
+            let selected_account = c.cells[4 * width..5 * width]
+                .iter()
+                .find(|c| c.glyph == "[")
+                .unwrap();
+            let other_account = c.cells[5 * width..6 * width]
+                .iter()
+                .find(|c| c.glyph == "[")
+                .unwrap();
+            assert!(selected_account.bold);
+            assert!(!other_account.bold);
         }
     }
 }

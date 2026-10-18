@@ -118,6 +118,7 @@ pub struct Row {
     pub enabled: bool,
     pub preview: Option<String>,
     pub right_preview: bool,
+    pub preview_selected_only: bool,
     pub separator: bool,
 }
 impl Row {
@@ -130,6 +131,7 @@ impl Row {
             enabled,
             preview: None,
             right_preview: false,
+            preview_selected_only: false,
             separator: false,
         }
     }
@@ -142,12 +144,29 @@ impl Row {
         self.right_preview = true;
         self
     }
+    pub fn with_selected_preview(mut self, preview: impl Into<String>) -> Self {
+        self.preview = Some(preview.into());
+        self.preview_selected_only = true;
+        self
+    }
+    pub fn preview_position(&self, width: usize, x: usize) -> Option<usize> {
+        let preview = self.preview.as_deref()?;
+        let minimum = x + 2 + UnicodeWidthStr::width(self.label.as_str()) + 2;
+        let start = if self.right_preview {
+            width.saturating_sub(2 + UnicodeWidthStr::width(preview))
+        } else {
+            minimum
+        };
+        (start >= minimum && start + UnicodeWidthStr::width(preview) <= width.saturating_sub(2))
+            .then_some(start)
+    }
     pub fn separator() -> Self {
         Self {
             label: String::new(),
             enabled: false,
             preview: None,
             right_preview: false,
+            preview_selected_only: false,
             separator: true,
         }
     }
@@ -195,30 +214,20 @@ impl Row {
             },
             self.enabled,
         );
-        if let Some(preview) = &self.preview {
-            let minimum = x + 2 + UnicodeWidthStr::width(self.label.as_str()) + 2;
-            let start = if self.right_preview {
-                canvas
-                    .width
-                    .saturating_sub(2 + UnicodeWidthStr::width(preview.as_str()))
-            } else {
-                minimum
-            };
-            if start >= minimum
-                && start + UnicodeWidthStr::width(preview.as_str())
-                    <= canvas.width.saturating_sub(2)
-            {
-                canvas.text(
-                    start,
-                    y,
-                    preview,
-                    Cell {
-                        fg: if self.enabled { [188; 3] } else { [108; 3] },
-                        ..Cell::default()
-                    },
-                    false,
-                );
-            }
+        if let Some(preview) = &self.preview
+            && (!self.preview_selected_only || (selected && !back))
+            && let Some(start) = self.preview_position(canvas.width, x)
+        {
+            canvas.text(
+                start,
+                y,
+                preview,
+                Cell {
+                    fg: if self.enabled { [188; 3] } else { [108; 3] },
+                    ..Cell::default()
+                },
+                false,
+            );
         }
     }
 }
@@ -231,6 +240,31 @@ pub struct Options {
 }
 
 /// Shared bottom hints: token wrapping never changes the star-field geometry.
+pub fn paint_hint(canvas: &mut Canvas, x: usize, y: usize, text: &str) {
+    canvas.accent_text(
+        x,
+        y,
+        text,
+        Accent {
+            soft: true,
+            brightness: 550,
+            flash: false,
+            ..Accent::default()
+        },
+    );
+}
+pub fn paint_hints(canvas: &mut Canvas, hints: &[String]) {
+    let width = hints
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.as_str()))
+        .max()
+        .unwrap_or(0);
+    let left = canvas.width.saturating_sub(width) / 2;
+    let start = canvas.height.saturating_sub(hints.len());
+    for (i, hint) in hints.iter().enumerate() {
+        paint_hint(canvas, left, start + i, hint);
+    }
+}
 pub fn hint_lines(tokens: &[&str], width: usize) -> Vec<String> {
     let available = width.saturating_sub(4).max(1);
     let mut lines = Vec::new();
@@ -288,6 +322,25 @@ impl Options {
             }
         }
     }
+    pub fn left(width: usize, rows: &[Row]) -> usize {
+        let longest = rows
+            .iter()
+            .map(|r| UnicodeWidthStr::width(r.label.as_str()))
+            .max()
+            .unwrap_or(0)
+            .min(width.saturating_sub(8));
+        let mut left = width.saturating_sub(longest + 2) / 2;
+        if let Some(right) = rows
+            .iter()
+            .filter(|r| r.right_preview)
+            .filter_map(|r| r.preview.as_deref())
+            .map(UnicodeWidthStr::width)
+            .max()
+        {
+            left = left.min(width.saturating_sub(longest + right + 6).max(4));
+        }
+        left
+    }
     pub fn paint(
         &mut self,
         canvas: &mut Canvas,
@@ -305,22 +358,7 @@ impl Options {
             }
         }
         self.scroll = self.scroll.min(rows.len().saturating_sub(capacity));
-        let longest = rows
-            .iter()
-            .map(|r| UnicodeWidthStr::width(r.label.as_str()))
-            .max()
-            .unwrap_or(0)
-            .min(canvas.width.saturating_sub(8));
-        let mut left = canvas.width.saturating_sub(longest + 2) / 2;
-        if let Some(right) = rows
-            .iter()
-            .filter(|r| r.right_preview)
-            .filter_map(|r| r.preview.as_deref())
-            .map(UnicodeWidthStr::width)
-            .max()
-        {
-            left = left.min(canvas.width.saturating_sub(longest + right + 6).max(4));
-        }
+        let left = Self::left(canvas.width, rows);
         for (i, row) in rows.iter().enumerate().skip(self.scroll).take(capacity) {
             row.paint(
                 canvas,
@@ -331,6 +369,21 @@ impl Options {
             );
         }
         (left, capacity)
+    }
+    pub fn paint_range(&self, canvas: &mut Canvas, count: usize, capacity: usize, y: usize) {
+        if capacity == 0 || count <= capacity {
+            return;
+        }
+        let label = format!(
+            "{}–{} of {}",
+            self.scroll + 1,
+            (self.scroll + capacity).min(count),
+            count
+        );
+        let width = UnicodeWidthStr::width(label.as_str());
+        if width + 2 <= canvas.width {
+            paint_hint(canvas, (canvas.width - width) / 2, y, &label);
+        }
     }
     /// Reference Back/Exit control belongs beside the first visible option.
     pub fn paint_back(&self, canvas: &mut Canvas, left: usize, top: usize, label: &str) {
@@ -405,6 +458,63 @@ mod tests {
         let (wide_left, _) = options.paint(&mut wide, &rows, 3, 8);
         assert_eq!(wide_left, (120 - 13) / 2);
         assert!(wide.cells.iter().any(|c| c.glyph == "/"));
+    }
+    #[test]
+    fn selected_preview_hides_without_moving_options_and_remains_gray() {
+        let rows = [Row::yes("Operation").with_selected_preview("request-id")];
+        let mut options = Options::default();
+        let mut selected = Canvas::new(80, 12);
+        let (left, _) = options.paint(&mut selected, &rows, 3, 8);
+        let start = 3 * 80 + left + 2 + "Operation".len() + 2;
+        assert_eq!(selected.cells[start].glyph, "r");
+        assert_eq!(selected.cells[start].fg, [188; 3]);
+        assert!(!selected.cells[start].bold);
+        options.back = true;
+        let mut back = Canvas::new(80, 12);
+        assert_eq!(options.paint(&mut back, &rows, 3, 8).0, left);
+        assert!(
+            !back
+                .cells
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+                .contains("request-id")
+        );
+        let mut unselected = Canvas::new(80, 1);
+        rows[0].paint(&mut unselected, left, 0, false, false);
+        assert!(
+            !unselected
+                .cells
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+                .contains("request-id")
+        );
+    }
+    #[test]
+    fn footer_hints_use_reference_soft_palette_fade_and_centering() {
+        let mut field = crate::render::Field::new(80, 24, 1967);
+        for time in [0, 1467, 4060, 8000] {
+            let mut canvas = field.paint(time);
+            let hints = vec!["Esc: Back".into()];
+            paint_hints(&mut canvas, &hints);
+            let mut expected = field.paint(time);
+            expected.accent_text(
+                35,
+                23,
+                "E",
+                Accent {
+                    soft: true,
+                    brightness: 550,
+                    flash: false,
+                    ..Accent::default()
+                },
+            );
+            let cell = &canvas.cells[23 * 80 + 35];
+            assert_eq!(cell.glyph, "E");
+            assert_eq!(cell.fg, expected.cells[23 * 80 + 35].fg);
+            assert!(!cell.bold);
+        }
     }
     #[test]
     fn expanded_back_keeps_a_left_padding_cell() {

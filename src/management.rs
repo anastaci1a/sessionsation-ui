@@ -39,6 +39,7 @@ enum Purpose {
     Launches(&'static str),
     Launch(&'static str, String),
     Remove(String),
+    Delete(String),
     Limits(String),
     Mutation,
     Observe(String),
@@ -51,6 +52,7 @@ enum Form {
     Login(String),
     Limits(String),
     Remove(Value),
+    Delete(Value),
     Rename(Value),
     Confirm(Vec<String>),
     Progress,
@@ -247,6 +249,7 @@ impl Manager {
                     } else {
                         "Deregister account"
                     }),
+                    Row::gate("Delete account", self.provider_cap("account_deletion")),
                 ];
                 if !a.is_some_and(|a| a.details.get("auth_required").is_some_and(|v| v == true)) {
                     rows.remove(3);
@@ -280,7 +283,7 @@ impl Manager {
                         o["kind"].as_str().unwrap_or("operation"),
                         o["phase"].as_str().unwrap_or("unknown")
                     ))
-                    .with_preview(id(o))
+                    .with_selected_preview(id(o))
                 })
                 .chain(self.launches.iter().flat_map(|(kind, rs)| {
                     rs.iter().map(|r| {
@@ -310,7 +313,10 @@ impl Manager {
                     Row::gate("Respond yes", phase.starts_with("awaiting")),
                     Row::gate("Respond no", phase.starts_with("awaiting")),
                     Row::separator(),
-                    Row::gate("Cancel operation", !terminal(phase)),
+                    Row::gate(
+                        "Cancel operation",
+                        !terminal(phase) && o["can_cancel"] != false,
+                    ),
                     Row::gate("Recover", matches!(phase, "failed" | "cancelled")),
                 ]
             }
@@ -616,6 +622,13 @@ impl Manager {
                             );
                         }
                     }
+                    7 => {
+                        return self.preview(
+                            "Delete account",
+                            strings(&["account", "delete", &key]),
+                            Purpose::Delete(key),
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -836,6 +849,23 @@ impl Manager {
                     &(100. - p[1]).to_string(),
                 ])
             }
+            Form::Delete(preview) => {
+                let key = preview["account_id"].as_str().unwrap_or("");
+                if value(0) != account_label(key) {
+                    self.dialog.as_mut().unwrap().status =
+                        Some(format!("Type {} to confirm.", account_label(key)));
+                    return vec![];
+                }
+                strings(&[
+                    "account",
+                    "delete",
+                    key,
+                    "--confirm",
+                    key,
+                    "--request-id",
+                    &uuid::Uuid::new_v4().to_string(),
+                ])
+            }
             Form::Remove(preview) => {
                 let key = preview["account_id"].as_str().unwrap_or("");
                 if value(0) != account_label(key) {
@@ -867,7 +897,11 @@ impl Manager {
         };
         if matches!(
             purpose,
-            Purpose::Remove(_) | Purpose::Limits(_) | Purpose::Details(_) | Purpose::Resume(_)
+            Purpose::Remove(_)
+                | Purpose::Delete(_)
+                | Purpose::Limits(_)
+                | Purpose::Details(_)
+                | Purpose::Resume(_)
         ) && (self.foreground != Some(token) || !matches!(self.form, Form::Loading))
         {
             return vec![];
@@ -1038,6 +1072,28 @@ impl Manager {
                     .validated(Rule::Percentage),
                 ];
             }
+            Purpose::Delete(key) => {
+                if self.page != Page::Account(key.clone()) {
+                    return vec![];
+                }
+                let expected = account_label(&key);
+                let mut body=vec![format!("Delete {expected}'s local account files and credentials?"),"All saved and archived conversations will be preserved outside the account directory. The upstream provider account is unchanged.".into(),"After confirmation, the CLI checks active sessions, preserves history and deletes local account data. Progress can continue in the background.".into()];
+                if value["can_delete"] != true {
+                    body.push(if value["owner_upgrade_required"]==true{"The existing account owner needs an update before deletion is available.".into()}else{"This account has active sessions. Exit or stop them before deleting the account.".into()});
+                    self.show("Account cannot be deleted", body, &["Close"], Form::None);
+                } else {
+                    self.show(
+                        "Delete account",
+                        body,
+                        &["Delete account", "Cancel"],
+                        Form::Delete(value),
+                    );
+                    self.dialog.as_mut().unwrap().fields.push(
+                        Field::new(&format!("Type {expected} to confirm"), "")
+                            .validated(Rule::Exact(expected)),
+                    );
+                }
+            }
             Purpose::Remove(key) => {
                 if self.page != Page::Account(key.clone()) {
                     return vec![];
@@ -1110,6 +1166,19 @@ impl Manager {
         vec![]
     }
     pub fn paint(&mut self, canvas: &mut Canvas, footer: usize) {
+        let hints = hint_lines(
+            &[
+                "▲/▼/◀/▶: Move",
+                "Enter/Space: Select",
+                if self.page == Page::Home {
+                    "Esc: Close"
+                } else {
+                    "Esc: Back"
+                },
+            ],
+            canvas.width,
+        );
+        let controls_start = canvas.height.saturating_sub(hints.len());
         let layout = AccountsLayout::fit(&self.accounts, canvas.width, footer.saturating_sub(10));
         let was = self.inline;
         self.inline = self.inventory_known && layout.is_some();
@@ -1171,6 +1240,24 @@ impl Manager {
             } else {
                 footer.saturating_sub(3)
             };
+            let detached_id = self.page == Page::Operations
+                && !self.options.back
+                && self.note.is_empty()
+                && rows.get(self.options.selected).is_some_and(|row| {
+                    row.preview_selected_only
+                        && row
+                            .preview_position(canvas.width, Options::left(canvas.width, &rows))
+                            .is_none()
+                        && row.preview.as_deref().is_some_and(|p| {
+                            unicode_width::UnicodeWidthStr::width(p) + 2 <= canvas.width
+                        })
+                })
+                && controls_start.saturating_sub(4) >= 4;
+            let bottom = if detached_id {
+                bottom.min(controls_start.saturating_sub(4))
+            } else {
+                bottom
+            };
             let (left, capacity) = if self.page == Page::Sessions {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1197,6 +1284,32 @@ impl Manager {
                     "Back"
                 },
             );
+            if detached_id
+                && !self.options.back
+                && let Some(row) = rows.get(self.options.selected)
+                && row.preview_selected_only
+                && row.preview_position(canvas.width, left).is_none()
+                && let Some(preview) = row.preview.as_deref()
+            {
+                let width = unicode_width::UnicodeWidthStr::width(preview);
+                let y = if rows.len() > capacity {
+                    bottom + 2
+                } else {
+                    3 + rows.len().saturating_sub(self.options.scroll).min(capacity) + 1
+                };
+                if width + 2 <= canvas.width && y + 1 < controls_start && self.note.is_empty() {
+                    canvas.text(
+                        (canvas.width - width) / 2,
+                        y,
+                        preview,
+                        Cell {
+                            fg: [188; 3],
+                            ..Cell::default()
+                        },
+                        false,
+                    );
+                }
+            }
             if let Some(u) = usage {
                 let bar = 24.min(canvas.width.saturating_sub(20));
                 if bar < 12 {
@@ -1211,27 +1324,15 @@ impl Manager {
                 if bar >= 12 {
                     u.paint(
                         canvas,
-                        left.min(canvas.width.saturating_sub(bar + 16)),
+                        canvas.width.saturating_sub(u.width(bar, u.digits())) / 2,
                         footer - preview_height - 1,
                         bar,
                         u.digits(),
                     );
                 }
             }
-            if rows.len() > capacity {
-                canvas.text(
-                    1,
-                    bottom,
-                    &format!(
-                        "{}–{} of {}",
-                        self.options.scroll + 1,
-                        (self.options.scroll + capacity).min(rows.len()),
-                        rows.len()
-                    ),
-                    Cell::default(),
-                    false,
-                );
-            }
+            self.options
+                .paint_range(canvas, rows.len(), capacity, bottom);
         }
         if !self.note.is_empty() {
             canvas.text(
@@ -1246,22 +1347,7 @@ impl Manager {
                 false,
             );
         }
-        let hints = hint_lines(
-            &[
-                "▲/▼/◀/▶: Move",
-                "Enter/Space: Select",
-                if self.page == Page::Home {
-                    "Esc: Close"
-                } else {
-                    "Esc: Back"
-                },
-            ],
-            canvas.width,
-        );
-        let start = canvas.height - hints.len();
-        for (i, line) in hints.iter().enumerate() {
-            canvas.text(2, start + i, line, Cell::default(), true);
-        }
+        crate::widgets::paint_hints(canvas, &hints);
         if let Some(d) = &mut self.dialog {
             d.paint(canvas, &self.palette);
         }
@@ -1280,6 +1366,136 @@ mod tests {
         m.capabilities =
             json!({"providers":[{"id":"codex","account_limits":true,"enrollment":true}]});
         m
+    }
+    #[test]
+    fn selected_operation_id_falls_below_list_only_when_it_fits() {
+        let mut m = setup();
+        let a = "11111111-1111-4111-8111-111111111111";
+        let b = "22222222-2222-4222-8222-222222222222";
+        m.operations = vec![
+            json!({"id":a,"kind":"switch","phase":"complete"}),
+            json!({"id":b,"kind":"switch","phase":"failed"}),
+        ];
+        m.go(Page::Operations);
+        for (width, height, visible) in [
+            (120, 24, true),
+            (45, 16, true),
+            (30, 16, false),
+            (45, 10, true),
+            (45, 9, false),
+            (45, 8, false),
+        ] {
+            let mut c = Canvas::new(width, height);
+            m.paint(&mut c, height - 1);
+            let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+            assert_eq!(text.contains(a), visible, "{width}x{height}");
+            assert!(!text.contains(b));
+            if width == 45 && height == 16 {
+                assert!(c.cells[5 * width..6 * width].iter().all(|c| c.glyph == " "));
+                assert_eq!(c.cells[6 * width + (width - a.len()) / 2].glyph, "1");
+            }
+        }
+    }
+    #[test]
+    fn scrolling_operations_reserve_counter_id_and_control_gaps() {
+        let mut m = setup();
+        let a = "11111111-1111-4111-8111-111111111111";
+        m.operations = (0..10)
+            .map(|_| json!({"id":a,"kind":"switch","phase":"complete"}))
+            .collect();
+        m.go(Page::Operations);
+        let mut c = Canvas::new(45, 16);
+        m.paint(&mut c, 15);
+        let line = |y: usize| {
+            c.cells[y * 45..(y + 1) * 45]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+        };
+        assert!(line(10).contains("1–7 of 10"));
+        assert_eq!(line(10).find('1'), Some(18));
+        assert_eq!(
+            c.cells[10 * 45 + 18].fg,
+            c.cells[14 * 45..15 * 45]
+                .iter()
+                .find(|c| c.glyph == "M")
+                .unwrap()
+                .fg
+        );
+        assert_eq!(line(11).trim(), "");
+        assert!(line(12).contains(a));
+        assert_eq!(line(13).trim(), "");
+        assert!(line(14).contains("Move"));
+    }
+    #[test]
+    fn deletion_preview_cancels_without_mutation_and_confirmation_delegates_once() {
+        let mut m = setup();
+        m.capabilities["providers"][0]["account_deletion"] = json!(true);
+        m.go(Page::Account("codex:account1".into()));
+        m.options.selected = m
+            .rows()
+            .iter()
+            .position(|r| r.label == "Delete account")
+            .unwrap();
+        let sent = m.activate();
+        let Intent::Api(token, ref args) = sent[0] else {
+            panic!()
+        };
+        assert_eq!(args, &strings(&["account", "delete", "codex:account1"]));
+        assert_eq!(m.dialog.as_ref().unwrap().body, vec!["Loading…"]);
+        m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let preview =
+            json!({"account_id":"codex:account1","can_delete":true,"file_scanning":false});
+        m.response(token, Ok(preview.clone()));
+        assert!(m.dialog.is_none());
+        let sent = m.activate();
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        m.response(token, Ok(preview));
+        assert!(
+            m.dialog.as_ref().unwrap().fields[0]
+                .label
+                .contains("codex-account1")
+        );
+        assert!(m.submit(0, vec!["codex:account1".into()]).is_empty());
+        let sent = m.submit(0, vec!["codex-account1".into()]);
+        let Intent::Api(token, ref args) = sent[0] else {
+            panic!()
+        };
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--confirm", "codex:account1"])
+        );
+        assert!(args.contains(&"--request-id".into()));
+        m.response(
+            token,
+            Ok(json!({"id":"deletion-1","phase":"admitted","can_cancel":false})),
+        );
+        assert!(matches!(&m.form, Form::Operation(id) if id == "deletion-1"));
+        assert!(m.submit(0, vec![]).is_empty()); // detach, never cancel/replay
+        assert!(m.dialog.is_none());
+    }
+    #[test]
+    fn deletion_requires_updated_owner_and_blocks_active_account_without_confirmation() {
+        for preview in [
+            json!({"can_delete":false,"owner_upgrade_required":true}),
+            json!({"can_delete":false,"owner_upgrade_required":false}),
+        ] {
+            let mut m = setup();
+            m.go(Page::Account("codex:account1".into()));
+            let sent = m.preview(
+                "Delete account",
+                strings(&["account", "delete", "codex:account1"]),
+                Purpose::Delete("codex:account1".into()),
+            );
+            let Intent::Api(token, _) = sent[0] else {
+                panic!()
+            };
+            m.response(token, Ok(preview));
+            assert!(m.dialog.as_ref().unwrap().fields.is_empty());
+            assert!(matches!(m.form, Form::None));
+        }
     }
     #[test]
     fn cancelled_preview_cannot_reopen_and_friendly_confirmation_maps_to_backend_id() {
