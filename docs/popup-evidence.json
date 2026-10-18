@@ -116,5 +116,32 @@
     "protected_processes": 31,
     "changed_process_identities": 0,
     "model_sessions_started": 0
+  },
+  "herdr_modal_resize": {
+    "keybind_startup": {
+      "samples": 20,
+      "p50_ms": 159.32836499996483,
+      "p95_ms": 176.8105069641024,
+      "max_ms": 176.8105069641024
+    },
+    "installed_herdr": "0.9.5",
+    "plugin_to_first_paint_ms": 277.36477192956954,
+    "popup_size": [
+      64,
+      21
+    ],
+    "checks": [
+      "origin context without pane ID",
+      "half-size popup",
+      "ui_busy refusal",
+      "real host resize preserves draft",
+      "selected destination normal tab",
+      "staged directory",
+      "exact name/account",
+      "focus then popup exit",
+      "second popup cancel preserves new terminal",
+      "origin shell unchanged"
+    ],
+    "models": 0
   }
 }

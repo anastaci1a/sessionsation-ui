@@ -65,11 +65,16 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-popup-host-') as tmp:
   start=time.perf_counter();host('plugin','action','invoke','sessionsation.launcher');wait('Configuration');elapsed=(time.perf_counter()-start)*1000
   popup=json.loads((root/'popup.json').read_text());assert popup['pane'] is None;assert popup['context']['workspace_id']==origin['workspace']['workspace_id']
   assert popup['size']==[64,21],popup
+  busy=subprocess.run(['herdr','--session','fixture','plugin','pane','open','--plugin','sessionsation','--entrypoint','launcher'],env=env,capture_output=True,text=True,timeout=5)
+  assert 'ui_busy' in busy.stdout+busy.stderr,(busy.returncode,busy.stdout,busy.stderr)
   # Rendered menu reaches the popup; account inventory remains asynchronous.
   time.sleep(.2);key(b'\r');wait('Account:');wait('Space: Origin')
   key(b'\x1b[B\r');wait('Choose Space');key(b'\x1b[B\x1b[B\r');wait('Space: Destination')
   key(b'\x1b[B\r');wait('Session name');key(b'host-fixture\r');wait('Name: host-fixture')
   time.sleep(.2);assert not (projects/'host-fixture').exists();assert not (root/'start.json').exists()
+  # Real host viewport resize must preserve the draft and bottom control geometry.
+  fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',40,120,0,0));os.kill(client.pid,signal.SIGWINCH);time.sleep(.15)
+  fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',48,160,0,0));os.kill(client.pid,signal.SIGWINCH);time.sleep(.15)
   key(b'\x1b[B\x1b[B\r')
   until=time.monotonic()+5
   while not (root/'receipt.json').exists() and time.monotonic()<until:
@@ -90,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-popup-host-') as tmp:
    (root/'popup.json').unlink(missing_ok=True);screen=Screen();start=time.perf_counter();key(b'\x02L');wait('Configuration');key_samples.append((time.perf_counter()-start)*1000)
    key(b'\x1b');time.sleep(.4)
   key_samples.sort()
-  print(json.dumps({'keybind_startup':{'samples':len(key_samples),'p50_ms':key_samples[10],'p95_ms':key_samples[19],'max_ms':max(key_samples)},'installed_herdr':host('--version') if False else '0.9.5','plugin_to_first_paint_ms':elapsed,'popup_size':popup['size'],'checks':['origin context without pane ID','half-size popup','selected destination normal tab','staged directory','exact name/account','focus then popup exit','second popup cancel preserves new terminal','origin shell unchanged'],'models':0},indent=2))
+  print(json.dumps({'keybind_startup':{'samples':len(key_samples),'p50_ms':key_samples[10],'p95_ms':key_samples[19],'max_ms':max(key_samples)},'installed_herdr':host('--version') if False else '0.9.5','plugin_to_first_paint_ms':elapsed,'popup_size':popup['size'],'checks':['origin context without pane ID','half-size popup','ui_busy refusal','real host resize preserves draft','selected destination normal tab','staged directory','exact name/account','focus then popup exit','second popup cancel preserves new terminal','origin shell unchanged'],'models':0},indent=2))
  finally:
   host('server','stop')
   if client is not None:
