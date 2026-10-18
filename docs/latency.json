@@ -24,7 +24,11 @@
         "startup_ms": 24,
         "selection_to_handoff_ms": 45
       }
-    ]
+    ],
+    "resume_plan": {
+      "action": "resume_plan",
+      "selection_to_handoff_ms": 5453
+    }
   },
   "after": {
     "ui_commit": "874afa6",
@@ -87,6 +91,20 @@
           "selection_to_handoff_ms": 47
         }
       ]
+    ],
+    "resume_plan": [
+      {
+        "action": "resume_plan",
+        "selection_to_handoff_ms": 297
+      },
+      {
+        "action": "resume_plan",
+        "selection_to_handoff_ms": 294
+      },
+      {
+        "action": "resume_plan",
+        "selection_to_handoff_ms": 331
+      }
     ]
   },
   "boundaries": {
@@ -106,7 +124,7 @@
       "native resume execution"
     ]
   },
-  "conditions": "Sequential samples after full checks completed; filesystem caches and other host load uncontrolled. Before is one sample per path; after is three. Actual default-server menu/shell navigation also passed in an owned terminal, then closed.",
+  "conditions": "Sequential samples after full checks completed; filesystem caches and other host load uncontrolled. Before is one sample per path; after is three. Actual default-server menu/shell navigation also passed in an owned terminal, then closed. Resume plan samples use the same previously saved inactive disposable conversation, replacing execution with the inert marker; no native resume occurs.",
   "profile": {
     "unit": "milliseconds",
     "before_host_instance_discovery": 4806,
