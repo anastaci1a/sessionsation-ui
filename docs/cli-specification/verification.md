@@ -39,6 +39,43 @@ startup-file change or backend-data write was part of rollback. New terminals us
 the old numbered menu; existing processes were not restarted. Historical redesign
 evidence remains in Git/issue 4, not current docs.
 
+## HERDR popup compatibility
+
+Read-only inspection on Satellite, 2026-10-18:
+
+| Evidence | Result |
+| --- | --- |
+| `/mnt/user/live/packages/herdr/bin/herdr --version` | `herdr 0.9.5` |
+| Installed executable SHA256 | `14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d` |
+| `herdr --default-config` | Documents `keys.command` popup commands and percentage dimensions |
+| `herdr api schema --output FILE` | Static schema includes `PluginPanePlacement.popup`, popup dimensions and `PluginPaneOpenParams`; no runtime connection required |
+| Exported schema SHA256 | `9e2af207e9aa8183d4aeca5fde9cc48e7909bb40cdbd7cf21608a6d3ea78075b` |
+| `herdr plugin pane open --help` | Lists overlay/split/tab/zoomed, omits popup and dimension flags |
+| `herdr tab create --help` and bundled `TabCreateParams` | cwd/env/label/focus/workspace, no command argv |
+| Two isolated `herdr config check` invocations | Both exit 0, `config: ok`: qualified plugin action and direct popup with 80% dimensions, each bound to `prefix+shift+l` |
+
+Configuration checks used separate temporary TOML files selected with
+`HERDR_CONFIG_PATH`. The plugin-action fixture is the proposed example in
+[architecture](architecture.md#preferred-host-flow-popup-to-a-new-normal-tab).
+The direct-popup fixture replaced its type/command with `popup` and `/bin/true`,
+and added `width = "80%"`, `height = "80%"`. The checker did not execute either
+command. These results validate parsing, not plugin installation, key delivery,
+action resolution or popup behavior. Temporary configs were removed afterward.
+No production binding/configuration changed and no popup/tab/model was opened.
+
+Official v0.9.5 tag resolves to source commit
+[`2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01`](https://github.com/herdrdev/herdr/tree/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01).
+Its [configuration documentation](https://github.com/herdrdev/herdr/blob/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01/docs/next/website/src/content/docs/configuration.mdx)
+describes both key types; [plugin documentation](https://github.com/herdrdev/herdr/blob/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01/docs/next/website/src/content/docs/plugins.mdx)
+defines popup identity, input and lifetime. The tagged
+[CLI parser](https://github.com/herdrdev/herdr/blob/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01/src/cli/plugin.rs)
+accepts popup/width/height and prints them in help, unlike this installed binary's
+help. The bundled schema nevertheless exposes them. **Do not infer complete
+binary/source equivalence from the version string**: installed build provenance
+beyond path/hash/version has not been established. Prefer a manifest-declared popup
+in the proposal; verify its actual opening in an isolated HERDR instance before
+shipping. This audit did not exercise live APIs to settle that remaining gate.
+
 ## Reference responsiveness samples
 
 One-run observations, not promises or a before/after improvement claim:
@@ -135,6 +172,9 @@ Verification requirements below are for future work; the issue tracks completion
    Any added paste handling is an explicit deviation.
 4. Inert backend fixtures assert account-list-only New, stable-ID/generation Resume,
    stale completion rejection, literal opaque plans and no automatic retries.
+   Popup integration must bind the newly created normal tab/pane, never its
+   underlying focus context; test confirmed handoff, failed/uncertain admission,
+   no recursive launcher and cancellation without stopping an agent.
    Measure every transition and backend-call count, not spinner visibility.
 5. Review actual HERDR viewer appearance and detach/cancel before claiming that
    host's visual acceptance. This audit does not open/control a live viewer. No

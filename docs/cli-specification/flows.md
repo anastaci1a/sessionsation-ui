@@ -28,6 +28,10 @@ Target scope is New/Resume/Plain Shell. No nested Herdr action, destructive shel
 Exit action, jobs or management row is required. Preserve visual focus/navigation,
 not irrelevant action wiring. The separate `manage` command remains outside this
 creation UI; its existing implementation is not being redesigned in this audit.
+The planned HERDR entry and exit behavior is specified in
+[architecture](architecture.md#preferred-host-flow-popup-to-a-new-normal-tab):
+the popup requests a separate normal tab, then exits after confirmed handoff.
+Today's opaque exec plans alone do not implement that flow.
 
 ## Reference creation and accounts
 
@@ -122,7 +126,7 @@ confirmations belong to the separate management flow, not the creation launcher.
 - Jobs helpers inspect the **calling Bash shell's** running/stopped jobs. Per-job
   action foregrounds with `fg` or sends TERM then CONT to a stopped job; bulk
   terminate iterates. They are defined but absent from current home items. Do not
-  transplant job control into a Node creation launcher.
+  transplant job control into the creation launcher.
 - Availability helpers for monitor/switching exist; automatic account switching
   stays hidden. `AGENTS.md` mentions preserving `cxr`, but no tracked definition
   exists in this checkout. It is an external integration reference, not a feature

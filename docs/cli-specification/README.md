@@ -28,10 +28,14 @@ and review; a similar-looking mockup is insufficient.
 
 - Creation-only UI: New, Resume and Plain Shell. Account/session management stays
   in the separate CLI. No manager, jobs, stop/kill, or nested HERDR viewer action.
+- Preferred entry is a HERDR plugin popup with an installer-chosen keybinding;
+  selection creates a normal tab, then the popup exits. It never hosts/promotes an
+  agent. The proposed contract and Ana's binding are in [architecture](architecture.md#preferred-host-flow-popup-to-a-new-normal-tab).
 - No decorative title, ASCII lettering, replacement brand heading or blank title
   reservation. Functional page labels and the reference status bar are distinct.
 - Star field, density and fade extend to the **terminal bottom**, independent of
-  option count. Controls are bottom-anchored. Reference list-relative coordinates
+  option count. In a popup, terminal means its full PTY content viewport, excluding
+  the HERDR border. Controls are bottom-anchored. Reference list-relative coordinates
   are documented, then adapted explicitly in [visuals](visuals.md#target-geometry).
 - Existing public backend API v 1, opaque launch plans, stable identities,
   generation checks and retained HERDR shell remain authoritative. No copied
