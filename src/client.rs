@@ -29,6 +29,8 @@ pub struct Account {
     pub prefill: Value,
     #[serde(default)]
     pub usage: Value,
+    #[serde(flatten)]
+    pub details: std::collections::BTreeMap<String, Value>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Workspace {
@@ -73,6 +75,44 @@ pub fn preferences_path(config: &Path) -> PathBuf {
         .with_file_name("preferences.json")
 }
 impl Client {
+    pub async fn focus_session(&self, selected: &Value) -> Result<()> {
+        let state = self.api(&["state"], None).await?;
+        let session = state["sessions"]
+            .as_array()
+            .and_then(|s| s.iter().find(|s| s["id"] == selected["id"]))
+            .context("SESSION_NOT_FOUND")?;
+        ensure!(
+            session["generation"] == selected["generation"],
+            "STALE_TARGET"
+        );
+        ensure!(
+            session["availability"] == "running" && session["attachment"]["host"] == "herdr",
+            "SESSION_NOT_IN_HERDR"
+        );
+        let target = session["attachment"]["target"]
+            .as_str()
+            .context("MISSING_HOST_TARGET")?;
+        let prefix = format!("herdr/{}/", self.session);
+        let pane = target
+            .strip_prefix(&prefix)
+            .context("Session belongs to another HERDR instance")?;
+        let info = self.host(&["pane", "get", pane]).await?;
+        let info = info.get("pane").unwrap_or(&info);
+        let tab = info["tab_id"]
+            .as_str()
+            .context("HERDR returned no tab for the selected pane")?;
+        // Recheck after host discovery so a replaced catalog attachment cannot be
+        // deliberately followed using its old identity.
+        let fresh = self.api(&["state"], None).await?;
+        ensure!(
+            fresh["sessions"].as_array().is_some_and(|ss| ss
+                .iter()
+                .any(|s| s["id"] == selected["id"] && s["generation"] == selected["generation"])),
+            "STALE_TARGET"
+        );
+        self.host(&["tab", "focus", tab]).await?;
+        Ok(())
+    }
     pub async fn launch(&self, operation: &str, mut request: Value) -> Result<Value> {
         let paths: Vec<PathBuf> = serde_json::from_value(request["directory"]["create"].clone())?;
         let remaining =

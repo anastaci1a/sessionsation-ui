@@ -5,7 +5,43 @@ Set `SESSIONSATION_BIN` to the verified absolute backend executable and
 `/mnt/user/appdata/codex-switcher` with its existing credential owner. The independent
 backend default is not an automatic import. See the backend ownership guidance.
 
-The Rust popup creates new sessions only. Its [approved design](cli-specification/architecture.md) describes the interaction and ownership boundaries.
+The Rust popup creates sessions and presents account/session management through
+public backend commands. Its [approved design](cli-specification/architecture.md)
+describes the interaction and ownership boundaries. See the deployment record for
+what is installed; expanded resume remains under implementation.
+
+## Account and session menus
+
+Home orders New Session, Manage Sessions, Add Account/Manage Accounts, a dot
+separator and Settings. If every account fits above the bottom controls, accounts
+appear inline, aligned with the option circles, and Add Account is available.
+Otherwise Manage Accounts provides a scrolling list with `<add account>` first.
+Its highlighted account's usage sits above the controls with a blank line between.
+Growing the screen returns that list to Home; forms remain open and Back chooses
+the appropriate current layout without losing their account selection.
+
+Only verified 5-hour accounts show paired 5h/weekly bars. Bars measure remaining
+allowance, with custom limit markers inside them. Names share a bar start column;
+period labels and right-aligned percentages share a width. Accounts without that
+window show status; unknown and stale usage are explicit. New account names are
+limited to 12 characters. Existing longer names are shortened only in list display.
+
+Account actions group Usage details/Limits, Login/Enable/Disable, and Remove/Restore
+with dot separators. Limits edit minimum remaining percentages and use the owner's
+existing threshold settings. Removal shows affected data and requires the exact
+account ID; it preserves credentials/history and refuses active conflicts.
+
+Manage Sessions selects an action menu, never implicitly attaches. Lifecycle
+actions carry the captured backend ID/generation. Stop, Restart, Switch, Disable
+and Remove require confirmation. Internal modal dialogs preserve their underlying
+page; Continue in background dismisses progress without cancelling backend work.
+Operations shows progress, fresh confirmation prompts and supported recovery.
+Uncertain responses are not automatically retried. Focus tab selects an existing
+HERDR tab in this instance after rechecking its catalog identity.
+
+Dialogs use read-only HERDR theme configuration and bundled attributed palette
+tokens. Configured built-ins and RGB overrides are supported; dynamic/terminal
+themes report an approximation because HERDR exposes no resolved-palette API.
 
 ## Popup setup
 

@@ -26,9 +26,10 @@ Read by purpose:
 These override reference behavior. Other differences need an explicit explanation
 and review; a similar-looking mockup is insufficient.
 
-- New-session-only UI: choose account, directory and destination HERDR
-  Space/workspace. Existing-session resume, switching, attachment, standalone
-  Plain Shell and management are outside this replacement's scope.
+- Creation chooses account, directory and destination HERDR Space/workspace.
+  Ana expanded the scope in [issue 7](https://github.com/anastaci1a/sessionsation-ui/issues/7)
+  to account and session management. Its approved behavior is consolidated in
+  [architecture](architecture.md); standalone Plain Shell remains excluded.
 - Preferred entry is a HERDR plugin popup with an installer-chosen keybinding;
   selection creates a normal tab, then the popup exits. It never hosts/promotes an
   agent. The proposed contract and Ana's binding are in [architecture](architecture.md#user-flow).

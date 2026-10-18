@@ -22,6 +22,7 @@ pub enum Target {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Page {
     Home,
+    Management,
     Summary,
     Config,
     Roots,
@@ -40,6 +41,8 @@ pub enum Effect {
     Start(Value),
     Save,
     Exit,
+    Api(u64, Vec<String>),
+    FocusSession(Value),
 }
 #[derive(Clone)]
 struct Saved {
@@ -49,6 +52,7 @@ struct Saved {
     listing: Listing,
 }
 pub struct App {
+    pub manager: crate::management::Manager,
     pub page: Page,
     pub options: Options,
     pub input: TextInput,
@@ -91,6 +95,7 @@ impl App {
             ..Draft::default()
         };
         Self {
+            manager: crate::management::Manager::default(),
             page: Page::Home,
             options: Options::default(),
             input: TextInput::default(),
@@ -118,13 +123,39 @@ impl App {
             status: crate::status::Status::default(),
         }
     }
+    pub fn management(&mut self, intents: Vec<crate::management::Intent>) -> Vec<Effect> {
+        let mut effects = vec![];
+        for intent in intents {
+            use crate::management::Intent;
+            match intent {
+                Intent::Api(id, args) => effects.push(Effect::Api(id, args)),
+                Intent::New => effects.extend(self.push(Page::Summary, String::new())),
+                Intent::Settings => effects.extend(self.push(Page::Config, String::new())),
+                Intent::Focus(session) => effects.push(Effect::FocusSession(session)),
+                Intent::Exit => {
+                    self.exit = true;
+                    effects.push(Effect::Exit);
+                }
+                Intent::Resume(_) => self.error = "Resume contract is being prepared".into(),
+            }
+        }
+        if matches!(self.page, Page::Home | Page::Management) {
+            self.page = if self.manager.page == crate::management::Page::Home {
+                Page::Home
+            } else {
+                Page::Management
+            };
+        }
+        self.dirty = true;
+        effects
+    }
     pub fn rows(&self) -> Vec<Row> {
         let path = |p: Option<&Path>| {
             p.map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "<unset>".into())
         };
         match &self.page {
-            Page::Home => vec![Row::yes("New Session"), Row::yes("Configuration")],
+            Page::Home | Page::Management => self.manager.rows(),
             Page::Summary => vec![
                 Row::yes(format!(
                     "Account: {}",
@@ -373,6 +404,7 @@ impl App {
             None
         };
         self.accounts = accounts;
+        self.manager.inventory(self.accounts.clone());
         self.spaces = spaces;
         if let Some(id) = picker_space {
             self.options.selected = self
@@ -518,6 +550,7 @@ impl App {
             return vec![];
         }
         match self.page.clone() {
+            Page::Management => vec![],
             Page::Home => self.push(
                 if self.options.selected == 0 {
                     Page::Summary
@@ -655,6 +688,11 @@ impl App {
         }
     }
     pub fn paste(&mut self, text: &str) -> Vec<Effect> {
+        if matches!(self.page, Page::Home | Page::Management) {
+            self.manager.paste(text);
+            self.dirty = true;
+            return vec![];
+        }
         if self.is_form() {
             self.dirty = true;
             self.edit(text)
@@ -670,6 +708,12 @@ impl App {
     }
     pub fn key(&mut self, key: KeyEvent) -> Vec<Effect> {
         self.dirty = true;
+        if matches!(self.page, Page::Home | Page::Management)
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            let intents = self.manager.key(key);
+            return self.management(intents);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c') | KeyCode::Char('d') => {
@@ -824,9 +868,9 @@ impl App {
             return canvas;
         }
         let title = match &self.page {
-            Page::Home => "",
+            Page::Home | Page::Management => self.manager.title(),
             Page::Summary => "New Session",
-            Page::Config => "Configuration",
+            Page::Config => "Settings",
             Page::Roots => "Space roots",
             Page::Accounts => "Choose Account",
             Page::Spaces => "Choose Space",
@@ -855,6 +899,16 @@ impl App {
             };
             canvas.text(0, 1, &" ".repeat(width), bar.clone(), false);
             canvas.text(0, 1, &format!(" {title}"), bar, false);
+        }
+        if matches!(self.page, Page::Home | Page::Management) {
+            self.manager.paint(&mut canvas, footer);
+            field.apply_masks(&canvas);
+            self.page = if self.manager.page == crate::management::Page::Home {
+                Page::Home
+            } else {
+                Page::Management
+            };
+            return canvas;
         }
         let rows = self.rows();
         let top = if self.is_form() { 5 } else { 3 };

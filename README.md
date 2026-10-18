@@ -1,9 +1,16 @@
 # sessionsation-ui
 
-A Rust **new-session launcher** for HERDR and
+A Rust **account and session popup** for HERDR and
 [sessionsation](https://github.com/anastaci1a/sessionsation). Open a terminal popup,
 choose an account, destination Space, name and directory, then start in a normal tab.
-Account management and agent lifecycle remain in the sessionsation CLI.
+Manage accounts and existing sessions through the same popup; all account and
+lifecycle operations remain owned by the sessionsation CLI.
+
+The source now includes responsive account usage, account actions and lifecycle
+menus. Expanded saved-session resume is still under implementation in
+[issue 7](https://github.com/anastaci1a/sessionsation-ui/issues/7).
+The [deployment record](docs/deployment.json) identifies the older installed launcher;
+source changes do not automatically replace that artifact.
 
 The directory follows `projects-root/session-name` until you choose a different path.
 Nothing creates directories or Spaces before **Start Session**, including the directory

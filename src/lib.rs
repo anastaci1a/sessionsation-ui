@@ -8,5 +8,9 @@ pub mod directory;
 
 pub mod app;
 
+pub mod dialog;
+pub mod host_theme;
+pub mod management;
 pub mod status;
+pub mod usage;
 pub mod widgets;

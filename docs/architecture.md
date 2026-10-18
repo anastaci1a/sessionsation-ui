@@ -32,12 +32,20 @@ owns intentional adaptations.
 
 The Rust executable implements the New Session summary, Configuration, account and
 Space choices, name forms, shared directory picker and durable Start/status flow.
+It also has a management reducer for responsive Home/accounts, capability-driven
+account and session actions, asynchronous requests and operation observation.
 Its reusable components are:
 
 - `render`: terminal-sized animated field, Unicode cell canvas and output deltas.
   Background geometry is independent of option scrolling.
 - `widgets`: option focus/scrolling, enabled/disabled row styling and grapheme-aware
   input editing/painting. Start uses the same row control as the pickers.
+- `usage`: one measurement/rendering system for remaining-allowance bars, limit
+  markers, status-only accounts and shared columns across responsive layouts.
+- `dialog` / `host_theme`: shared paginated confirmations and forms, preserving
+  input across resize and reading HERDR theme colors without changing host config.
+- `management`: stable-ID list focus, account action groups and lifecycle menus;
+  backend effects stay asynchronous and mutations are never automatically replayed.
 - `directory`: read-only completion, canonical child resolution and staged paths.
   One picker serves session directories and Global/Per-Space configuration roots.
 - `draft` / `preferences`: creation intent and atomic UI-only preferences.

@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
    starts.append(t.wait('New Session'));t.drain()
    t.send(b'\x1b[D');t.wait('Close');t.send(b'\x1b[C');t.wait('New Session',selected=True)
    for n in range(200 if i==0 else 2):
-    t.start=time.perf_counter();t.send(b'\x1b[B' if n%2==0 else b'\x1b[A');keys.append(t.wait('Configuration' if n%2==0 else 'New Session',selected=True));t.drain()
+    t.start=time.perf_counter();t.send(b'\x1b[B' if n%2==0 else b'\x1b[A');keys.append(t.wait('Manage Sessions' if n%2==0 else 'New Session',selected=True));t.drain()
    # Summary opens while backend reads may still be delayed.
    t.send(b'\r');t.wait('Account:');t.send(b'\x1b[B\x1b[B\r');t.wait('Session name')
    t.send(b'\x1b[200~pasted\nname\x1b[201~');time.sleep(.05);t.drain();assert not (root/'projects'/'pastedname').exists()
@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  (settings/'preferences.json').write_text((root/'prefs.json').read_text());pointer=root/'config-pointer.json';pointer.symlink_to(settings/'popup.json')
  t=Terminal(root,client_config=pointer)
  try:
-  t.wait('New Session');t.send(b'\x1b[B\r');t.wait('Defaults:');t.send(b'\r\x1b');t.wait('New Session')
+  t.wait('New Session');t.send(b'\x1b[B\x1b[B\x1b[B\r');t.wait('Defaults:');t.send(b'\r\x1b');t.wait('New Session')
   until=time.monotonic()+2
   while json.loads((settings/'preferences.json').read_text())['mode']!='per_space' and time.monotonic()<until:
    t.drain();time.sleep(.01)

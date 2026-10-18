@@ -117,6 +117,7 @@ pub struct Row {
     pub label: String,
     pub enabled: bool,
     pub preview: Option<String>,
+    pub separator: bool,
 }
 impl Row {
     pub fn yes(label: impl Into<String>) -> Self {
@@ -127,13 +128,35 @@ impl Row {
             label: label.into(),
             enabled,
             preview: None,
+            separator: false,
         }
     }
     pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
         self.preview = Some(preview.into());
         self
     }
+    pub fn separator() -> Self {
+        Self {
+            label: String::new(),
+            enabled: false,
+            preview: None,
+            separator: true,
+        }
+    }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, selected: bool, back: bool) {
+        if self.separator {
+            canvas.accent_text(
+                x,
+                y,
+                "•",
+                Accent {
+                    brightness: 600,
+                    flash: false,
+                    ..Accent::default()
+                },
+            );
+            return;
+        }
         canvas.accent_text(
             x,
             y,
@@ -217,6 +240,15 @@ pub fn hint_lines(tokens: &[&str], width: usize) -> Vec<String> {
         lines.push(line);
     }
     lines
+}
+pub fn clip(text: &str, width: usize) -> String {
+    let mut used = 0;
+    text.graphemes(true)
+        .take_while(|g| {
+            used += UnicodeWidthStr::width(*g);
+            used <= width
+        })
+        .collect()
 }
 impl Options {
     /// Optional bottom action participates in focus without scrolling the list.

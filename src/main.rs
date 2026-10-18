@@ -26,10 +26,7 @@ use std::{
 };
 use tokio::sync::{Semaphore, mpsc};
 #[derive(Parser)]
-#[command(
-    version,
-    about = "New-session HERDR popup; no existing-agent management"
-)]
+#[command(version, about = "Account and session management popup for HERDR")]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
@@ -82,7 +79,10 @@ impl Drop for Terminal {
 enum Message {
     Input(Event),
     InputError(String),
-    Inventory(Result<(Vec<Account>, Vec<Workspace>, bool), String>),
+    Inventory(Result<(Vec<Account>, Vec<Workspace>, Value), String>),
+    Managed(u64, Result<Value, String>),
+    SessionFocused(Result<(), String>),
+    Theme(Result<(sessionsation_ui::dialog::Palette, Option<String>), String>),
     Directory(u64, Result<Listing, String>),
     Validation(u64, Result<(), String>),
     Receipt(Result<Value, String>),
@@ -105,6 +105,22 @@ impl Effects {
             let tx = self.sender.clone();
             let client = self.client.clone();
             match effect {
+                Effect::Api(token, args) => {
+                    tokio::spawn(async move {
+                        let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+                        let result = client.api(&refs, None).await.map_err(|e| e.to_string());
+                        let _ = tx.send(Message::Managed(token, result)).await;
+                    });
+                }
+                Effect::FocusSession(session) => {
+                    tokio::spawn(async move {
+                        let result = client
+                            .focus_session(&session)
+                            .await
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(Message::SessionFocused(result)).await;
+                    });
+                }
                 Effect::Inspect(revision, input) => {
                     if let Some(t) = self.directory.take() {
                         t.abort();
@@ -176,7 +192,7 @@ impl Effects {
                 Ok::<_, anyhow::Error>((
                     serde_json::from_value(accounts)?,
                     serde_json::from_value(spaces["workspaces"].clone())?,
-                    capabilities["launch"]["version"] == 1,
+                    capabilities,
                 ))
             }
             .await
@@ -333,6 +349,14 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
         directory: None,
         validation: None,
     };
+    let theme_sender = tx.clone();
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(sessionsation_ui::host_theme::load)
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.map_err(|e| e.to_string()));
+        let _ = theme_sender.send(Message::Theme(result)).await;
+    });
     let (w, h) = terminal::size()?;
     let mut dimensions = (w as usize, h as usize);
     let mut field = Field::new(dimensions.0, dimensions.1, now() as u64);
@@ -362,7 +386,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
         tokio::select! {
          _=term_signal.recv()=>{app.exit=true;},_ = hup_signal.recv()=>{app.exit=true;},
          _=frame.tick()=>{app.dirty=true;},
-         _=refresh.tick(),if !inventory_pending&&app.request.is_none()=>{inventory_pending=true;effects.inventory();},
+         _=refresh.tick(),if !inventory_pending&&app.request.is_none()=>{inventory_pending=true;effects.inventory();let intents=app.manager.refresh();next=app.management(intents);},
          _=receipt.tick(),if app.request.is_some()&&!app.success&&!receipt_pending=>{receipt_pending=true;effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into());},
          message=rx.recv()=>match message.context("Input channel closed")? {
           Message::Input(Event::Key(k))if k.kind!=KeyEventKind::Release=>{next=app.key(k);},
@@ -370,7 +394,10 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           Message::Input(Event::Resize(w,h))=>{dimensions=(w as usize,h as usize);app.dirty=true;},
           Message::Input(Event::FocusGained)=>{app.dirty=true;},Message::Input(_)=>{},
           Message::InputError(e)=>{app.error=e;app.exit=true;},
-          Message::Inventory(result)=>{inventory_pending=false;match result{Ok((accounts,spaces,supported))=>{app.launch_supported=supported;next=app.inventory(accounts,spaces,now());if !supported{app.error="Backend launch API is not installed; creation disabled".into();}},Err(e)=>{app.error=e;app.draft.name_valid=false;}}app.dirty=true;},
+          Message::Inventory(result)=>{inventory_pending=false;match result{Ok((accounts,spaces,capabilities))=>{app.launch_supported=capabilities["launch"]["version"]==1;app.manager.capabilities=capabilities;next=app.inventory(accounts,spaces,now());if !app.launch_supported{app.error="Backend launch API is not installed; creation disabled".into();}},Err(e)=>{app.manager.note=e.clone();app.error=e;app.draft.name_valid=false;}}app.dirty=true;},
+          Message::Managed(token,result)=>{let intents=app.manager.response(token,result);next=app.management(intents);},
+          Message::SessionFocused(result)=>{match result{Ok(())=>app.exit=true,Err(e)=>app.manager.note=e}app.dirty=true;},
+          Message::Theme(result)=>{match result{Ok((palette,note))=>{app.manager.palette=palette;if let Some(note)=note{app.manager.note=note;}},Err(e)=>app.manager.note=e}app.dirty=true;},
           Message::Directory(revision,result)=>app.listing(revision,result),
           Message::Validation(revision,result)=>app.validation(revision,result),
           Message::Receipt(result)=>{receipt_pending=false;match result {

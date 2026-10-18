@@ -1,20 +1,26 @@
-# Rust launcher design
+# Rust popup design
 
 Ana approved Rust and this interaction model. Implemented components are described
 in [current architecture](../architecture.md); [deployment](../deployment.json)
 identifies the selected artifacts and preserved rollback entrypoints.
-[Issue 6](https://github.com/anastaci1a/sessionsation-ui/issues/6) owns the current layout acceptance.
+[Issue 7](https://github.com/anastaci1a/sessionsation-ui/issues/7) owns the expanded
+account/session management acceptance. Resume, new-launch progress dialogs and
+end-to-end management acceptance remain in progress; the deployment record stays
+authoritative for the installed version.
 
 ## User flow
 
 The HERDR plugin opens a popup using the manifest's percentage dimensions. Ana uses `prefix+shift+l`; each
 installer chooses a binding without replacing unrelated keys or the user's prefix.
-Main menu: New Session and Configuration. No decorative title or reserved title
+Main menu: New Session, Manage Sessions, Add Account/Manage Accounts, a dot
+separator, Settings, then the complete inline accounts module when it fits.
+No decorative title or reserved title
 area. Stars/gradient cover the entire popup PTY; only options scroll. Hints stay
 at the bottom. The compact Back arrow sits immediately left of the first visible
 option. Left focuses it and expands its label where space permits; Right returns
 to the remembered option. The main page says Close and dismisses the popup;
-other pages say Back. No existing-session operations or standalone shell action.
+other pages say Back. Expansion requires one left-padding cell after measuring
+the complete label. Standalone shell remains excluded.
 
 New Session is an editable summary: Account, Space, Name, Directory. Pickers open
 as separate pages. Start Session uses the reference Sessions page's separator
