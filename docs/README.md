@@ -5,4 +5,5 @@
 - [Verification and limitations](verification.md)
 - [Selected launcher artifact and rollback](deployment.json)
 - [Launcher latency measurements](latency.json)
+- [Terminal visual/input verification](terminal-verification.json)
 - [Contributor workflow](../agents/README.md)

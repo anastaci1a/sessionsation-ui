@@ -14,6 +14,37 @@ backend operation. Capability hints determine available choices.
 
 No existing shell startup files or restored agents are modified.
 
+## Interactive launcher
+
+In a TTY the launcher uses an alternate screen with colored circle markers,
+cycling accents, twinkling stars and a diagonal shimmer. The fade and field reach
+the terminal bottom regardless of list length; Back and key hints stay there too.
+There is no ASCII title. Pipes and `TERM=dumb` retain the numbered text interface.
+No management controls appear in the creation flow; `manage` remains separate.
+
+- Up/Down wrap through enabled options; Enter or Space selects. Home/End and
+  Page Up/Down navigate long lists. Left focuses Back/Exit; Right returns to options.
+- Esc returns one page, or exits the home menu to the retained shell. Ctrl-C/Ctrl-D
+  cancel the whole launcher. Exiting a viewer never sends a lifecycle Stop.
+- New asks for a directory and an enrolled selectable account. It uses the account
+  list directly. The chosen directory is inherited by the opaque backend plan when
+  its cwd is unset. Account/credential decisions and generated session names stay
+  with the backend. No provider command is reconstructed.
+- In the picker, Enter opens a child or chooses an action. Right/Tab opens a child;
+  Left opens its parent and highlights the directory just left. Left on the first
+  action row, or anywhere at filesystem root, focuses Back. Returning to a child
+  restores its selection; an unvisited directory keeps the row where possible.
+- Type a path or explicitly create one folder within the current directory. Text
+  fields support cursor arrows, Home/End, Backspace/Delete and Ctrl-U. Pasted text
+  cannot select menu actions; newlines cannot submit text fields.
+- Resume lists saved sessions and preserves backend IDs, generation and cwd.
+  Plain Shell uses the backend shell plan. Backend errors require an explicit
+  return; no automatic mutation retry is made.
+
+Resize preserves selection and scrolls long lists. Very small terminals ask to
+enlarge and keep Escape available. Cancel stays responsive during asynchronous
+reads; raw mode, cursor and the original screen are restored before handoff or exit.
+
 ## Management plugin
 
 ```sh

@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "engines": {"node": ">=22.18.0"},
-  "scripts": {"test": "node --test", "check": "node scripts/check.mjs"},
+  "scripts": {"test": "node --test", "test:terminal": "perl test/terminal-pty.pl", "check": "node scripts/check.mjs"},
   "license": "MIT"
 }
