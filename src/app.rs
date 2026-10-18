@@ -71,6 +71,11 @@ pub struct App {
     pub exit: bool,
     pub success: bool,
     pub launch_supported: bool,
+    pub launch_background: bool,
+    pub launch_dialog: bool,
+    pub resume: Option<Value>,
+    switch: Option<Value>,
+    new_draft: Option<(Draft, bool, bool)>,
     stack: Vec<Saved>,
     history: BTreeMap<PathBuf, usize>,
     auto_account: bool,
@@ -114,6 +119,11 @@ impl App {
             exit: false,
             success: false,
             launch_supported: false,
+            launch_background: false,
+            launch_dialog: false,
+            resume: None,
+            switch: None,
+            new_draft: None,
             stack: vec![],
             history: BTreeMap::new(),
             auto_account: true,
@@ -129,14 +139,72 @@ impl App {
             use crate::management::Intent;
             match intent {
                 Intent::Api(id, args) => effects.push(Effect::Api(id, args)),
-                Intent::New => effects.extend(self.push(Page::Summary, String::new())),
+                Intent::New => {
+                    if self.request.is_some() && !self.success {
+                        self.manager.note="A launch is still in progress; inspect Operations before starting another.".into();
+                    } else {
+                        self.restore_new_draft();
+                        self.request = None;
+                        self.success = false;
+                        effects.extend(self.push(Page::Summary, String::new()));
+                    }
+                }
                 Intent::Settings => effects.extend(self.push(Page::Config, String::new())),
                 Intent::Focus(session) => effects.push(Effect::FocusSession(session)),
                 Intent::Exit => {
                     self.exit = true;
                     effects.push(Effect::Exit);
                 }
-                Intent::Resume(_) => self.error = "Resume contract is being prepared".into(),
+                Intent::Switch(session) => {
+                    self.switch = Some(session);
+                    effects.extend(self.push(Page::Accounts, String::new()));
+                }
+                Intent::Resume(session) => {
+                    if self.request.is_some() && !self.success {
+                        self.manager.note =
+                            "Inspect the pending launch in Operations first.".into();
+                        continue;
+                    }
+                    self.restore_new_draft();
+                    self.new_draft = Some((self.draft.clone(), self.auto_account, self.auto_space));
+                    let original = &session["original_host"];
+                    let preferred = if original["session"] == self.host["session"]
+                        && original["socket"] == self.host["socket"]
+                    {
+                        self.spaces.iter().find(|s| {
+                            s.workspace_id == original["workspace_id"].as_str().unwrap_or("")
+                        })
+                    } else {
+                        None
+                    };
+                    let space = preferred
+                        .or_else(|| {
+                            let mut selected = self.spaces.iter().filter(|s| s.focused);
+                            selected.next().filter(|_| selected.next().is_none())
+                        })
+                        .map(|s| Space::Existing {
+                            id: s.workspace_id.clone(),
+                            label: s.label.clone(),
+                        });
+                    self.draft = Draft {
+                        account: session["account_id"].as_str().map(str::to_owned),
+                        space,
+                        name: session["name"].as_str().unwrap_or("").into(),
+                        directory: session["directory"]
+                            .as_str()
+                            .map(|p| Directory::Existing(p.into()))
+                            .unwrap_or_default(),
+                        revision: self.draft.revision + 1,
+                        ..Draft::default()
+                    };
+                    self.resume = Some(session);
+                    self.auto_account = false;
+                    self.auto_space = false;
+                    self.request = None;
+                    self.success = false;
+                    effects.extend(self.push(Page::Summary, String::new()));
+                    effects.extend(self.revalidate());
+                }
             }
         }
         if matches!(self.page, Page::Home | Page::Management) {
@@ -148,6 +216,42 @@ impl App {
         }
         self.dirty = true;
         effects
+    }
+    fn restore_new_draft(&mut self) {
+        if let Some((mut draft, account, space)) = self.new_draft.take() {
+            draft.revision = self.draft.revision + 1;
+            draft.name_valid = false;
+            draft.directory_valid = false;
+            self.draft = draft;
+            self.auto_account = account;
+            self.auto_space = space;
+        }
+        self.resume = None;
+    }
+    fn name_valid(&self, name: &str) -> bool {
+        if self.resume.is_some() {
+            !name.is_empty()
+                && name.len() <= 128
+                && name.trim() == name
+                && !name.chars().any(char::is_control)
+        } else {
+            valid_name(name)
+        }
+    }
+    fn ready(&self) -> bool {
+        self.draft.account.is_some()
+            && self.draft.space.is_some()
+            && self.name_valid(&self.draft.name)
+            && self.draft.name_valid
+            && self.draft.directory_valid
+            && self.draft.directory.path().is_some()
+    }
+    fn launch_supported(&self) -> bool {
+        if self.resume.is_some() {
+            self.manager.capabilities["resume"]["version"] == 1
+        } else {
+            self.launch_supported
+        }
     }
     pub fn rows(&self) -> Vec<Row> {
         let path = |p: Option<&Path>| {
@@ -178,7 +282,10 @@ impl App {
                         &self.draft.name
                     }
                 )),
-                Row::yes(format!("Directory: {}", path(self.draft.directory.path()))),
+                Row::gate(
+                    format!("Directory: {}", path(self.draft.directory.path())),
+                    self.resume.is_none(),
+                ),
             ],
             Page::Config => vec![
                 Row::yes(format!(
@@ -208,27 +315,10 @@ impl App {
             Page::Accounts => self
                 .accounts
                 .iter()
-                .map(|a| {
-                    let remaining = |k: &str| {
-                        a.usage[k]["used_percent"]
-                            .as_f64()
-                            .map(|v| format!("{:.0}%", 100. - v))
-                            .unwrap_or_else(|| "?".into())
-                    };
-                    let note = a.prefill["reason"]
-                        .as_str()
-                        .map(|s| format!(" ({})", s.to_lowercase().replace('_', " ")))
-                        .unwrap_or_default();
-                    Row::gate(
-                        format!(
-                            "{}  {} / {} remaining{}",
-                            a.id,
-                            remaining("short"),
-                            remaining("weekly"),
-                            note
-                        ),
-                        a.selectable,
-                    )
+                .zip(crate::usage::picker_labels(&self.accounts))
+                .map(|(a, usage)| {
+                    Row::gate(crate::usage::short_name(&a.id), a.selectable)
+                        .with_right_preview(usage)
                 })
                 .collect(),
             Page::Spaces => std::iter::once(Row::yes("Create new Space"))
@@ -238,7 +328,7 @@ impl App {
                         .map(|s| Row::yes(format!("{} [{}]", s.label, s.workspace_id))),
                 )
                 .collect(),
-            Page::Name => vec![Row::gate("Continue", valid_name(&self.input.value))],
+            Page::Name => vec![Row::gate("Continue", self.name_valid(&self.input.value))],
             Page::SpaceName => vec![Row::gate(
                 "Use new Space",
                 valid_name(&self.input.value)
@@ -309,6 +399,12 @@ impl App {
     }
     fn pop(&mut self) -> Vec<Effect> {
         let save = matches!(self.page, Page::Config | Page::Roots);
+        if self.page == Page::Accounts {
+            self.switch = None;
+        }
+        if self.page == Page::Summary && self.resume.is_some() {
+            self.restore_new_draft();
+        }
         if let Some(old) = self.stack.pop() {
             self.page = old.page;
             self.options.selected = old.selected;
@@ -350,13 +446,18 @@ impl App {
         }
     }
     pub fn creation_request(&self) -> Option<Value> {
-        if !valid_name(&self.draft.name) {
+        if !self.name_valid(&self.draft.name) {
             return None;
         }
         let space = match self.draft.space.as_ref()? {
             Space::Existing { id, .. } => json!({"kind":"existing","id":id}),
             Space::New { label } => json!({"kind":"new","label":label}),
         };
+        if let Some(session) = &self.resume {
+            return Some(
+                json!({"version":1,"request_id":uuid::Uuid::new_v4().to_string(),"session_id":session["id"],"expected_generation":session["generation"],"account_id":self.draft.account.as_ref()?,"name":self.draft.name,"host":self.host,"space":space}),
+            );
+        }
         let (path, create, confirmed) = match &self.draft.directory {
             Directory::Unset => return None,
             Directory::Existing(p) => (p, vec![], true),
@@ -534,13 +635,16 @@ impl App {
             return self.pop();
         }
         if self.page == Page::Summary && self.options.selected == 4 {
-            if self.draft.ready()
-                && self.launch_supported
+            if self.ready()
+                && self.launch_supported()
                 && !self.pending
+                && self.request.is_none()
                 && let Some(request) = self.creation_request()
             {
                 self.request = Some(request.clone());
-                self.page = Page::Launching;
+                self.launch_background = false;
+                self.launch_dialog = true;
+                self.manager.dialog = Some(crate::dialog::Dialog::progress("Starting session"));
                 return vec![Effect::Start(request)];
             }
             return vec![];
@@ -605,6 +709,12 @@ impl App {
                 self.push(Page::Directory(Target::Space(id)), p)
             }
             Page::Accounts => {
+                if let Some(session) = self.switch.take() {
+                    let account = self.accounts[self.options.selected].id.clone();
+                    self.pop();
+                    self.manager.switch_confirmation(session, &account);
+                    return vec![];
+                }
                 self.draft.account = Some(self.accounts[self.options.selected].id.clone());
                 self.auto_account = false;
                 self.pop();
@@ -708,6 +818,23 @@ impl App {
     }
     pub fn key(&mut self, key: KeyEvent) -> Vec<Effect> {
         self.dirty = true;
+        if self.launch_dialog && !key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let Some(d) = &mut self.manager.dialog
+                && matches!(
+                    d.key(key),
+                    crate::dialog::Event::Dismiss | crate::dialog::Event::Choose(..)
+                )
+            {
+                self.manager.dialog = None;
+                self.launch_dialog = false;
+                self.launch_background = true;
+                self.page = Page::Home;
+                self.manager.page = crate::management::Page::Home;
+                self.manager.options = Options::default();
+                self.stack.clear();
+            }
+            return vec![];
+        }
         if matches!(self.page, Page::Home | Page::Management)
             && !key.modifiers.contains(KeyModifiers::CONTROL)
         {
@@ -869,7 +996,13 @@ impl App {
         }
         let title = match &self.page {
             Page::Home | Page::Management => self.manager.title(),
-            Page::Summary => "New Session",
+            Page::Summary => {
+                if self.resume.is_some() {
+                    "Resume Session"
+                } else {
+                    "New Session"
+                }
+            }
             Page::Config => "Settings",
             Page::Roots => "Space roots",
             Page::Accounts => "Choose Account",
@@ -935,7 +1068,8 @@ impl App {
             self.input.paint(&mut canvas, 2, 3, width - 4, valid);
         }
         if self.page == Page::Summary {
-            let enabled = self.draft.ready() && self.launch_supported && !self.pending;
+            let enabled =
+                self.ready() && self.launch_supported() && !self.pending && self.request.is_none();
             canvas.accent_text(
                 left,
                 top + rows.len().min(capacity),
@@ -946,7 +1080,15 @@ impl App {
                     ..Accent::default()
                 },
             );
-            Row::gate("Start Session", enabled).paint(
+            Row::gate(
+                if self.resume.is_some() {
+                    "Resume Session"
+                } else {
+                    "Start Session"
+                },
+                enabled,
+            )
+            .paint(
                 &mut canvas,
                 left,
                 top + rows.len().min(capacity) + 1,
@@ -970,6 +1112,11 @@ impl App {
         }
         let note = if !self.error.is_empty() {
             self.error.clone()
+        } else if self.page == Page::Accounts {
+            self.accounts
+                .get(self.options.selected)
+                .map(|a| format!("{} — {}", a.id, crate::usage::Usage::account(a).status))
+                .unwrap_or_default()
         } else if self.pending {
             "Checking choices…".into()
         } else if self.page == Page::Launching {
@@ -1013,6 +1160,11 @@ impl App {
                     ..Accent::default()
                 },
             );
+        }
+        if self.launch_dialog
+            && let Some(d) = &mut self.manager.dialog
+        {
+            d.paint(&mut canvas, &self.manager.palette);
         }
         field.apply_masks(&canvas);
         canvas
@@ -1225,5 +1377,92 @@ mod tests {
             &a.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))[..],
             [Effect::Exit]
         ));
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use crate::management::Intent;
+    #[test]
+    fn resume_uses_verified_space_readonly_directory_and_preserves_new_draft() {
+        let mut a = App::new(
+            Preferences::default(),
+            "/projects".into(),
+            "host".into(),
+            json!({"session":"host","socket":"/socket"}),
+            None,
+        );
+        a.draft.name = "New draft".into();
+        a.draft.revision = 40;
+        a.spaces = vec![
+            Workspace {
+                workspace_id: "w1".into(),
+                label: "Current".into(),
+                focused: true,
+            },
+            Workspace {
+                workspace_id: "w2".into(),
+                label: "Original".into(),
+                focused: false,
+            },
+        ];
+        let details = json!({"id":"stable","generation":"fresh","name":"Saved/name","account_id":"codex:original","directory":"/saved/path","original_host":{"session":"host","socket":"/socket","workspace_id":"w2"}});
+        let effects = a.management(vec![Intent::Resume(details.clone())]);
+        assert!(effects.iter().any(|e| matches!(e, Effect::Validate(..))));
+        assert!(!a.rows()[3].enabled);
+        assert_eq!(a.draft.space.as_ref().unwrap().label(), "Original");
+        a.draft.name = "Changed/name".into();
+        a.revalidate();
+        let request = a.creation_request().unwrap();
+        assert!(request.get("directory").is_none());
+        assert_eq!(request["session_id"], "stable");
+        assert_eq!(request["expected_generation"], "fresh");
+        assert_eq!(a.draft.directory.path(), Some(Path::new("/saved/path")));
+        let revision = a.draft.revision;
+        a.pop();
+        assert_eq!(a.draft.name, "New draft");
+        assert!(a.draft.revision > revision);
+        assert!(a.resume.is_none());
+        let mut foreign = details;
+        foreign["original_host"]["socket"] = json!("/another");
+        a.management(vec![Intent::Resume(foreign)]);
+        assert_eq!(a.draft.space.as_ref().unwrap().label(), "Current");
+    }
+    #[test]
+    fn background_detaches_without_another_start_or_stop() {
+        let mut a = App::new(
+            Preferences::default(),
+            "/projects".into(),
+            "host".into(),
+            json!({}),
+            None,
+        );
+        a.launch_supported = true;
+        a.draft = Draft {
+            account: Some("codex:fixture".into()),
+            space: Some(Space::Existing {
+                id: "w1".into(),
+                label: "Space".into(),
+            }),
+            name: "New".into(),
+            directory: Directory::Existing("/projects".into()),
+            name_valid: true,
+            directory_valid: true,
+            revision: 1,
+        };
+        a.page = Page::Summary;
+        a.options.selected = 4;
+        assert!(matches!(a.activate().as_slice(), [Effect::Start(_)]));
+        let request = a.request.clone();
+        assert!(
+            a.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .is_empty()
+        );
+        assert!(a.launch_background);
+        assert_eq!(a.page, Page::Home);
+        assert_eq!(a.request, request);
+        assert!(a.management(vec![Intent::New]).is_empty());
+        assert_eq!(a.page, Page::Home);
     }
 }

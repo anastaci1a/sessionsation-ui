@@ -281,3 +281,70 @@ mod tests {
         assert!(l.bars + l.bar_width + 10 < 80);
     }
 }
+
+/// Shared right-edge picker columns. Padding is computed from displayed values,
+/// not a fixed three-digit reservation; absent five-hour windows have no slash.
+pub fn picker_labels(accounts: &[Account]) -> Vec<String> {
+    let values: Vec<_> = accounts
+        .iter()
+        .map(|a| {
+            let remaining = |key: &str, duration: i64| {
+                (a.usage[key]["duration_minutes"].as_i64() == Some(duration))
+                    .then(|| a.usage[key]["used_percent"].as_f64())
+                    .flatten()
+                    .filter(|n| n.is_finite() && (0. ..=100.).contains(n))
+                    .map(|n| format!("{:.0}", 100. - n))
+                    .unwrap_or_else(|| "?".into())
+            };
+            (
+                (a.usage["short"]["duration_minutes"] == 300).then(|| remaining("short", 300)),
+                remaining("weekly", 10080),
+            )
+        })
+        .collect();
+    let digits = values
+        .iter()
+        .flat_map(|(short, weekly)| short.iter().chain(std::iter::once(weekly)))
+        .map(String::len)
+        .max()
+        .unwrap_or(1);
+    values
+        .into_iter()
+        .map(|(short, weekly)| match short {
+            Some(short) => format!("{short:>digits$}% 5h / {weekly:>digits$}% wkly"),
+            None => format!("{weekly:>digits$}% wkly"),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::*;
+    use serde_json::json;
+    fn account(short: Option<f64>, weekly: f64) -> Account {
+        serde_json::from_value(json!({"id":"codex:fixture","selectable":true,"usage":{"short":short.map(|used|json!({"duration_minutes":300,"used_percent":used})),"weekly":{"duration_minutes":10080,"used_percent":weekly}}})).unwrap()
+    }
+    #[test]
+    fn picker_padding_is_minimal_and_all_usage_columns_align() {
+        let mut accounts = vec![
+            account(Some(95.), 20.),
+            account(Some(1.), 94.),
+            account(None, 55.),
+        ];
+        let labels = picker_labels(&accounts);
+        assert_eq!(
+            labels,
+            vec![" 5% 5h / 80% wkly", "99% 5h /  6% wkly", "45% wkly"]
+        );
+        assert_eq!(labels[0].find('/'), labels[1].find('/'));
+        assert_eq!(labels[0].find('%'), labels[1].find('%'));
+        accounts[1].usage["short"]["used_percent"] = json!(0);
+        assert_eq!(picker_labels(&accounts)[0], "  5% 5h /  80% wkly");
+        assert_eq!(
+            picker_labels(&[account(Some(95.), 94.)])[0],
+            "5% 5h / 6% wkly"
+        );
+        accounts[2].usage["short"] = json!({"duration_minutes":60,"used_percent":0});
+        assert!(!picker_labels(&accounts)[2].contains('/'));
+    }
+}

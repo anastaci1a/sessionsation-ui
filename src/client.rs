@@ -96,6 +96,13 @@ impl Client {
         let pane = target
             .strip_prefix(&prefix)
             .context("Session belongs to another HERDR instance")?;
+        let process = self.host(&["pane", "process-info", "--pane", pane]).await?;
+        ensure!(
+            process["process_info"]["foreground_processes"]
+                .as_array()
+                .is_some_and(|ps| ps.iter().any(|p| p["pid"] == session["attachment"]["pid"])),
+            "HERDR_ATTACHMENT_MISMATCH"
+        );
         let info = self.host(&["pane", "get", pane]).await?;
         let info = info.get("pane").unwrap_or(&info);
         let tab = info["tab_id"]
@@ -114,6 +121,9 @@ impl Client {
         Ok(())
     }
     pub async fn launch(&self, operation: &str, mut request: Value) -> Result<Value> {
+        if request["session_id"].is_string() {
+            return self.api(&["resume-launch", operation], Some(request)).await;
+        }
         let paths: Vec<PathBuf> = serde_json::from_value(request["directory"]["create"].clone())?;
         let remaining =
             tokio::task::spawn_blocking(move || crate::directory::remaining_plan(&paths)).await??;

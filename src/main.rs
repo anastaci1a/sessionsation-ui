@@ -200,12 +200,20 @@ impl Effects {
             let _ = tx.send(Message::Inventory(result)).await;
         });
     }
-    fn receipt(&self, id: String) {
+    fn receipt(&self, id: String, resume: bool) {
         let tx = self.sender.clone();
         let client = self.client.clone();
         tokio::spawn(async move {
             let result = client
-                .api(&["launch", "status", "--request-id", &id], None)
+                .api(
+                    &[
+                        if resume { "resume-launch" } else { "launch" },
+                        "status",
+                        "--request-id",
+                        &id,
+                    ],
+                    None,
+                )
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(Message::Receipt(result)).await;
@@ -386,15 +394,16 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
         tokio::select! {
          _=term_signal.recv()=>{app.exit=true;},_ = hup_signal.recv()=>{app.exit=true;},
          _=frame.tick()=>{app.dirty=true;},
-         _=refresh.tick(),if !inventory_pending&&app.request.is_none()=>{inventory_pending=true;effects.inventory();let intents=app.manager.refresh();next=app.management(intents);},
-         _=receipt.tick(),if app.request.is_some()&&!app.success&&!receipt_pending=>{receipt_pending=true;effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into());},
+         _=refresh.tick(),if !inventory_pending=>{inventory_pending=true;effects.inventory();let intents=app.manager.refresh();next=app.management(intents);},
+         _=receipt.tick(),if app.request.is_some()&&!app.success&&!receipt_pending=>{receipt_pending=true;effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
          message=rx.recv()=>match message.context("Input channel closed")? {
           Message::Input(Event::Key(k))if k.kind!=KeyEventKind::Release=>{next=app.key(k);},
           Message::Input(Event::Paste(s))=>{next=app.paste(&s);},
           Message::Input(Event::Resize(w,h))=>{dimensions=(w as usize,h as usize);app.dirty=true;},
           Message::Input(Event::FocusGained)=>{app.dirty=true;},Message::Input(_)=>{},
           Message::InputError(e)=>{app.error=e;app.exit=true;},
-          Message::Inventory(result)=>{inventory_pending=false;match result{Ok((accounts,spaces,capabilities))=>{app.launch_supported=capabilities["launch"]["version"]==1;app.manager.capabilities=capabilities;next=app.inventory(accounts,spaces,now());if !app.launch_supported{app.error="Backend launch API is not installed; creation disabled".into();}},Err(e)=>{app.manager.note=e.clone();app.error=e;app.draft.name_valid=false;}}app.dirty=true;},
+          Message::Inventory(result)=>{inventory_pending=false;match result{Ok((accounts,spaces,capabilities))=>{app.launch_supported=capabilities["launch"]["version"]==1;let changed=app.manager.capabilities!=capabilities;app.manager.capabilities=capabilities;next=app.inventory(accounts,spaces,now());if changed{let intents=app.manager.refresh();next.extend(app.management(intents));}
+          if !app.launch_supported{app.error="Backend launch API is not installed; creation disabled".into();}},Err(e)=>{app.manager.note=e.clone();app.error=e;app.draft.name_valid=false;}}app.dirty=true;},
           Message::Managed(token,result)=>{let intents=app.manager.response(token,result);next=app.management(intents);},
           Message::SessionFocused(result)=>{match result{Ok(())=>app.exit=true,Err(e)=>app.manager.note=e}app.dirty=true;},
           Message::Theme(result)=>{match result{Ok((palette,note))=>{app.manager.palette=palette;if let Some(note)=note{app.manager.note=note;}},Err(e)=>app.manager.note=e}app.dirty=true;},
@@ -402,13 +411,13 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           Message::Validation(revision,result)=>app.validation(revision,result),
           Message::Receipt(result)=>{receipt_pending=false;match result {
            Ok(r)=>match r["phase"].as_str().unwrap_or("uncertain") {
-            "running" if !app.success=>{app.success=true;if let Some(tab)=r["tab_id"].as_str(){effects.focus(tab.into());}else{app.error="Session running; receipt has no tab identity. Esc closes.".into();}},
+            "running" if !app.success=>{app.success=true;if app.launch_background {app.manager.note="Session is running; open Operations or Focus tab when ready.".into();app.prefs.last_account=app.request.as_ref().and_then(|r|r["account_id"].as_str().map(str::to_owned));next.push(Effect::Save);}else if let Some(tab)=r["tab_id"].as_str(){effects.focus(tab.into());}else{app.error="Session running; receipt has no tab identity. Esc closes.".into();}},
             "failed"=>{app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",r["detail"].as_str().unwrap_or("inspect launch status"));},
             phase=>{app.error=format!("{phase}: {}",r["detail"].as_str().unwrap_or("waiting for confirmed handoff"));},
            },Err(e)=>{app.error=format!("{e}; reconciling original request");}
-          }app.dirty=true;},
+          }if app.launch_dialog&&let Some(d)=&mut app.manager.dialog{d.body=vec![app.error.clone()];}app.dirty=true;},
           Message::Focused(result)=>{match result { Ok(())=>{app.prefs.last_account=app.draft.account.clone();next.push(Effect::Save);},Err(e)=>{app.error=format!("Session is running; tab focus failed: {e}. Esc closes.");}}app.dirty=true;},
-          Message::Saved(result)=>{if let Err(e)=result{app.error=format!("Preferences were not saved: {e}");if !app.success{app.page=Page::Config;}app.dirty=true;}else if app.success {app.exit=true;}},
+          Message::Saved(result)=>{if let Err(e)=result{app.error=format!("Preferences were not saved: {e}");if !app.success{app.page=Page::Config;}app.dirty=true;}else if app.success && !app.launch_background {app.exit=true;}},
          }
         }
         effects.run(next, &app);

@@ -1,9 +1,11 @@
 //! Reusable internal modals. Closing a viewer never cancels backend work.
 use crate::{
     render::{Canvas, Cell},
-    widgets::{Row, TextInput, clip, hint_lines},
+    widgets::{Row, TextInput, clip},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 #[derive(Clone, Debug)]
 pub struct Palette {
     pub accent: [u8; 3],
@@ -136,7 +138,7 @@ impl Dialog {
                 if l.is_empty() {
                     vec![String::new()]
                 } else {
-                    hint_lines(&l.split_whitespace().collect::<Vec<_>>(), width - 2)
+                    wrap(l, width - 4)
                 }
             })
             .collect();
@@ -219,9 +221,40 @@ impl Dialog {
         }
     }
 }
+// Preserve entire paths, IDs and consent text, including unbroken tokens.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = vec![];
+    let mut line = String::new();
+    let mut used = 0;
+    for g in text.graphemes(true) {
+        let cells = UnicodeWidthStr::width(g);
+        if g == "\n" || used + cells > width {
+            lines.push(std::mem::take(&mut line));
+            used = 0;
+            if g == "\n" {
+                continue;
+            }
+        }
+        line.push_str(g);
+        used += cells;
+    }
+    lines.push(line);
+    lines
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn consent_wrap_preserves_long_paths_and_graphemes() {
+        let text = "/very/long/unbroken/path/αβγ/with-combining-é-and-👩‍💻";
+        let lines = wrap(text, 12);
+        assert_eq!(lines.concat(), text);
+        assert!(
+            lines
+                .iter()
+                .all(|l| UnicodeWidthStr::width(l.as_str()) <= 12)
+        );
+    }
     #[test]
     fn confirmation_requires_reading_all_pages_and_resize_keeps_input() {
         let mut d = Dialog::new(

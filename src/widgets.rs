@@ -117,6 +117,7 @@ pub struct Row {
     pub label: String,
     pub enabled: bool,
     pub preview: Option<String>,
+    pub right_preview: bool,
     pub separator: bool,
 }
 impl Row {
@@ -128,6 +129,7 @@ impl Row {
             label: label.into(),
             enabled,
             preview: None,
+            right_preview: false,
             separator: false,
         }
     }
@@ -135,11 +137,17 @@ impl Row {
         self.preview = Some(preview.into());
         self
     }
+    pub fn with_right_preview(mut self, preview: impl Into<String>) -> Self {
+        self.preview = Some(preview.into());
+        self.right_preview = true;
+        self
+    }
     pub fn separator() -> Self {
         Self {
             label: String::new(),
             enabled: false,
             preview: None,
+            right_preview: false,
             separator: true,
         }
     }
@@ -188,8 +196,18 @@ impl Row {
             self.enabled,
         );
         if let Some(preview) = &self.preview {
-            let start = x + 2 + UnicodeWidthStr::width(self.label.as_str()) + 2;
-            if start + UnicodeWidthStr::width(preview.as_str()) <= canvas.width.saturating_sub(2) {
+            let minimum = x + 2 + UnicodeWidthStr::width(self.label.as_str()) + 2;
+            let start = if self.right_preview {
+                canvas
+                    .width
+                    .saturating_sub(2 + UnicodeWidthStr::width(preview.as_str()))
+            } else {
+                minimum
+            };
+            if start >= minimum
+                && start + UnicodeWidthStr::width(preview.as_str())
+                    <= canvas.width.saturating_sub(2)
+            {
                 canvas.text(
                     start,
                     y,
@@ -293,7 +311,16 @@ impl Options {
             .max()
             .unwrap_or(0)
             .min(canvas.width.saturating_sub(8));
-        let left = canvas.width.saturating_sub(longest + 2) / 2;
+        let mut left = canvas.width.saturating_sub(longest + 2) / 2;
+        if let Some(right) = rows
+            .iter()
+            .filter(|r| r.right_preview)
+            .filter_map(|r| r.preview.as_deref())
+            .map(UnicodeWidthStr::width)
+            .max()
+        {
+            left = left.min(canvas.width.saturating_sub(longest + right + 6).max(4));
+        }
         for (i, row) in rows.iter().enumerate().skip(self.scroll).take(capacity) {
             row.paint(
                 canvas,

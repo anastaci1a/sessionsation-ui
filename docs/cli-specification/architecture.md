@@ -4,9 +4,8 @@ Ana approved Rust and this interaction model. Implemented components are describ
 in [current architecture](../architecture.md); [deployment](../deployment.json)
 identifies the selected artifacts and preserved rollback entrypoints.
 [Issue 7](https://github.com/anastaci1a/sessionsation-ui/issues/7) owns the expanded
-account/session management acceptance. Resume, new-launch progress dialogs and
-end-to-end management acceptance remain in progress; the deployment record stays
-authoritative for the installed version.
+account/session management acceptance. The deployment record is authoritative for
+the installed version; source capabilities and verification are tracked separately.
 
 ## User flow
 
@@ -114,3 +113,63 @@ and verify handoff/environment/retained shell without models or live panes.
 
 Publish tests and artifact provenance before a reversible deployment. Preserve
 original installs, credentials, Agent DM pins/data, receipts and live sessions.
+
+## Account and session management
+
+Account circles align with the main option circles. The inline module displays
+all accounts or none, measuring the complete menu, one blank line, per-account
+height and bottom hints. Bars share a start derived from the longest displayed
+name; preferred width is 24 cells, minimum 12. Existing long names are ellipsized
+to 12 display cells, never renamed; details show the full ID. New names are limited
+to 12 ASCII characters excluding the provider prefix. Disabled/removed accounts
+remain selectable for management.
+
+Verified five-hour accounts show adjacent 5h/weekly remaining bars, then one blank
+line before the next account. Other accounts show status only in this module.
+Unknown values remain explicit; stale observations are marked. Labels sit to the
+right, left-aligned by period and right-aligned by percent. Shared percentage width
+uses three digits only when a displayed value is 100. Custom limits are vertical
+markers inside the bars, converted from maximum used to minimum remaining.
+
+Compact Manage Accounts has `<add account>` first. The highlighted account's same
+bar component appears immediately above the bottom controls with exactly one blank
+row between. Resize returns only this list to Home when the full module fits,
+retaining account focus. Account actions and open forms stay in place; Back resolves
+to Home or the compact list according to current fit.
+
+The account **picker** used by New, Resume and Switch keeps normal option names
+and a separate right-aligned usage column. It shows `x% 5h / x% wkly` remaining,
+omitting the short period and slash unless a five-hour window is verified. Percent
+signs and slashes share columns, using the minimum padding required by the largest
+displayed number. Weekly-only rows align with the weekly column. Unknown values
+use `?`; freshness and full account ID appear in the selected-account note.
+
+Account action groups use dot/blank separators: Usage details and Limits; Log in
+and Enable/Disable; Remove/Restore. Limits edit minimum remaining percentages with
+explicit Save/Cancel; the backend converts/stores existing used thresholds through
+the sole owner, preserving plan review and leaving automation unchanged. Impactful
+Disable/Remove actions require confirmation. Removal first presents affected
+sessions/data and requires the exact account ID against a fresh preview revision;
+history and credentials remain recoverable, with no provider deletion or purge.
+
+Manage Sessions lists running, saved and unavailable sessions. Selecting opens
+actions, never attaches. Details, Rename, Switch, Restart, Stop and Resume are
+capability-gated; Stop/Restart/Switch require confirmation. Switch uses the shared
+account picker. Focus tab explicitly verifies the current generation, HERDR target
+and foreground PID, then focuses the existing tab and exits. No messaging/steering
+controls belong here.
+
+Resume uses the shared summary with editable account, Space and name, read-only
+saved directory. Prefer the original Space only when its host/socket and ID still
+match; otherwise prefer current focus, else unset. Stable session/conversation IDs
+and history remain backend-owned. Changing account uses its existing safe transfer
+worker. Canceling Resume restores the independent New draft.
+
+Installed HERDR 0.9.5 supports one popup at a time, so confirmations/forms/progress
+use internal nested dialogs over the preserved page. Theme colors are read from
+HERDR's fixed theme/custom RGB overrides (Ana uses Vesper); dynamic/terminal themes
+have an explicit configured-base fallback. Long consent text, paths and IDs wrap
+without truncation and paginate before confirmation. Continue in background returns
+to the menu, never cancels or steals focus later. Operations can reopen original
+New/Resume receipts and transfer jobs after closing the popup; uncertain outcomes
+are inspected, never replayed. Cancellation/recovery are separate backend actions.

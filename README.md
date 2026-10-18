@@ -7,8 +7,8 @@ Manage accounts and existing sessions through the same popup; all account and
 lifecycle operations remain owned by the sessionsation CLI.
 
 The source now includes responsive account usage, account actions and lifecycle
-menus. Expanded saved-session resume is still under implementation in
-[issue 7](https://github.com/anastaci1a/sessionsation-ui/issues/7).
+menus, saved-session Resume and recoverable background progress.
+[Issue 7](https://github.com/anastaci1a/sessionsation-ui/issues/7) defines the expanded scope.
 The [deployment record](docs/deployment.json) identifies the older installed launcher;
 source changes do not automatically replace that artifact.
 

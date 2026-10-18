@@ -18,6 +18,7 @@ pub enum Page {
     Session(String),
     Operations,
     Operation(String),
+    Launch(&'static str, String),
 }
 #[derive(Clone, Debug)]
 pub enum Intent {
@@ -25,6 +26,7 @@ pub enum Intent {
     New,
     Settings,
     Resume(Value),
+    Switch(Value),
     Focus(Value),
     Exit,
 }
@@ -32,7 +34,10 @@ pub enum Intent {
 enum Purpose {
     State,
     Operations,
-    Details,
+    Details(String),
+    Resume(String),
+    Launches(&'static str),
+    Launch(&'static str, String),
     Remove(String),
     Limits(String),
     Mutation,
@@ -46,9 +51,9 @@ enum Form {
     Limits(String),
     Remove(Value),
     Rename(Value),
-    Switch(Value),
     Confirm(Vec<String>),
     Progress,
+    Operation(String),
 }
 pub struct Manager {
     pub page: Page,
@@ -56,6 +61,7 @@ pub struct Manager {
     pub accounts: Vec<Account>,
     pub sessions: Vec<Value>,
     pub operations: Vec<Value>,
+    pub launches: BTreeMap<&'static str, Vec<Value>>,
     pub capabilities: Value,
     pub dialog: Option<Dialog>,
     pub palette: Palette,
@@ -78,6 +84,7 @@ impl Default for Manager {
             accounts: vec![],
             sessions: vec![],
             operations: vec![],
+            launches: BTreeMap::new(),
             capabilities: json!({}),
             dialog: None,
             palette: Palette::default(),
@@ -161,6 +168,7 @@ impl Manager {
             Page::Sessions => "Manage Sessions",
             Page::Session(_) => "Session",
             Page::Operations => "Operations",
+            Page::Launch(..) => "Launch progress",
             Page::Operation(_) => "Operation",
         }
     }
@@ -258,6 +266,16 @@ impl Manager {
                     ),
                 ]
             }
+            Page::Launch(kind, key) => {
+                let receipt = self.launch_record(kind, key);
+                vec![
+                    Row::yes("Progress"),
+                    Row::gate(
+                        "Transfer operation",
+                        receipt.is_some_and(|r| r["operation_id"].is_string()),
+                    ),
+                ]
+            }
             Page::Operations => self
                 .operations
                 .iter()
@@ -269,6 +287,20 @@ impl Manager {
                     ))
                     .with_preview(id(o))
                 })
+                .chain(self.launches.iter().flat_map(|(kind, rs)| {
+                    rs.iter().map(|r| {
+                        Row::yes(format!(
+                            "{}: {}",
+                            if *kind == "launch" {
+                                "New session"
+                            } else {
+                                "Resume"
+                            },
+                            r["phase"].as_str().unwrap_or("unknown")
+                        ))
+                        .with_preview(r["request"]["name"].as_str().unwrap_or(""))
+                    })
+                }))
                 .collect(),
             Page::Operation(key) => {
                 let o = self
@@ -289,14 +321,68 @@ impl Manager {
             }
         }
     }
+    fn operation_keys(&self) -> Vec<(String, String)> {
+        self.operations
+            .iter()
+            .map(|o| ("operation".into(), id(o).into()))
+            .chain(self.launches.iter().flat_map(|(kind, rs)| {
+                rs.iter().map(move |r| {
+                    (
+                        (*kind).into(),
+                        r["request"]["request_id"].as_str().unwrap_or("").into(),
+                    )
+                })
+            }))
+            .collect()
+    }
+    fn retain_operation_focus(&mut self, chosen: Option<(String, String)>) {
+        if let Some(chosen) = chosen {
+            self.options.selected = self
+                .operation_keys()
+                .iter()
+                .position(|k| *k == chosen)
+                .unwrap_or(0);
+        }
+    }
+    fn launch_record(&self, kind: &str, key: &str) -> Option<&Value> {
+        self.launches
+            .get(kind)?
+            .iter()
+            .find(|r| r["request"]["request_id"] == key)
+    }
     pub fn refresh(&mut self) -> Vec<Intent> {
         let mut out = vec![];
+        if matches!(self.page, Page::Operations | Page::Launch(..)) {
+            for kind in ["launch", "resume-launch"] {
+                let cap = if kind == "launch" { "launch" } else { "resume" };
+                if self.capabilities[cap]["list"] == true
+                    && !self
+                        .pending
+                        .values()
+                        .any(|p| matches!(p,Purpose::Launches(k) if *k==kind))
+                {
+                    out.extend(self.request(strings(&[kind, "list"]), Purpose::Launches(kind)));
+                }
+            }
+        }
+        if let Page::Launch(kind, key) = self.page.clone()
+            && !self
+                .pending
+                .values()
+                .any(|p| matches!(p, Purpose::Launch(..)))
+        {
+            out.extend(self.request(
+                strings(&[kind, "status", "--request-id", &key]),
+                Purpose::Launch(kind, key),
+            ));
+        }
         if matches!(self.page, Page::Sessions | Page::Session(_))
             && !self.pending.values().any(|p| matches!(p, Purpose::State))
         {
             out.extend(self.request(strings(&["state"]), Purpose::State));
         }
         if (self.active_operation.is_some()
+            || matches!(self.form, Form::Operation(_))
             || matches!(self.page, Page::Operations | Page::Operation(_)))
             && !self
                 .pending
@@ -344,6 +430,19 @@ impl Manager {
         self.foreground = Some(self.sequence);
         request
     }
+    pub fn switch_confirmation(&mut self, s: Value, account: &str) {
+        let mut args = Self::target(&s, "switch");
+        args.extend(strings(&["--to", account]));
+        self.confirm("Switch account",vec![format!("Move {} to {} while retaining conversation history? The backend waits for safe idle; it never steers.",s["name"].as_str().unwrap_or("session"),account)],args);
+    }
+    fn dismiss(&mut self) {
+        if matches!(self.form, Form::Progress | Form::Operation(_)) {
+            self.go(Page::Home);
+        }
+        self.dialog = None;
+        self.form = Form::None;
+        self.foreground = None;
+    }
     fn confirm(&mut self, title: &str, body: Vec<String>, args: Vec<String>) {
         self.show(title, body, &["Confirm", "Cancel"], Form::Confirm(args));
     }
@@ -352,8 +451,7 @@ impl Manager {
             match d.key(key) {
                 dialog::Event::None => return vec![],
                 dialog::Event::Dismiss => {
-                    self.dialog = None;
-                    self.form = Form::None;
+                    self.dismiss();
                     return vec![];
                 }
                 dialog::Event::Choose(button, values) => return self.submit(button, values),
@@ -405,7 +503,7 @@ impl Manager {
                     .map(|i| i + 2)
                     .unwrap_or(0)
             }
-            Page::Operation(_) => self.go(Page::Operations),
+            Page::Operation(_) | Page::Launch(..) => self.go(Page::Operations),
             Page::Operations => self.go(Page::Sessions),
             _ => self.go(Page::Home),
         }
@@ -465,11 +563,13 @@ impl Manager {
                 match index {
                     0 => {
                         let mut body = vec![a.id.clone(), Usage::account(&a).status];
-                        for (window, label) in [("short", "5h"), ("weekly", "Weekly")] {
+                        for (window, label) in [("short", "Short window"), ("weekly", "Weekly")] {
                             if !a.usage[window].is_null() {
                                 body.push(format!(
-                                    "{label}: {}% used; resets at {} (Unix seconds)",
-                                    a.usage[window]["used_percent"], a.usage[window]["resets_at"]
+                                    "{label} ({} minutes): {}% used; resets at {} (Unix seconds)",
+                                    a.usage[window]["duration_minutes"],
+                                    a.usage[window]["used_percent"],
+                                    a.usage[window]["resets_at"]
                                 ));
                             }
                         }
@@ -521,7 +621,7 @@ impl Manager {
                     return vec![];
                 };
                 match index {
-                    0 => return self.request(Self::target(&s, "session"), Purpose::Details),
+                    0 => return self.request(Self::target(&s, "session"), Purpose::Details(key)),
                     1 => return vec![Intent::Focus(s)],
                     3 => {
                         self.show(
@@ -536,14 +636,7 @@ impl Manager {
                             .fields
                             .push(Field::new("Name", s["name"].as_str().unwrap_or("")));
                     }
-                    4 => {
-                        self.show("Switch account",vec!["Choose an enrolled account ID. The backend waits for safe idle; it never steers.".into()],&["Review switch","Cancel"],Form::Switch(s));
-                        self.dialog
-                            .as_mut()
-                            .unwrap()
-                            .fields
-                            .push(Field::new("Account ID", "codex:"));
-                    }
+                    4 => return vec![Intent::Switch(s)],
                     5 | 6 => {
                         let command = if index == 5 { "restart" } else { "stop" };
                         self.confirm(
@@ -559,13 +652,44 @@ impl Manager {
                             Self::target(&s, command),
                         );
                     }
-                    7 => return vec![Intent::Resume(s)],
+                    7 => return self.request(Self::target(&s, "session"), Purpose::Resume(key)),
                     _ => {}
                 }
             }
             Page::Operations => {
                 if let Some(o) = self.operations.get(index) {
                     self.go(Page::Operation(id(o).into()));
+                } else if let Some((kind, key)) = self
+                    .launches
+                    .iter()
+                    .flat_map(|(kind, rs)| {
+                        rs.iter().map(move |r| {
+                            (
+                                *kind,
+                                r["request"]["request_id"].as_str().unwrap_or("").to_owned(),
+                            )
+                        })
+                    })
+                    .nth(index.saturating_sub(self.operations.len()))
+                {
+                    self.go(Page::Launch(kind, key));
+                }
+                return self.refresh();
+            }
+            Page::Launch(kind, key) => {
+                if index == 0 {
+                    return self.request(
+                        strings(&[kind, "status", "--request-id", &key]),
+                        Purpose::Launch(kind, key),
+                    );
+                }
+                if let Some(op) = self
+                    .launch_record(kind, &key)
+                    .and_then(|r| r["operation_id"].as_str())
+                    .map(str::to_owned)
+                {
+                    self.go(Page::Operation(op));
+                    return self.refresh();
                 }
             }
             Page::Operation(key) => {
@@ -580,7 +704,7 @@ impl Manager {
                             o["detail"].as_str().unwrap_or("").into(),
                         ],
                         &["Continue in background"],
-                        Form::None,
+                        Form::Operation(key.clone()),
                     ),
                     1 | 2 => self.confirm(
                         "Operation confirmation",
@@ -632,9 +756,8 @@ impl Manager {
         let form = self.form.clone();
         let value = |i: usize| values.get(i).map(String::as_str).unwrap_or("");
         let args = match form {
-            Form::None | Form::Progress => {
-                self.dialog = None;
-                self.form = Form::None;
+            Form::None | Form::Progress | Form::Operation(_) => {
+                self.dismiss();
                 return vec![];
             }
             Form::Confirm(args) => args,
@@ -702,29 +825,6 @@ impl Manager {
                 args.extend(strings(&["--name", value(0)]));
                 args
             }
-            Form::Switch(s) => {
-                if !self
-                    .accounts
-                    .iter()
-                    .any(|a| a.id == value(0) && a.selectable)
-                {
-                    self.dialog.as_mut().unwrap().body =
-                        vec!["Choose a currently selectable enrolled account ID.".into()];
-                    return vec![];
-                }
-                let mut args = Self::target(&s, "switch");
-                args.extend(strings(&["--to", value(0)]));
-                self.confirm(
-                    "Switch account",
-                    vec![format!(
-                        "Move {} to {} while retaining its history?",
-                        s["name"].as_str().unwrap_or("session"),
-                        value(0)
-                    )],
-                    args,
-                );
-                return vec![];
-            }
         };
         self.mutate(args)
     }
@@ -747,7 +847,7 @@ impl Manager {
         };
         match purpose {
             Purpose::State => {
-                let chosen = if self.page == Page::Sessions {
+                let chosen = if self.page == Page::Sessions && self.options.selected >= 2 {
                     self.sessions
                         .get(self.options.selected.saturating_sub(2))
                         .map(|s| id(s).to_owned())
@@ -775,28 +875,70 @@ impl Manager {
                 }
                 self.capabilities = value["capabilities"].clone();
             }
-            Purpose::Operations => {
-                self.operations = value.as_array().cloned().unwrap_or_default();
-                if let Some(key) = &self.active_operation
-                    && let Some(o) = self.operations.iter().find(|o| id(o) == key)
-                {
-                    if matches!(self.form, Form::Progress)
+            Purpose::Launches(kind) => {
+                let chosen = (self.page == Page::Operations)
+                    .then(|| self.operation_keys().get(self.options.selected).cloned())
+                    .flatten();
+                self.launches
+                    .insert(kind, value.as_array().cloned().unwrap_or_default());
+                self.retain_operation_focus(chosen);
+            }
+            Purpose::Launch(kind, key) => {
+                if self.page == Page::Launch(kind, key.clone()) {
+                    let body = vec![
+                        format!("Request: {key}"),
+                        format!("Phase: {}", value["phase"].as_str().unwrap_or("unknown")),
+                        value["detail"].as_str().unwrap_or("").into(),
+                        "Closing this view does not stop or resend the request.".into(),
+                    ];
+                    if self.dialog.is_none() {
+                        self.show(
+                            "Launch progress",
+                            body,
+                            &["Continue in background"],
+                            Form::Progress,
+                        );
+                    } else if matches!(self.form, Form::Progress)
                         && let Some(d) = &mut self.dialog
                     {
-                        d.body = vec![
-                            o["phase"].as_str().unwrap_or("unknown").into(),
-                            o["detail"].as_str().unwrap_or("").into(),
-                        ];
+                        d.body = body;
                     }
-                    if terminal(o["phase"].as_str().unwrap_or("")) {
-                        self.active_operation = None;
-                    }
+                }
+            }
+            Purpose::Operations => {
+                let chosen = (self.page == Page::Operations)
+                    .then(|| self.operation_keys().get(self.options.selected).cloned())
+                    .flatten();
+                self.operations = value.as_array().cloned().unwrap_or_default();
+                self.retain_operation_focus(chosen);
+                if let Form::Operation(key) = &self.form
+                    && let Some(o) = self.operations.iter().find(|o| id(o) == key)
+                    && let Some(d) = &mut self.dialog
+                {
+                    d.body = vec![
+                        o["phase"].as_str().unwrap_or("unknown").into(),
+                        o["detail"].as_str().unwrap_or("").into(),
+                    ];
+                }
+                if let Some(key) = &self.active_operation
+                    && let Some(o) = self.operations.iter().find(|o| id(o) == key)
+                    && terminal(o["phase"].as_str().unwrap_or(""))
+                {
+                    self.active_operation = None;
                 }
             }
             Purpose::Observe(key) => {
                 self.readiness.insert(key, value);
             }
-            Purpose::Details => {
+            Purpose::Resume(key) => {
+                if self.page == Page::Session(key) {
+                    return vec![Intent::Resume(value)];
+                }
+            }
+            Purpose::Details(key) => {
+                if self.page != Page::Session(key) {
+                    return vec![];
+                }
                 let body = vec![
                     format!("Name: {}", value["name"].as_str().unwrap_or("")),
                     format!("Account: {}", value["account_id"].as_str().unwrap_or("")),
@@ -893,6 +1035,9 @@ impl Manager {
                     }
                 } else if value["phase"].is_string() {
                     self.active_operation = Some(id(&value).into());
+                    if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
+                        self.form = Form::Operation(id(&value).into());
+                    }
                     return self.refresh();
                 } else if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
                     self.show(
@@ -974,6 +1119,15 @@ impl Manager {
             );
             if let Some(u) = usage {
                 let bar = 24.min(canvas.width.saturating_sub(20));
+                if bar < 12 {
+                    canvas.text(
+                        1,
+                        footer.saturating_sub(3),
+                        "Widen to view usage",
+                        Cell::default(),
+                        false,
+                    );
+                }
                 if bar >= 12 {
                     u.paint(
                         canvas,
@@ -1002,7 +1156,11 @@ impl Manager {
         if !self.note.is_empty() {
             canvas.text(
                 1,
-                footer.saturating_sub(1),
+                if self.page == Page::Accounts {
+                    footer.saturating_sub(5)
+                } else {
+                    footer.saturating_sub(1)
+                },
                 &clip(&self.note, canvas.width.saturating_sub(2)),
                 Cell::default(),
                 false,

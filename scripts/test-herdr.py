@@ -81,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-popup-host-') as tmp:
   client=subprocess.Popen(['herdr','--session','fixture'],env=env,stdin=slave,stdout=slave,stderr=slave,start_new_session=True)
   time.sleep(.4)
   while select.select([master],[],[],.01)[0]:screen.feed(os.read(master,65536))
-  start=time.perf_counter();host('plugin','action','invoke','sessionsation.launcher');wait('Configuration');elapsed=(time.perf_counter()-start)*1000
+  start=time.perf_counter();host('plugin','action','invoke','sessionsation.launcher');wait('Settings');elapsed=(time.perf_counter()-start)*1000
   popup=json.loads((root/'popup.json').read_text());assert popup['pane'] is None;assert popup['context']['workspace_id']==origin['workspace']['workspace_id']
   assert popup['size']==[117,28],popup
   busy=subprocess.run(['herdr','--session','fixture','plugin','pane','open','--plugin','sessionsation','--entrypoint','launcher'],env=env,capture_output=True,text=True,timeout=5)
@@ -106,12 +106,12 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-popup-host-') as tmp:
   spaces=host('workspace','list')['workspaces'];assert next(w for w in spaces if w['focused'])['workspace_id']==destination['workspace']['workspace_id']
   assert host('pane','process-info','--pane',origin_pane)['process_info']['shell_pid']==origin_pid
   # A fresh popup opening proves the first one exited instead of being promoted.
-  wait_closed();(root/'popup.json').unlink();host('plugin','action','invoke','sessionsation.launcher');wait('Configuration');dismiss()
+  wait_closed();(root/'popup.json').unlink();host('plugin','action','invoke','sessionsation.launcher');wait('Settings');dismiss()
   assert host('pane','process-info','--pane',receipt['pane_id'])['process_info']['shell_pid']>0
   key_samples=[]
   for _ in range(20):
    while select.select([master],[],[],.01)[0]:screen.feed(os.read(master,65536))
-   (root/'popup.json').unlink(missing_ok=True);start=time.perf_counter();key(b'\x02L');wait('Configuration');key_samples.append((time.perf_counter()-start)*1000)
+   (root/'popup.json').unlink(missing_ok=True);start=time.perf_counter();key(b'\x02L');wait('Settings');key_samples.append((time.perf_counter()-start)*1000)
    dismiss()
   key_samples.sort()
   print(json.dumps({'keybind_startup':{'samples':len(key_samples),'p50_ms':key_samples[10],'p95_ms':key_samples[19],'max_ms':max(key_samples)},'installed_herdr':host('--version') if False else '0.9.5','plugin_to_first_paint_ms':elapsed,'popup_size':popup['size'],'checks':['origin context without pane ID','90% width / 65% height popup','ui_busy refusal','real host resize preserves draft','selected destination normal tab','staged directory','exact name/account','focus then popup exit','second popup cancel preserves new terminal','origin shell unchanged'],'models':0},indent=2))

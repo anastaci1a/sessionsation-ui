@@ -8,7 +8,7 @@ backend default is not an automatic import. See the backend ownership guidance.
 The Rust popup creates sessions and presents account/session management through
 public backend commands. Its [approved design](cli-specification/architecture.md)
 describes the interaction and ownership boundaries. See the deployment record for
-what is installed; expanded resume remains under implementation.
+what is installed.
 
 ## Account and session menus
 
@@ -23,7 +23,10 @@ the appropriate current layout without losing their account selection.
 Only verified 5-hour accounts show paired 5h/weekly bars. Bars measure remaining
 allowance, with custom limit markers inside them. Names share a bar start column;
 period labels and right-aligned percentages share a width. Accounts without that
-window show status; unknown and stale usage are explicit. New account names are
+window show status; unknown and stale usage are explicit. In the selection picker,
+usage is a separate right-aligned `x% 5h / x% wkly` column with aligned percent signs
+and slashes. Weekly-only accounts omit the short period and slash; shared padding
+uses the largest displayed number. New account names are
 limited to 12 characters. Existing longer names are shortened only in list display.
 
 Account actions group Usage details/Limits, Login/Enable/Disable, and Remove/Restore
@@ -36,6 +39,10 @@ actions carry the captured backend ID/generation. Stop, Restart, Switch, Disable
 and Remove require confirmation. Internal modal dialogs preserve their underlying
 page; Continue in background dismisses progress without cancelling backend work.
 Operations shows progress, fresh confirmation prompts and supported recovery.
+It also lists original New/Resume receipts after reopening, without resending them.
+Resume has editable account, Space and name, plus the saved read-only directory.
+It prefers a verified original Space, then current focus, otherwise unset. Changing
+account uses the backend safe transfer, preserving conversation history and ID.
 Uncertain responses are not automatically retried. Focus tab selects an existing
 HERDR tab in this instance after rechecking its catalog identity.
 

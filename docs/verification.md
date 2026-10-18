@@ -2,11 +2,13 @@
 
 ## Rust popup
 
-The release candidate passes **30 Rust tests** (29 unit tests and one test covering
-four complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
+The expanded popup passes **46 Rust tests** (44 unit tests and two tests covering
+nine complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
 regressions**. Syntax, manifest fields and documentation links pass. The goldens
 exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,
-shared palette/shimmer, reference Back/Close placement and fixed field geometry. The rendered
+shared palette/shimmer, reference Back/Close placement and fixed field geometry.
+Management goldens cover inline/compact accounts, limit markers, action separators,
+aligned mixed-window picker usage and themed confirmation dialogs. The rendered
 [summary preview](assets/popup-summary.png) was inspected against the reference;
 random star coordinates intentionally use a deterministic Rust generator.
 
@@ -27,11 +29,11 @@ passed. The separate backend test uses the real new-launch API with an inert com
 provider to verify exact account/UUID/socket, deduplication and retained shell.
 No acceptance test starts a model or touches production accounts/Agent DM state.
 
-Measured release p95: first responsive PTY paint **6.17 ms**, key feedback **0.89 ms**,
-keybind-to-popup paint **172.33 ms**, frame computation/diff **0.099 ms** at 80×24 and
-**0.358 ms** at 160×48 (600 frames each). These exclude provider startup/model response.
+Measured release p95: first responsive PTY paint **7.93 ms**, key feedback **0.90 ms**,
+keybind-to-popup paint **217.25 ms**, frame computation/diff **0.101 ms** at 80×24 and
+**0.363 ms** at 160×48 (600 frames each). These exclude provider startup/model response.
 CLI-triggered plugin invocation additionally pays the external command round trip;
-one earlier observation was 284 ms, whereas the configured key path met 250 ms.
+the measured invocation was 264.54 ms, whereas the configured key path met 250 ms.
 
 Run `scripts/check-rust.sh`, `npm test` and `npm run check`. The PTY/host scripts
 require Python 3; use the existing offline build container, mount only this checkout
@@ -50,9 +52,19 @@ The [earlier launcher timing evidence](latency.json) remains specific to the pre
 numbered launcher; it does not measure this Rust popup. Provider/lifecycle evidence
 belongs to the [backend operational guidance](https://github.com/anastaci1a/sessionsation/blob/main/docs/operations.md).
 
-Creation is Codex-first; Claude remains preparation-only. No cross-provider
-conversation conversion, existing-session switching/resume, upstream account
-management or model-start acceptance is included in the new popup. Uncertain
-creation stays visible through the original request ID; no automatic retry or
-resource deletion is implemented. Back after Start detaches, not stops. Existing
-Agent DM pins, receipt semantics and sole-root ownership are unchanged.
+Creation and lifecycle are Codex-first; Claude remains preparation-only. No
+cross-provider conversation conversion, upstream account deletion, permanent purge
+menu or live model-start acceptance is included. New/Resume uncertainty stays
+visible through the original request ID; no automatic retry or resource deletion
+is implemented. Continue in background detaches, not stops. Existing Agent DM pins,
+receipt semantics and sole-root ownership are unchanged.
+
+`scripts/test-management.py --binary PATH` exercises compact bars/action groups,
+aligned picker percentages/slashes, saved-session selection, Resume identity and
+fixed directory, background completion without focus, reopened receipts without
+resubmission, and TTY restoration using synthetic APIs. The real-backend installed
+HERDR test also covers same-account and transferred-account saved Resume, original
+stable/conversation IDs, saved directory, stale generation and conflicting-request
+rejection, with zero model turns. Removal/limits/transfer are covered by backend
+fixtures and UI reducer/legacy-client regressions; no production account mutation
+was performed for acceptance.
