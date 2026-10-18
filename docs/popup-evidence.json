@@ -117,7 +117,8 @@
       "second popup cancel preserves new terminal",
       "origin shell unchanged"
     ],
-    "models": 0
+    "models": 0,
+    "source_ui": "8809571e0d7970479750b922337e84b012ac95e2"
   },
   "frames": [
     {
@@ -127,7 +128,8 @@
       "p50_ms": 0.079267,
       "p95_ms": 0.105325,
       "max_ms": 0.514511,
-      "mean_bytes": 1079
+      "mean_bytes": 1079,
+      "source_ui": "8809571e0d7970479750b922337e84b012ac95e2"
     },
     {
       "height": 48,
@@ -136,7 +138,8 @@
       "p50_ms": 0.297921,
       "p95_ms": 0.412352,
       "max_ms": 0.575844,
-      "mean_bytes": 3480
+      "mean_bytes": 3480,
+      "source_ui": "8809571e0d7970479750b922337e84b012ac95e2"
     }
   ],
   "deployment": {

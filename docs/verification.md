@@ -31,8 +31,10 @@ supervisor handoff. Their details and limits belong to the backend guidance.
 No acceptance test starts a model or changes production accounts/Agent DM state;
 production capability/status previews are read-only.
 
-Measured release p95: first responsive PTY paint **7.15 ms**, key feedback **0.89 ms**,
-keybind-to-popup paint **183.61 ms**, frame computation/diff **0.105 ms** at 80×24 and
+Current release p95: first responsive PTY paint **7.15 ms**, key feedback **0.89 ms**.
+The earlier popup-core host/frame measurement (source `8809571`, recorded in the
+machine-readable results) measured keybind-to-popup paint **183.61 ms**,
+frame computation/diff **0.105 ms** at 80×24 and
 **0.412 ms** at 160×48 (600 frames each). These exclude provider startup/model response.
 CLI-triggered plugin invocation additionally pays the external command round trip;
 the measured invocation was 282.44 ms, whereas the configured key path met 250 ms.
