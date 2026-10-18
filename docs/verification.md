@@ -1,11 +1,13 @@
 # Verification
 
 Run `npm test` for isolated client/configuration regressions and `npm run check`
-for JavaScript/Bash syntax, manifest fields and documentation links. Fourteen tests
+for JavaScript/Bash syntax, manifest fields and documentation links. Nineteen tests
 pass, including literal argv, stale/version/protocol errors, exact launcher exec,
 viewer exit without lifecycle mutation, plain-shell execution, selected-session
 switch identity/generation, exact removal confirmation/revision, active-account
-refusal, configuration rollback, concurrent-edit refusal and unsafe-config rejection.
+refusal, configuration rollback, concurrent-edit refusal and unsafe-config rejection. Host regressions cover the
+default socket through a symlink, named/explicit sessions, unknown sockets/missing
+panes, non-HERDR terminals and the retained-shell new-account execution path.
 No fixture test uses credentials or models. Backend evidence/provenance remains
 linked from [architecture](architecture.md).
 
@@ -34,3 +36,20 @@ Claude remains preparation-only. The applied future-terminal configuration and p
 recorded in [usage](usage.md#anas-configured-host). All 17 existing Codex/Claude
 processes retained their PIDs/start times across default-server reload, and its
 original pane retained its terminal identity.
+
+
+## Default-server environment repair
+
+The original named-server acceptance did not expose HERDR's missing default-server
+session variable. The repaired wrapper was checked in a fresh terminal on
+Satellite's actual default server, following menu 1 (new), account 1 (codex:gate1).
+An isolated fake backend received the exact selected account and exported
+`SESSIONSATION_HERDR_SESSION=default`, and its returned execution plan inherited
+both that session and the real pane ID. After the fixture exited, the original
+retained shell was still present. The owned smoke workspace was closed afterward.
+
+This repair changes launcher environment preparation only. No new model session,
+prompt, credential operation or native provider call was made to verify it.
+The selected e4d7833 CLI binary, Agent DM's pinned review artifact and its data are
+unchanged. Saved conversations from failed attempts are preserved; no automatic
+retry or cleanup is performed. Existing terminals are not restarted or migrated.

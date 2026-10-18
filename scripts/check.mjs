@@ -17,7 +17,7 @@ async function walk(dir) {
   }
 }
 await walk(process.cwd());
-for (const path of ['bin/sessionsation-ui','bin/sessionsation-shell','share/launcher.rc']) execFileSync('/bin/bash',['-n',path]);
+for (const path of ['bin/sessionsation-ui','bin/sessionsation-shell','share/launcher.rc','share/host-environment.sh']) execFileSync('/bin/bash',['-n',path]);
 const manifest=await readFile('herdr-plugin.toml','utf8');
 for (const key of ['id','name','version','min_herdr_version']) if(!new RegExp('^'+key+' = "[^"\\n]+"','m').test(manifest)) throw new Error('Missing manifest '+key);
 if(!manifest.includes('command = ["./bin/sessionsation-ui", "manage"]')) throw new Error('Management pane must invoke the viewer');

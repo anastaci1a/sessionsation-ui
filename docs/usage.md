@@ -54,7 +54,12 @@ clobber edits made after apply. The receipt contains configuration backups and
 must stay outside Git. A plain shell and backend-created panes set
 `SESSIONSATION_LAUNCHER_BYPASS=1`; the wrapper also guards against recursive menus.
 The retained Bash parent permits agent restart/resume after the foreground agent
-exits. User `.bashrc` is sourced while retaining HERDR's requested working directory.
+exits. HERDR 0.9.5 omits `HERDR_SESSION` on its default server. The wrapper sets
+`SESSIONSATION_HERDR_SESSION=default` only when the inherited Unix socket resolves
+to the actual default socket under `${XDG_CONFIG_HOME:-$HOME/.config}/herdr`.
+Named/explicit session context is preserved; missing or ambiguous context is
+rejected before invoking the backend. The variable is exported before the retained
+shell starts, so later relaunches inherit it as well. User `.bashrc` is sourced while retaining HERDR's requested working directory.
 
 ## Ana's configured host
 

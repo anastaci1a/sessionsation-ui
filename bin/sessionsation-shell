@@ -1,5 +1,9 @@
 #!/bin/bash
 set -e
 ui_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+source "$ui_root/share/host-environment.sh"
+if ! sessionsation_host_environment; then
+  export SESSIONSATION_LAUNCHER_BYPASS=1
+fi
 export SESSIONSATION_UI_ROOT="$ui_root"
 exec /bin/bash --noprofile --rcfile "$ui_root/share/launcher.rc" -i
