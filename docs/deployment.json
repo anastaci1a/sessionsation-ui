@@ -1,47 +1,75 @@
 {
-  "schema_version": 1,
-  "kind": "launcher-only performance repair; not Agent DM activation",
-  "source": {
-    "repository": "https://github.com/anastaci1a/sessionsation",
-    "commit": "0b8a394999234fcedc8aa869e4d96fb74fba1b1d",
-    "base_commit": "e4d7833e83e652dd87c02568e03fa6f9f786412f",
-    "branch": "repair/launcher-latency",
-    "cargo_lock_sha256": "13959dc2de624ff7f6bc4a7fed537b01b6d89572b61e8bb9238cb748afc17265"
+  "schema_version": 2,
+  "kind": "Rust new-session popup; preserved legacy launcher and Agent DM selection",
+  "artifacts": {
+    "ui": {
+      "source_commit": "a28486b139dd894c24586ba6e2557c4b937ffd49",
+      "path": "/mnt/user/live/packages/sessionsation-ui/releases/a28486b139dd894c24586ba6e2557c4b937ffd49/sessionsation-ui",
+      "sha256": "486b236454b42097e0530913548315311de5e233122526b91bf18f0f363fbf72",
+      "cargo_lock_sha256": "23c023cc7e9e3c1b1990ad39d0bed7e62085d7058a0e2340de5ea48ec4900dc8",
+      "profile": "release",
+      "rust_version": "1.95.0",
+      "minimum_rust_version": "1.88"
+    },
+    "backend": {
+      "source_commit": "8156e979e494683b6738acd13297458cad8388bf",
+      "path": "/mnt/user/live/packages/sessionsation/popup/8156e979e494683b6738acd13297458cad8388bf/sessionsation",
+      "sha256": "2de0981904d0ef403980be9392bd9c40b8a18277ba7f4c85830d26268bb0565b",
+      "cargo_lock_sha256": "13959dc2de624ff7f6bc4a7fed537b01b6d89572b61e8bb9238cb748afc17265",
+      "profile": "release",
+      "rust_version": "1.95.0",
+      "minimum_rust_version": "1.85"
+    }
   },
-  "artifact": {
-    "path": "/mnt/user/live/packages/sessionsation/launcher/0b8a394999234fcedc8aa869e4d96fb74fba1b1d/sessionsation",
-    "sha256": "f34472c60cef3cda7964d420245ed984398f09fafd2d7c8bf216d1aadcb6ded5",
-    "profile": "debug",
-    "rust_version": "1.95.0",
+  "build": {
     "container_image": "sessionsation-build-tools:local",
     "container_image_id": "sha256:4524fc318ec3fe78073bcf4573f940862031035901da2f46391c273a1a5bf320",
-    "build": "cargo build --offline --locked; network-disabled container, dependency cache read-only, no live homes/sockets mounted"
-  },
-  "verification": {
-    "tests_passed": 213,
-    "failed": 0,
-    "ignored": 0,
-    "test_threads": 2,
-    "checks": [
-      "fmt",
-      "Clippy all targets with warnings denied",
-      "locked offline Rust suite",
-      "documentation links",
-      "schema/fixtures and CLI envelopes"
-    ]
+    "command": "cargo build --release --offline --locked",
+    "isolation": "network disabled; source/dependency cache only; no production homes or sockets"
   },
   "selection": {
-    "client_config": "/mnt/user/appdata/sessionsation-ui/config.json",
+    "herdr_config": "/mnt/user/appdata/herdr/config.toml",
+    "herdr_session": "default",
+    "binding": "prefix+shift+l",
+    "plugin": "sessionsation",
+    "entrypoint": "launcher",
+    "geometry": {
+      "width": "50%",
+      "height": "50%"
+    },
+    "future_terminal_shell": "/bin/bash",
+    "runtime_pointer": "/mnt/user/live/projects/sessionsation-ui/.runtime/sessionsation-ui",
+    "client_config": "/mnt/user/appdata/sessionsation-ui/popup.json",
+    "preferences": "/mnt/user/appdata/sessionsation-ui/preferences.json",
+    "initial_global_projects_root": "/mnt/user/live/projects",
     "data_root": "/mnt/user/appdata/codex-switcher",
-    "credential_supervisor": "existing original data-root owner; unchanged",
-    "rollback_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/launcher-latency-8dea442d-6b68-49e6-ac88-d17d8e634de2.json",
-    "rollback_restores": "pre-latency e4d7833 launcher selection",
-    "herdr_config_changed": false
+    "credential_supervisor": "existing original data-root owner; no migration or competing supervisor",
+    "rollback_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/launcher-d8b0999e-90a4-48a0-8ad6-e024a966b8bb.json",
+    "rollback_command": "node scripts/configure.mjs rollback /mnt/user/appdata/sessionsation-ui/config-backups/launcher-d8b0999e-90a4-48a0-8ad6-e024a966b8bb.json",
+    "reload_command": "herdr --session default server reload-config",
+    "rollback_restores": "pre-popup default numbered launcher and exact HERDR configuration; removes popup client config; installed artifacts and UI preferences retained"
   },
-  "isolation": {
-    "agent_dm_review_artifact_changed": false,
-    "agent_dm_data_changed": false,
-    "model_sessions_created": 0,
-    "contract_or_delivery_semantics_changed": false
-  }
+  "preserved": {
+    "legacy_client_config": "/mnt/user/appdata/sessionsation-ui/config.json",
+    "legacy_client_config_sha256": "243428af2e7049bbbbce7ffc88636912cf58248a1b6a97f31db8506e139b7ef6",
+    "legacy_backend": {
+      "path": "/mnt/user/live/packages/sessionsation/launcher/0b8a394999234fcedc8aa869e4d96fb74fba1b1d/sessionsation",
+      "sha256": "f34472c60cef3cda7964d420245ed984398f09fafd2d7c8bf216d1aadcb6ded5",
+      "profile": "debug",
+      "rust_version": "1.95.0",
+      "container_image": "sessionsation-build-tools:local",
+      "container_image_id": "sha256:4524fc318ec3fe78073bcf4573f940862031035901da2f46391c273a1a5bf320",
+      "build": "cargo build --offline --locked; network-disabled container, dependency cache read-only, no live homes/sockets mounted"
+    },
+    "agent_dm_review": {
+      "path": "/mnt/user/live/packages/sessionsation/review/8b77639c44e0bf026acf1f23c308461b0968d737/sessionsation",
+      "sha256": "af744245d60b8e83687c4cea5d124c1db38ba2cbc9db77a0e91e9d0ae7f2bd55"
+    },
+    "original_switcher": {
+      "path": "/mnt/user/live/packages/codex-switcher/bin/codex-switcher",
+      "sha256": "1bd4386a22007b55bad70fbd9e3cc54a8fb0939486a4db32874da73ee5a2c60a"
+    },
+    "agent_dm_data_and_receipts": "untouched"
+  },
+  "evidence": "popup-evidence.json"
 }

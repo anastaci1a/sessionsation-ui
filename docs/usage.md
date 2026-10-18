@@ -110,24 +110,20 @@ shell starts, so later relaunches inherit it as well. User `.bashrc` is sourced 
 
 ## Ana's configured host
 
-The source-backed launcher is configured on Satellite for future terminals using
-`/mnt/user/live/projects/sessionsation-ui/bin/sessionsation-shell`. Its client settings
-are `/mnt/user/appdata/sessionsation-ui/config.json`. The authoritative
-[deployment manifest](deployment.json) records the selected immutable backend
-path/hash, source, build checks, explicit data root and repair rollback receipt.
-This launcher-only build starts from e4d7833 with bounded discovery and HERDR handle
-repairs. It excludes the staged Agent DM observer candidate. The existing data-root
-supervisor retains credential ownership; no adapter activation is implied.
+Satellite's default HERDR server uses **prefix + uppercase L** to open the Rust
+popup. The global projects root starts at `/mnt/user/live/projects`; changing it
+in Configuration creates no directories. Choose an account on the first launch;
+only a successful handoff records it for eligible future prefill. Future plain
+HERDR tabs use Bash. Existing shells/agents are unchanged.
 
-To undo the performance repair, run the documented rollback command with the
-repair receipt from the manifest; it restores the previous e4d7833 selection.
-No HERDR reload is needed for that client setting. To undo the entire launcher
-setup afterward, apply the original private receipt:
-`/mnt/user/appdata/sessionsation-ui/config-backups/launcher-1e1b8d65-5fb5-4b63-8db5-ff0d60e44c9b.json`,
-then reload configuration on the intended server. Rollback refuses conflicting
-edits, so restore the repair first. The default server reloaded without diagnostics
-during original setup, and a new owned terminal displayed
-the menu with its requested cwd. The smoke terminal was then closed. Existing
-agents and the original pane retained their process/terminal identities. Other
-already-running servers need their own explicit configuration reload for future
-terminals; existing terminals are never retrofitted.
+[deployment.json](deployment.json) is authoritative for both immutable artifact
+paths/hashes, source commits, UI settings, the shared account-data root, binding
+and private rollback receipt. The old numbered launcher/client settings, original
+Switcher and Agent DM pin remain intact. The existing supervisor retains credential
+ownership. This popup deployment is not an Agent DM adapter cutover.
+
+To roll back, run the record's rollback command, then reload its intended HERDR
+server. Exact original config/client bytes are restored; the numbered launcher
+becomes the future-tab default again. Artifacts and UI preferences remain available
+for recovery. The deployment check preserved all 31 captured agent/host PID/start
+identities. Other running HERDR servers are not automatically reloaded.

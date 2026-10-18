@@ -32,6 +32,18 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
   assert request['directory']['create']==[str(root/'projects'/'new-session')]
   assert not (root/'projects'/'new-session').exists(),'UI created the directory itself'
  finally:t.close()
+ # A deployed config symlink must put atomic Configuration saves beside its target.
+ settings=root/'settings';settings.mkdir();(settings/'popup.json').write_text(json.dumps({'binary':str(root/'backend'),'dataDir':str(root/'state')}))
+ (settings/'preferences.json').write_text((root/'prefs.json').read_text());pointer=root/'config-pointer.json';pointer.symlink_to(settings/'popup.json')
+ t=Terminal(root,client_config=pointer)
+ try:
+  t.wait('New Session');t.send(b'\x1b[B\r');t.wait('Directory defaults:');t.send(b'\r\x1b');t.wait('New Session')
+  until=time.monotonic()+2
+  while json.loads((settings/'preferences.json').read_text())['mode']!='per_space' and time.monotonic()<until:
+   t.drain();time.sleep(.01)
+  assert json.loads((settings/'preferences.json').read_text())['mode']=='per_space'
+  assert not (root/'preferences.json').exists()
+ finally:t.close()
 def report(a):
  s=sorted(a);return {'samples':len(s),'p50_ms':s[len(s)//2],'p95_ms':s[min(len(s)-1,int(len(s)*.95))],'max_ms':max(s)}
-print(json.dumps({'startup':report(starts),'input':report(keys),'checks':'delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration','models':0},indent=2))
+print(json.dumps({'startup':report(starts),'input':report(keys),'checks':'delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink','models':0},indent=2))

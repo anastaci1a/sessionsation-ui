@@ -49,10 +49,12 @@ class Screen:
  def contains(self,text,selected=False):
   return any(text in ''.join(row) and (not selected or '●' in row) for row in self.grid)
 class Terminal:
- def __init__(self,root,delay=0):
+ def __init__(self,root,delay=0,client_config=None):
   self.root=root;self.master,self.slave=pty.openpty();fcntl.ioctl(self.slave,termios.TIOCSWINSZ,struct.pack('HHHH',24,80,0,0));self.original=termios.tcgetattr(self.slave)
   env=dict(os.environ,TERM='xterm-256color',SESSIONSATION_BIN=str(root/'backend'),SESSIONSATION_DATA_DIR=str(root/'state'),HERDR_BIN_PATH=str(root/'herdr'),HERDR_SOCKET_PATH=str(root/'fake.sock'),HERDR_SESSION='fixture',HERDR_ACTIVE_WORKSPACE_ID='w1',HERDR_ACTIVE_PANE_CWD=str(root/'projects'),FIXTURE_ROOT=str(root),FIXTURE_DELAY=str(delay))
-  self.start=time.perf_counter();self.process=subprocess.Popen([BINARY,'--preferences',str(root/'prefs.json'),'popup'],stdin=self.slave,stdout=self.slave,stderr=self.slave,env=env,start_new_session=True);self.data=b'';self.screen=Screen()
+  if client_config is not None:env['SESSIONSATION_UI_CONFIG']=str(client_config)
+  argv=[BINARY,'popup'] if client_config is not None else [BINARY,'--preferences',str(root/'prefs.json'),'popup']
+  self.start=time.perf_counter();self.process=subprocess.Popen(argv,stdin=self.slave,stdout=self.slave,stderr=self.slave,env=env,start_new_session=True);self.data=b'';self.screen=Screen()
  def wait(self,text,timeout=4,selected=False):
   until=time.perf_counter()+timeout;chunk=b''
   while time.perf_counter()<until:

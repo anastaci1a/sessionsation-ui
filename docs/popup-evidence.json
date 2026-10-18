@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "scope": "Rust new-session popup; isolated fixtures only; no Agent DM activation",
+  "source": {
+    "ui": "a28486b139dd894c24586ba6e2557c4b937ffd49",
+    "backend": "8156e979e494683b6738acd13297458cad8388bf"
+  },
+  "checks": {
+    "rust": {
+      "unit_passed": 24,
+      "visual_snapshot_test_passed": 1,
+      "golden_frames": 4,
+      "failed": 0,
+      "command": "scripts/check-rust.sh"
+    },
+    "node": {
+      "passed": 22,
+      "failed": 0,
+      "command": "npm test"
+    },
+    "syntax_manifest_docs": {
+      "passed": true,
+      "command": "npm run check"
+    },
+    "backend": {
+      "standard_tests_passed": 226,
+      "installed_herdr_test_passed": 1,
+      "failed": 0,
+      "standard_command": "SESSIONSATION_CHECK_TARGET=target-popup scripts/check.sh",
+      "host_test": "installed_herdr_new_tab_handoff_retains_exact_account_and_shell"
+    }
+  },
+  "pty": {
+    "startup": {
+      "samples": 20,
+      "p50_ms": 4.966765991412103,
+      "p95_ms": 5.581281962804496,
+      "max_ms": 5.581281962804496
+    },
+    "input": {
+      "samples": 238,
+      "p50_ms": 0.3170459531247616,
+      "p95_ms": 0.6150269182398915,
+      "max_ms": 0.987054081633687
+    },
+    "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration",
+    "models": 0
+  },
+  "preferences_regression": {
+    "startup": {
+      "samples": 5,
+      "p50_ms": 4.2935030069202185,
+      "p95_ms": 4.4054900063201785,
+      "max_ms": 4.4054900063201785
+    },
+    "input": {
+      "samples": 208,
+      "p50_ms": 0.39699405897408724,
+      "p95_ms": 0.887800008058548,
+      "max_ms": 1.1619770666584373
+    },
+    "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
+    "models": 0
+  },
+  "herdr": {
+    "keybind_startup": {
+      "samples": 20,
+      "p50_ms": 159.5511370105669,
+      "p95_ms": 176.7008330207318,
+      "max_ms": 176.7008330207318
+    },
+    "installed_herdr": "0.9.5",
+    "plugin_to_first_paint_ms": 172.58943698834628,
+    "popup_size": [
+      64,
+      21
+    ],
+    "checks": [
+      "origin context without pane ID",
+      "half-size popup",
+      "selected destination normal tab",
+      "staged directory",
+      "exact name/account",
+      "focus then popup exit",
+      "second popup cancel preserves new terminal",
+      "origin shell unchanged"
+    ],
+    "models": 0
+  },
+  "frames": [
+    {
+      "height": 24,
+      "max_ms": 0.27605,
+      "mean_bytes": 1070,
+      "p50_ms": 0.083985,
+      "p95_ms": 0.112688,
+      "samples": 600,
+      "width": 80
+    },
+    {
+      "height": 48,
+      "max_ms": 0.709731,
+      "mean_bytes": 3481,
+      "p50_ms": 0.316495,
+      "p95_ms": 0.466623,
+      "samples": 600,
+      "width": 160
+    }
+  ],
+  "deployment": {
+    "herdr_config_check": "passed",
+    "default_server_reload": {
+      "status": "applied",
+      "diagnostics": []
+    },
+    "protected_processes": 31,
+    "changed_process_identities": 0,
+    "model_sessions_started": 0
+  }
+}
