@@ -17,6 +17,8 @@ elif api==['account','list']:result=accounts
 elif api==['state']:result={'sessions':[session],'capabilities':caps}
 elif api[:1]==['session']:result=session
 elif api==['operations']:result=[]
+elif api[:2]==['account','remove']:
+ time.sleep(2);result={'account_id':api[2],'revision':'preview','can_remove':True,'affected_sessions':[],'stored_data':{'files':3,'bytes':20,'history_files':1}}
 elif api[:2]==['account','limits']:result={'limits':{'short_percent':80,'weekly_percent':90}}
 elif api[:1] in [['launch'],['resume-launch']]:
  if api[1]=='list':result=[receipt] if receipt else []
@@ -36,8 +38,12 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
   # Compact account list, common bottom bars and action separators.
   t.send(b'\x1b[B\x1b[B\r');t.wait('<add account>');t.send(b'\x1b[B');t.wait('5h');t.drain()
   assert all('│' not in ''.join(row) for row in t.screen.grid[22:23]),'one blank row above controls'
-  t.send(b'\r');t.wait('Usage details');t.wait('Remove account');t.drain()
+  t.send(b'\r');t.wait('Usage details');t.wait('Deregister account');t.drain()
   dots=[i for i,row in enumerate(t.screen.grid[:24]) if '•' in row];assert len(dots)>=2
+  # Deregistration preview must paint before a slow backend returns; cancel is instant.
+  t.send(b'\x1b[B\x1b[B\x1b[B\r');start=time.perf_counter();t.wait('Loading…');assert time.perf_counter()-start<.2
+  start=time.perf_counter();t.send(b'\r');t.wait('Usage details');assert time.perf_counter()-start<.2
+  time.sleep(2.1);t.drain();assert not t.screen.contains('Type codex-fixture0')
   t.send(b'\x1b');t.wait('<add account>');t.send(b'\x1b');t.wait('Manage Sessions')
   # Shared account picker right-aligns both percentages and slashes.
   t.send(b'\r\r');t.wait('Choose Account');t.wait('5h /');t.drain()
@@ -60,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
  # Reopen and inspect the original receipt without another mutation.
  t=f.Terminal(root)
  try:
-  t.wait('Manage Sessions');t.send(b'\x1b[B\r');t.wait('Operations');t.send(b'\r');t.wait('Resume: running')
+  t.wait('Manage Sessions');t.send(b'\x1b[B\r');t.wait('[new session]');time.sleep(.2);t.drain();t.send(b'\x1b[A');t.wait('Operations',selected=True);t.send(b'\r');t.wait('Resume: running')
  finally:t.close()
  calls=[json.loads(line) for line in (root/'calls.jsonl').read_text().splitlines()]
  assert sum(c[:2]==['resume-launch','start'] for c in calls)==1

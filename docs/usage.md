@@ -14,22 +14,21 @@ what is installed.
 
 Home orders New Session, Manage Sessions, Add Account/Manage Accounts, a dot
 separator and Settings. If every account fits above the bottom controls, accounts
-appear inline, aligned with the option circles, and Add Account is available.
+appear inline, starting one cell from the left edge, without selector circles, and Add Account is available.
 Otherwise Manage Accounts provides a scrolling list with `<add account>` first.
 Its highlighted account's usage sits above the controls with a blank line between.
 Growing the screen returns that list to Home; forms remain open and Back chooses
 the appropriate current layout without losing their account selection.
 
-Only verified 5-hour accounts show paired 5h/weekly bars. Bars measure remaining
+Verified 5-hour accounts show paired 5h/weekly bars; weekly-only accounts show their weekly bar. Bars measure remaining
 allowance, with custom limit markers inside them. Names share a bar start column;
-period labels and right-aligned percentages share a width. Accounts without that
-window show status; unknown and stale usage are explicit. In the selection picker,
+percentages precede period labels, with shared right-/left-aligned columns. Missing observations show Loading… rather than Ready; stale observations are marked. In the selection picker,
 usage is a separate right-aligned `x% 5h / x% wkly` column with aligned percent signs
 and slashes. Weekly-only accounts omit the short period and slash; shared padding
 uses the largest displayed number. New account names are
 limited to 12 characters. Existing longer names are shortened only in list display.
 
-Account actions group Usage details/Limits, Login/Enable/Disable, and Remove/Restore
+Account actions group Usage details/Limits, Login/Enable/Disable, and Deregister/Restore
 with dot separators. Limits edit minimum remaining percentages and use the owner's
 existing threshold settings. Removal shows affected data and requires the exact
 account ID; it preserves credentials/history and refuses active conflicts.
@@ -186,3 +185,12 @@ server. Exact original config/client bytes are restored; the numbered launcher
 becomes the future-tab default again. Artifacts and UI preferences remain available
 for recovery. The deployment check preserved all 31 captured agent/host PID/start
 identities. Other running HERDR servers are not automatically reloaded.
+
+Account deregistration previews open immediately while data loads. The confirmation
+shows the friendly provider-name label (for example `codex-personal`), which the UI
+maps to the backend ID only after an exact match. Signed-in accounts omit Login; it
+appears only when authentication is required. Session action ordering/groups follow
+Codex Switcher, with Focus Session, Session Details and Rename Session first.
+Unsupported public capabilities remain disabled. Session account columns appear
+for the complete list together; selected live sessions show the reference elapsed
+time format when the backend reports verified `active_since`.

@@ -116,7 +116,9 @@ original installs, credentials, Agent DM pins/data, receipts and live sessions.
 
 ## Account and session management
 
-Account circles align with the main option circles. The inline module displays
+Main options through Settings form their own centered block. Inline accounts start
+one cell from the left edge, without selector circles; selected names are bold with
+the normal full animated accent, and unselected names use its existing dimmed level. The inline module displays
 all accounts or none, measuring the complete menu, one blank line, per-account
 height and bottom hints. Bars share a start derived from the longest displayed
 name; preferred width is 24 cells, minimum 12. Existing long names are ellipsized
@@ -125,9 +127,10 @@ to 12 ASCII characters excluding the provider prefix. Disabled/removed accounts
 remain selectable for management.
 
 Verified five-hour accounts show adjacent 5h/weekly remaining bars, then one blank
-line before the next account. Other accounts show status only in this module.
-Unknown values remain explicit; stale observations are marked. Labels sit to the
-right, left-aligned by period and right-aligned by percent. Shared percentage width
+line before the next account. Weekly-only accounts show their weekly bar. Missing observations show Loading….
+Unknown values remain explicit; stale observations are marked. Bars use solid rectangular blocks, one shaded fractional end block, gray empty
+blocks and a white threshold line. On the right, percentages come first in a
+right-aligned column, then left-aligned period labels. Shared percentage width
 uses three digits only when a displayed value is 100. Custom limits are vertical
 markers inside the bars, converted from maximum used to minimum remaining.
 
@@ -145,7 +148,7 @@ displayed number. Weekly-only rows align with the weekly column. Unknown values
 use `?`; freshness and full account ID appear in the selected-account note.
 
 Account action groups use dot/blank separators: Usage details and Limits; Log in
-and Enable/Disable; Remove/Restore. Limits edit minimum remaining percentages with
+and Enable/Disable; Deregister/Restore. Limits edit minimum remaining percentages with
 explicit Save/Cancel; the backend converts/stores existing used thresholds through
 the sole owner, preserving plan review and leaving automation unchanged. Impactful
 Disable/Remove actions require confirmation. Removal first presents affected
@@ -168,8 +171,20 @@ worker. Canceling Resume restores the independent New draft.
 Installed HERDR 0.9.5 supports one popup at a time, so confirmations/forms/progress
 use internal nested dialogs over the preserved page. Theme colors are read from
 HERDR's fixed theme/custom RGB overrides (Ana uses Vesper); dynamic/terminal themes
-have an explicit configured-base fallback. Long consent text, paths and IDs wrap
-without truncation and paginate before confirmation. Continue in background returns
+have an explicit configured-base fallback. Text wraps at spaces/dashes, falling back to grapheme-safe splitting only for
+overlong tokens. Scroll hints appear only for overflow. Cancel is always immediate,
+including before the final page; late preview responses cannot reopen a dismissed
+dialog. Single-field forms keep the input editable while only buttons take selection.
+Validation colors come from actual validity, independently of focus. Continue in background returns
 to the menu, never cancels or steals focus later. Operations can reopen original
 New/Resume receipts and transfer jobs after closing the popup; uncertain outcomes
 are inspected, never replayed. Cancellation/recovery are separate backend actions.
+
+Account deregistration previews open immediately while data loads. The confirmation
+shows the friendly provider-name label (for example `codex-personal`), which the UI
+maps to the backend ID only after an exact match. Signed-in accounts omit Login; it
+appears only when authentication is required. Session action ordering/groups follow
+Codex Switcher, with Focus Session, Session Details and Rename Session first.
+Unsupported public capabilities remain disabled. Session account columns appear
+for the complete list together; selected live sessions show the reference elapsed
+time format when the backend reports verified `active_since`.

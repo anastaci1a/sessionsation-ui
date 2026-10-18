@@ -2,7 +2,6 @@
 use crate::{
     client::Account,
     render::{Accent, Canvas, Cell},
-    widgets::Row,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -27,7 +26,7 @@ pub fn short_name(id: &str) -> String {
 #[derive(Clone, Debug)]
 pub struct Window {
     pub label: &'static str,
-    pub remaining: Option<u8>,
+    pub remaining: Option<f64>,
     pub limit: Option<f64>,
 }
 #[derive(Clone, Debug)]
@@ -40,7 +39,7 @@ impl Usage {
     pub fn account(a: &Account) -> Self {
         let stale = a.details.get("usage_fresh").and_then(|v| v.as_bool()) != Some(true);
         let status = if a.details.get("membership").and_then(|v| v.as_str()) == Some("removed") {
-            "Removed"
+            "Deregistered"
         } else if a.details.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
             "Disabled"
         } else if a.details.get("auth_required").and_then(|v| v.as_bool()) == Some(true) {
@@ -53,18 +52,22 @@ impl Usage {
             "Ready"
         }
         .to_owned();
-        let windows = if a.usage["short"]["duration_minutes"] == 300 {
+        let windows = {
             [
                 ("short", "5h", "short_percent", 300),
                 ("weekly", "wkly", "weekly_percent", 10080),
             ]
             .into_iter()
+            .filter(|(key, _, _, duration)| {
+                a.usage[*key]["duration_minutes"] == *duration
+                    || (*key == "weekly" && a.usage["short"]["duration_minutes"] == 300)
+            })
             .map(|(key, label, threshold, duration)| {
                 let remaining = (a.usage[key]["duration_minutes"] == duration)
                     .then(|| a.usage[key]["used_percent"].as_f64())
                     .flatten()
                     .filter(|n| n.is_finite() && (0. ..=100.).contains(n))
-                    .map(|used| (100. - used).round() as u8);
+                    .map(|used| 100. - used);
                 let limits = a.details.get("switch_thresholds");
                 let limit = limits
                     .filter(|v| v["customized"] == true)
@@ -78,8 +81,6 @@ impl Usage {
                 }
             })
             .collect()
-        } else {
-            vec![]
         };
         Self {
             windows,
@@ -91,7 +92,11 @@ impl Usage {
         self.windows.len().max(1)
     }
     pub fn digits(&self) -> usize {
-        if self.windows.iter().any(|w| w.remaining == Some(100)) {
+        if self
+            .windows
+            .iter()
+            .any(|w| w.remaining.is_some_and(|p| p.round() == 100.))
+        {
             3
         } else {
             2
@@ -99,21 +104,36 @@ impl Usage {
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, digits: usize) {
         if self.windows.is_empty() {
-            canvas.text(x, y, &self.status, Cell::default(), false);
+            canvas.accent_text(x, y, "Loading…", Accent::default());
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
-            let filled = window.remaining.map(|p| (bar * p as usize + 50) / 100);
+            let filled = window.remaining.map(|p| bar as f64 * p / 100.);
+            if filled.is_none() {
+                canvas.accent_text(x, y, "Loading…", Accent::default());
+                continue;
+            }
             let marker = window
                 .limit
                 .map(|p| ((bar.saturating_sub(1)) as f64 * p / 100.).round() as usize);
             for col in 0..bar {
                 let glyph = if marker == Some(col) {
                     "│"
-                } else if filled.is_some_and(|n| col < n) {
-                    "━"
+                } else if filled.is_some_and(|n| col < n.floor() as usize) {
+                    "█"
+                } else if let Some(n) = filled
+                    && col == n.floor() as usize
+                    && n.fract() > 0.000001
+                {
+                    if n.fract() < 1. / 3. {
+                        "░"
+                    } else if n.fract() < 2. / 3. {
+                        "▒"
+                    } else {
+                        "▓"
+                    }
                 } else {
-                    "─"
+                    "█"
                 };
                 if marker == Some(col) {
                     canvas.text(
@@ -121,8 +141,19 @@ impl Usage {
                         y + row,
                         glyph,
                         Cell {
-                            fg: [255, 196, 110],
+                            fg: [255; 3],
                             bold: true,
+                            ..Cell::default()
+                        },
+                        false,
+                    );
+                } else if filled.is_some_and(|n| col as f64 >= n.ceil()) {
+                    canvas.text(
+                        x + col,
+                        y + row,
+                        glyph,
+                        Cell {
+                            fg: [108; 3],
                             ..Cell::default()
                         },
                         false,
@@ -133,11 +164,7 @@ impl Usage {
                         y + row,
                         glyph,
                         Accent {
-                            brightness: if self.stale || filled.is_none_or(|n| col >= n) {
-                                300
-                            } else {
-                                1000
-                            },
+                            brightness: if self.stale { 600 } else { 1000 },
                             flash: false,
                             ..Accent::default()
                         },
@@ -146,12 +173,12 @@ impl Usage {
             }
             let percent = window
                 .remaining
-                .map(|p| p.to_string())
+                .map(|p| format!("{p:.0}"))
                 .unwrap_or_else(|| "?".into());
             let label = format!(
-                "{:<4} {:>digits$}%{}",
-                window.label,
+                "{:>digits$}% {:<4}{}",
                 percent,
+                window.label,
                 if self.stale { " stale" } else { "" }
             );
             canvas.text(x + bar + 1, y + row, &label, Cell::default(), false);
@@ -196,14 +223,13 @@ impl AccountsLayout {
             })
             .max()
             .unwrap_or(0);
-        let prefix = 2 + names + 2;
-        let min_width = (prefix + right).max(17); // longest top option + marker
-        if min_width + 8 > width {
+        let prefix = names + 2;
+        let min_width = prefix + right;
+        if min_width + 2 > width {
             return None;
         }
-        let extra = (width - 8 - min_width).min(12);
-        let block = min_width + extra;
-        let left = (width - block) / 2;
+        let extra = (width - 2 - min_width).min(12);
+        let left = 1;
         Some(Self {
             left,
             bars: left + prefix,
@@ -222,12 +248,16 @@ impl AccountsLayout {
     ) {
         let mut y = top;
         for (index, account) in accounts.iter().enumerate() {
-            Row::yes(short_name(&account.id)).paint(
-                canvas,
+            let active = selected == Some(index) && !back;
+            canvas.accent_text(
                 self.left,
                 y,
-                selected == Some(index) && !back,
-                back,
+                &short_name(&account.id),
+                Accent {
+                    brightness: if active { 1000 } else { 600 },
+                    bold: active,
+                    ..Accent::default()
+                },
             );
             let usage = Usage::account(account);
             usage.paint(canvas, self.bars, y, self.bar_width, self.digits);
@@ -247,12 +277,49 @@ mod tests {
     })).unwrap()
     }
     #[test]
+    fn weekly_only_and_missing_data_never_replace_usage_with_ready() {
+        let mut a = account();
+        a.usage["short"] = serde_json::Value::Null;
+        let u = Usage::account(&a);
+        assert_eq!(u.windows.len(), 1);
+        assert_eq!(u.windows[0].label, "wkly");
+        a.usage = json!({});
+        let mut c = Canvas::new(40, 4);
+        Usage::account(&a).paint(&mut c, 1, 1, 20, 2);
+        let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+        assert!(text.contains("Loading…"));
+        assert!(!text.contains("Ready"));
+    }
+    #[test]
+    fn fractional_blocks_keep_precision_and_thresholds_are_white() {
+        let mut a = account();
+        a.usage["short"]["used_percent"] = json!(74.);
+        a.details.remove("switch_thresholds");
+        let u = Usage::account(&a);
+        let mut c = Canvas::new(50, 5);
+        u.paint(&mut c, 1, 1, 10, 2);
+        assert_eq!(c.cells[51].glyph, "█");
+        assert_eq!(c.cells[52].glyph, "█");
+        assert_eq!(c.cells[53].glyph, "▒");
+        assert_eq!(c.cells[54].fg, [108; 3]);
+        let u = Usage::account(&account());
+        u.paint(&mut c, 1, 1, 10, 3);
+        let marker = &c.cells[53];
+        assert_eq!(marker.glyph, "│");
+        assert_eq!(marker.fg, [255; 3]);
+        let text = c.cells[50..100]
+            .iter()
+            .map(|c| c.glyph.as_str())
+            .collect::<String>();
+        assert!(text.contains(" 80% 5h"));
+    }
+    #[test]
     fn markers_convert_used_thresholds_and_names_only_shorten_display() {
         let a = account();
         let u = Usage::account(&a);
         assert_eq!(short_name(&a.id), "long-accoun…");
         assert_eq!(a.id, "codex:long-account-name");
-        assert_eq!(u.windows[0].remaining, Some(80));
+        assert_eq!(u.windows[0].remaining, Some(80.));
         assert_eq!(u.windows[0].limit, Some(20.));
         assert_eq!(u.digits(), 3);
         let mut c = Canvas::new(60, 6);
@@ -266,7 +333,7 @@ mod tests {
         a.usage["weekly"] = serde_json::Value::Null;
         assert_eq!(Usage::account(&a).windows[1].remaining, None);
         a.usage["short"]["duration_minutes"] = json!(60);
-        assert!(Usage::account(&a).windows.is_empty());
+        assert_eq!(Usage::account(&a).windows.len(), 0);
         a.usage = json!({});
         assert_eq!(Usage::account(&a).status, "Usage unavailable");
     }

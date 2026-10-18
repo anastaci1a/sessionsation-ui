@@ -1,7 +1,7 @@
 //! Public-contract management reducer. Rendering and selection perform no I/O.
 use crate::{
     client::Account,
-    dialog::{self, Dialog, Field, Palette},
+    dialog::{self, Dialog, Field, Palette, Rule},
     render::{Canvas, Cell},
     usage::{AccountsLayout, Usage, short_name},
     widgets::{Options, Row, clip, hint_lines},
@@ -46,6 +46,7 @@ enum Purpose {
 #[derive(Clone, Debug)]
 enum Form {
     None,
+    Loading,
     Add,
     Login(String),
     Limits(String),
@@ -68,6 +69,7 @@ pub struct Manager {
     pub note: String,
     pub inline: bool,
     pub inventory_known: bool,
+    pub sessions_known: bool,
     form: Form,
     sequence: u64,
     pending: BTreeMap<u64, Purpose>,
@@ -91,6 +93,7 @@ impl Default for Manager {
             note: String::new(),
             inline: false,
             inventory_known: false,
+            sessions_known: false,
             form: Form::None,
             sequence: 0,
             pending: BTreeMap::new(),
@@ -106,6 +109,9 @@ fn strings(args: &[&str]) -> Vec<String> {
 }
 fn id(v: &Value) -> &str {
     v["id"].as_str().unwrap_or("")
+}
+fn account_label(id: &str) -> String {
+    id.replacen(':', "-", 1)
 }
 fn terminal(phase: &str) -> bool {
     matches!(
@@ -173,8 +179,12 @@ impl Manager {
         }
     }
     fn go(&mut self, page: Page) {
+        self.dialog = None;
+        self.form = Form::None;
+        self.foreground = None;
         self.page = page;
         self.options = Options::default();
+        self.options.selected = self.rows().iter().position(|r| r.enabled).unwrap_or(0);
         self.note.clear();
     }
     fn account_back(&mut self, key: &str) {
@@ -218,7 +228,7 @@ impl Manager {
                 let a = self.account(key);
                 let removed =
                     a.is_some_and(|a| a.details.get("membership").is_some_and(|v| v == "removed"));
-                vec![
+                let mut rows = vec![
                     Row::yes("Usage details"),
                     Row::gate("Limits", !removed && self.provider_cap("account_limits")),
                     Row::separator(),
@@ -235,37 +245,22 @@ impl Manager {
                     Row::yes(if removed {
                         "Restore account"
                     } else {
-                        "Remove account"
+                        "Deregister account"
                     }),
-                ]
+                ];
+                if !a.is_some_and(|a| a.details.get("auth_required").is_some_and(|v| v == true)) {
+                    rows.remove(3);
+                }
+                rows
             }
-            Page::Sessions => std::iter::once(Row::yes("Operations"))
-                .chain(std::iter::once(Row::separator()))
-                .chain(self.sessions.iter().map(|s| {
-                    Row::yes(s["name"].as_str().unwrap_or("Unnamed")).with_preview(format!(
-                        "[{}] {}",
-                        short_name(s["account_id"].as_str().unwrap_or("unknown")),
-                        s["availability"].as_str().unwrap_or("unknown")
-                    ))
-                }))
-                .collect(),
-            Page::Session(key) => {
-                let s = self.session(key).cloned().unwrap_or(Value::Null);
-                let cap = &s["capabilities"];
-                vec![
-                    Row::yes("Details"),
-                    Row::gate("Focus tab", s["attachment"]["host"] == "herdr"),
-                    Row::separator(),
-                    Row::gate("Rename", cap["rename"] == true),
-                    Row::gate("Switch account", cap["switch_account"] == true),
-                    Row::gate("Restart", cap["restart"] == true),
-                    Row::gate("Stop", cap["stop"] == true),
-                    Row::gate(
-                        "Resume",
-                        cap["resume"] == true && self.capabilities["resume"]["version"] == 1,
-                    ),
-                ]
-            }
+            Page::Sessions => crate::session_list::rows(&self.sessions, self.sessions_known),
+            Page::Session(key) => crate::session_list::actions(
+                self.session(key).unwrap_or(&Value::Null),
+                self.capabilities["resume"]["version"] == 1,
+            )
+            .into_iter()
+            .map(|(row, _)| row)
+            .collect(),
             Page::Launch(kind, key) => {
                 let receipt = self.launch_record(kind, key);
                 vec![
@@ -430,6 +425,13 @@ impl Manager {
         self.foreground = Some(self.sequence);
         request
     }
+    fn preview(&mut self, title: &str, args: Vec<String>, purpose: Purpose) -> Vec<Intent> {
+        self.show(title, vec!["Loading…".into()], &["Cancel"], Form::Loading);
+        self.dialog.as_mut().unwrap().busy = true;
+        let request = self.request(args, purpose);
+        self.foreground = Some(self.sequence);
+        request
+    }
     pub fn switch_confirmation(&mut self, s: Value, account: &str) {
         let mut args = Self::target(&s, "switch");
         args.extend(strings(&["--to", account]));
@@ -500,7 +502,7 @@ impl Manager {
                     .sessions
                     .iter()
                     .position(|s| id(s) == key)
-                    .map(|i| i + 2)
+                    .map(|i| i + 1)
                     .unwrap_or(0)
             }
             Page::Operation(_) | Page::Launch(..) => self.go(Page::Operations),
@@ -520,7 +522,7 @@ impl Manager {
             .as_mut()
             .unwrap()
             .fields
-            .push(Field::new("Name", ""));
+            .push(Field::new("Name", "").validated(Rule::AccountName));
     }
     fn activate(&mut self) -> Vec<Intent> {
         if !self
@@ -560,6 +562,12 @@ impl Manager {
                     self.note = "Account is no longer available".into();
                     return vec![];
                 };
+                let index =
+                    if a.details.get("auth_required").is_some_and(|v| v == true) || index < 3 {
+                        index
+                    } else {
+                        index + 1
+                    };
                 match index {
                     0 => {
                         let mut body = vec![a.id.clone(), Usage::account(&a).status];
@@ -576,8 +584,11 @@ impl Manager {
                         self.show("Usage details", body, &["Close"], Form::None);
                     }
                     1 => {
-                        return self
-                            .request(strings(&["account", "limits", &key]), Purpose::Limits(key));
+                        return self.preview(
+                            "Account limits",
+                            strings(&["account", "limits", &key]),
+                            Purpose::Limits(key),
+                        );
                     }
                     3 => {
                         self.show(
@@ -598,7 +609,8 @@ impl Manager {
                         if a.details.get("membership").is_some_and(|v| v == "removed") {
                             return self.mutate(strings(&["account", "restore", &key]));
                         } else {
-                            return self.request(
+                            return self.preview(
+                                "Deregister account",
                                 strings(&["account", "remove", &key]),
                                 Purpose::Remove(key),
                             );
@@ -609,50 +621,70 @@ impl Manager {
             }
             Page::Sessions => {
                 if index == 0 {
-                    self.go(Page::Operations);
-                    return self.refresh();
-                } else if let Some(s) = self.sessions.get(index - 2) {
-                    self.go(Page::Session(id(s).into()));
-                    return self.refresh();
+                    return vec![Intent::New];
                 }
+                let offset = if self.sessions_known { 1 } else { 2 };
+                if let Some(session) = index.checked_sub(offset).and_then(|i| self.sessions.get(i))
+                {
+                    self.go(Page::Session(id(session).into()));
+                } else {
+                    self.go(Page::Operations);
+                }
+                return self.refresh();
             }
             Page::Session(key) => {
                 let Some(s) = self.session(&key).cloned() else {
                     return vec![];
                 };
-                match index {
-                    0 => return self.request(Self::target(&s, "session"), Purpose::Details(key)),
-                    1 => return vec![Intent::Focus(s)],
-                    3 => {
+                let action =
+                    crate::session_list::actions(&s, self.capabilities["resume"]["version"] == 1)
+                        .get(index)
+                        .map(|(_, a)| *a);
+                match action.unwrap_or(crate::session_list::Action::Unavailable) {
+                    crate::session_list::Action::Focus => return vec![Intent::Focus(s)],
+                    crate::session_list::Action::Details => {
+                        return self.preview(
+                            "Session details",
+                            Self::target(&s, "session"),
+                            Purpose::Details(key),
+                        );
+                    }
+                    crate::session_list::Action::Rename => {
                         self.show(
                             "Rename session",
                             vec!["Keep the same session and conversation identities.".into()],
                             &["Rename", "Cancel"],
                             Form::Rename(s.clone()),
                         );
-                        self.dialog
-                            .as_mut()
-                            .unwrap()
-                            .fields
-                            .push(Field::new("Name", s["name"].as_str().unwrap_or("")));
+                        self.dialog.as_mut().unwrap().fields.push(
+                            Field::new("Name", s["name"].as_str().unwrap_or(""))
+                                .validated(Rule::Name),
+                        );
                     }
-                    4 => return vec![Intent::Switch(s)],
-                    5 | 6 => {
-                        let command = if index == 5 { "restart" } else { "stop" };
+
+                    crate::session_list::Action::Switch => return vec![Intent::Switch(s)],
+                    crate::session_list::Action::Resume => {
+                        return self.preview(
+                            "Resume session",
+                            Self::target(&s, "session"),
+                            Purpose::Resume(key),
+                        );
+                    }
+                    crate::session_list::Action::Restart | crate::session_list::Action::Stop => {
+                        let command = if action == Some(crate::session_list::Action::Restart) {
+                            "restart"
+                        } else {
+                            "stop"
+                        };
                         self.confirm(
-                            if index == 5 {
-                                "Restart session"
-                            } else {
-                                "Stop session"
-                            },
+                            "Session confirmation",
                             vec![format!(
                                 "{}: {command}. Conversation history is retained.",
-                                s["name"].as_str().unwrap_or(&key)
+                                s["name"].as_str().unwrap_or("session")
                             )],
                             Self::target(&s, command),
                         );
                     }
-                    7 => return self.request(Self::target(&s, "session"), Purpose::Resume(key)),
                     _ => {}
                 }
             }
@@ -760,6 +792,10 @@ impl Manager {
                 self.dismiss();
                 return vec![];
             }
+            Form::Loading => {
+                self.dismiss();
+                return vec![];
+            }
             Form::Confirm(args) => args,
             Form::Add => {
                 let name = value(0);
@@ -802,12 +838,9 @@ impl Manager {
             }
             Form::Remove(preview) => {
                 let key = preview["account_id"].as_str().unwrap_or("");
-                if value(0) != key {
-                    self.dialog
-                        .as_mut()
-                        .unwrap()
-                        .body
-                        .push("Confirmation must match the exact account ID.".into());
+                if value(0) != account_label(key) {
+                    self.dialog.as_mut().unwrap().status =
+                        Some(format!("Type {} to confirm.", account_label(key)));
                     return vec![];
                 }
                 strings(&[
@@ -832,10 +865,20 @@ impl Manager {
         let Some(purpose) = self.pending.remove(&token) else {
             return vec![];
         };
+        if matches!(
+            purpose,
+            Purpose::Remove(_) | Purpose::Limits(_) | Purpose::Details(_) | Purpose::Resume(_)
+        ) && (self.foreground != Some(token) || !matches!(self.form, Form::Loading))
+        {
+            return vec![];
+        }
         let value = match result {
             Ok(v) => v,
             Err(e) => {
                 self.note = e.clone();
+                if matches!(self.form, Form::Loading) && self.foreground == Some(token) {
+                    self.show("Could not load", vec![e.clone()], &["Close"], Form::None);
+                }
                 if matches!(purpose, Purpose::Mutation)
                     && matches!(self.form, Form::Progress)
                     && self.foreground == Some(token)
@@ -847,14 +890,20 @@ impl Manager {
         };
         match purpose {
             Purpose::State => {
-                let chosen = if self.page == Page::Sessions && self.options.selected >= 2 {
+                let operations_selected = self.page == Page::Sessions
+                    && self.options.selected == self.rows().len().saturating_sub(1);
+                let chosen = if self.page == Page::Sessions
+                    && self.sessions_known
+                    && self.options.selected >= 1
+                {
                     self.sessions
-                        .get(self.options.selected.saturating_sub(2))
+                        .get(self.options.selected.saturating_sub(1))
                         .map(|s| id(s).to_owned())
                 } else {
                     None
                 };
                 self.sessions = value["sessions"].as_array().cloned().unwrap_or_default();
+                self.sessions_known = true;
                 self.sessions.sort_by_key(|s| {
                     (
                         match s["availability"].as_str() {
@@ -870,8 +919,11 @@ impl Manager {
                         .sessions
                         .iter()
                         .position(|s| id(s) == key)
-                        .map(|i| i + 2)
+                        .map(|i| i + 1)
                         .unwrap_or(0);
+                }
+                if operations_selected {
+                    self.options.selected = self.rows().len().saturating_sub(1);
                 }
                 self.capabilities = value["capabilities"].clone();
             }
@@ -932,6 +984,9 @@ impl Manager {
             }
             Purpose::Resume(key) => {
                 if self.page == Page::Session(key) {
+                    self.dialog = None;
+                    self.form = Form::None;
+                    self.foreground = None;
                     return vec![Intent::Resume(value)];
                 }
             }
@@ -974,11 +1029,13 @@ impl Manager {
                     Field::new(
                         "5h minimum remaining (%)",
                         (100. - limits["short_percent"].as_f64().unwrap_or(90.)).to_string(),
-                    ),
+                    )
+                    .validated(Rule::Percentage),
                     Field::new(
                         "Weekly minimum remaining (%)",
                         (100. - limits["weekly_percent"].as_f64().unwrap_or(90.)).to_string(),
-                    ),
+                    )
+                    .validated(Rule::Percentage),
                 ];
             }
             Purpose::Remove(key) => {
@@ -987,7 +1044,8 @@ impl Manager {
                 }
                 let mut body = vec![
                     format!(
-                        "Remove {key} from local selection? Credentials and history remain recoverable. The provider account is not deleted."
+                        "Deregister {} from local selection? Credentials and history remain recoverable. The provider account is not deleted.",
+                        account_label(&key)
                     ),
                     format!(
                         "Stored files: {}; bytes: {}; history files: {}",
@@ -1007,19 +1065,19 @@ impl Manager {
                 }
                 if value["can_remove"] != true {
                     body.push("Blocked by active/loaded conversations or pending operations. Stop or move them explicitly first.".into());
-                    self.show("Removal blocked", body, &["Close"], Form::None);
+                    self.show("Deregistration blocked", body, &["Close"], Form::None);
                 } else {
+                    let expected = account_label(&key);
                     self.show(
-                        "Remove account",
+                        "Deregister account",
                         body,
-                        &["Remove account", "Cancel"],
+                        &["Deregister account", "Cancel"],
                         Form::Remove(value),
                     );
-                    self.dialog
-                        .as_mut()
-                        .unwrap()
-                        .fields
-                        .push(Field::new("Type exact account ID", ""));
+                    self.dialog.as_mut().unwrap().fields.push(
+                        Field::new(&format!("Type {expected} to confirm"), "")
+                            .validated(Rule::Exact(expected)),
+                    );
                 }
             }
             Purpose::Mutation => {
@@ -1055,7 +1113,7 @@ impl Manager {
         let layout = AccountsLayout::fit(&self.accounts, canvas.width, footer.saturating_sub(10));
         let was = self.inline;
         self.inline = self.inventory_known && layout.is_some();
-        if self.inline && !was && self.page == Page::Accounts {
+        if self.inline && !was && self.page == Page::Accounts && self.dialog.is_none() {
             let selected = self.selected_account();
             self.go(Page::Home);
             if let Some(key) = selected {
@@ -1073,10 +1131,17 @@ impl Manager {
         let rows = self.rows();
         if self.page == Page::Home && self.inline {
             let l = layout.as_ref().unwrap();
+            let longest = rows
+                .iter()
+                .take(5)
+                .map(|r| unicode_width::UnicodeWidthStr::width(r.label.as_str()))
+                .max()
+                .unwrap_or(0);
+            let top_left = canvas.width.saturating_sub(longest + 2) / 2;
             for (i, row) in rows.iter().take(5).enumerate() {
                 row.paint(
                     canvas,
-                    l.left,
+                    top_left,
                     3 + i,
                     self.options.selected == i && !self.options.back,
                     self.options.back,
@@ -1089,7 +1154,7 @@ impl Manager {
                 self.options.selected.checked_sub(5),
                 self.options.back,
             );
-            self.options.paint_back(canvas, l.left, 3, "Close");
+            self.options.paint_back(canvas, top_left, 3, "Close");
         } else {
             let selected = self.selected_account();
             let usage = if self.page == Page::Accounts {
@@ -1106,7 +1171,22 @@ impl Manager {
             } else {
                 footer.saturating_sub(3)
             };
-            let (left, capacity) = self.options.paint(canvas, &rows, 3, bottom);
+            let (left, capacity) = if self.page == Page::Sessions {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                crate::session_list::paint(
+                    canvas,
+                    &mut self.options,
+                    &self.sessions,
+                    self.sessions_known,
+                    bottom,
+                    now,
+                )
+            } else {
+                self.options.paint(canvas, &rows, 3, bottom)
+            };
             self.options.paint_back(
                 canvas,
                 left,
@@ -1202,6 +1282,50 @@ mod tests {
         m
     }
     #[test]
+    fn cancelled_preview_cannot_reopen_and_friendly_confirmation_maps_to_backend_id() {
+        let mut m = setup();
+        m.go(Page::Account("codex:account1".into()));
+        m.options.selected = m
+            .rows()
+            .iter()
+            .position(|r| r.label == "Deregister account")
+            .unwrap();
+        let sent = m.activate();
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        assert_eq!(m.dialog.as_ref().unwrap().body, vec!["Loading…"]);
+        m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(m.dialog.is_none());
+        let preview = json!({"account_id":"codex:account1","can_remove":true,"revision":"preview","stored_data":{},"affected_sessions":[]});
+        m.response(token, Ok(preview.clone()));
+        assert!(m.dialog.is_none());
+        let sent = m.activate();
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        m.response(token, Ok(preview));
+        assert!(
+            m.dialog.as_ref().unwrap().fields[0]
+                .label
+                .contains("codex-account1")
+        );
+        m.submit(0, vec!["wrong".into()]);
+        m.submit(0, vec!["wrong again".into()]);
+        assert_eq!(
+            m.dialog.as_ref().unwrap().status.as_deref(),
+            Some("Type codex-account1 to confirm.")
+        );
+        let sent = m.submit(0, vec!["codex-account1".into()]);
+        let Intent::Api(_, args) = &sent[0] else {
+            panic!()
+        };
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--confirm", "codex:account1"])
+        );
+    }
+    #[test]
     fn inline_fit_compact_preview_and_resize_preserve_account_navigation() {
         let mut m = setup();
         m.paint(&mut Canvas::new(80, 30), 29);
@@ -1256,7 +1380,7 @@ mod tests {
     fn grouped_actions_skip_separators_and_confirmation_binds_original_generation() {
         let mut m = setup();
         m.go(Page::Account("codex:account1".into()));
-        assert!(m.rows()[2].separator && m.rows()[5].separator);
+        assert!(m.rows()[2].separator && m.rows()[4].separator);
         m.options.selected = 1;
         m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(m.options.selected, 3);
@@ -1264,7 +1388,11 @@ mod tests {
             json!({"id":"stable","name":"Test","generation":"old","capabilities":{"stop":true}});
         m.sessions = vec![s];
         m.go(Page::Session("stable".into()));
-        m.options.selected = 6;
+        m.options.selected = m
+            .rows()
+            .iter()
+            .position(|r| r.label == "End session")
+            .unwrap();
         m.activate();
         m.sessions[0]["generation"] = json!("replacement");
         let sent = m.submit(0, vec![]);
@@ -1308,7 +1436,11 @@ mod tests {
     fn late_account_preview_cannot_open_over_another_account() {
         let mut m = setup();
         m.go(Page::Account("codex:account1".into()));
-        m.options.selected = 6;
+        m.options.selected = m
+            .rows()
+            .iter()
+            .position(|r| r.label == "Deregister account")
+            .unwrap();
         let sent = m.activate();
         let Intent::Api(token, _) = sent[0] else {
             panic!()

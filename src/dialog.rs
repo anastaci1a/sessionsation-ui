@@ -1,4 +1,4 @@
-//! Reusable internal modals. Closing a viewer never cancels backend work.
+//! Shared, nonblocking dialogs. Validation and cancellation never depend on focus.
 use crate::{
     render::{Canvas, Cell},
     widgets::{Row, TextInput, clip},
@@ -6,6 +6,7 @@ use crate::{
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+const INVALID: [u8; 3] = [215, 0, 0];
 #[derive(Clone, Debug)]
 pub struct Palette {
     pub accent: [u8; 3],
@@ -21,16 +22,50 @@ impl Default for Palette {
         }
     }
 }
+#[derive(Clone, Debug, Default)]
+pub enum Rule {
+    #[default]
+    Any,
+    AccountName,
+    Percentage,
+    Name,
+    Exact(String),
+}
 #[derive(Clone, Debug)]
 pub struct Field {
     pub label: String,
     pub input: TextInput,
+    pub rule: Rule,
 }
 impl Field {
     pub fn new(label: &str, value: impl Into<String>) -> Self {
         Self {
             label: label.into(),
             input: TextInput::new(value.into()),
+            rule: Rule::Any,
+        }
+    }
+    pub fn validated(mut self, rule: Rule) -> Self {
+        self.rule = rule;
+        self
+    }
+    pub fn valid(&self) -> bool {
+        let v = &self.input.value;
+        match &self.rule {
+            Rule::Any => true,
+            Rule::Exact(expected) => v == expected,
+            Rule::Percentage => v
+                .parse::<f64>()
+                .is_ok_and(|n| n.is_finite() && (0. ..=100.).contains(&n)),
+            Rule::AccountName => {
+                !v.is_empty()
+                    && v.len() <= 12
+                    && v.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            }
+            Rule::Name => {
+                !v.is_empty() && v.trim() == v && v.len() <= 128 && !v.chars().any(char::is_control)
+            }
         }
     }
 }
@@ -40,11 +75,13 @@ pub struct Dialog {
     pub body: Vec<String>,
     pub fields: Vec<Field>,
     pub buttons: Vec<Row>,
+    /// One-field forms keep their editor active while selection visits buttons only.
     pub selected: usize,
     pub offset: usize,
     pub visible: usize,
     pub wrapped: usize,
     pub busy: bool,
+    pub status: Option<String>,
 }
 pub enum Event {
     None,
@@ -63,45 +100,73 @@ impl Dialog {
             visible: 0,
             wrapped: 0,
             busy: false,
+            status: None,
         }
     }
     pub fn progress(title: &str) -> Self {
-        let mut d = Self::new(
-            title,
-            vec!["Submitting once…".into()],
-            &["Continue in background"],
-        );
+        let mut d = Self::new(title, vec!["Loading…".into()], &["Continue in background"]);
         d.busy = true;
         d
     }
     pub fn values(&self) -> Vec<String> {
         self.fields.iter().map(|f| f.input.value.clone()).collect()
     }
+    fn editor(&self) -> Option<usize> {
+        if self.fields.len() == 1 {
+            Some(0)
+        } else {
+            (self.selected < self.fields.len()).then_some(self.selected)
+        }
+    }
+    fn field_slots(&self) -> usize {
+        if self.fields.len() == 1 {
+            0
+        } else {
+            self.fields.len()
+        }
+    }
+    fn dismiss_button(&self, index: usize) -> bool {
+        self.buttons.get(index).is_some_and(|b| {
+            matches!(
+                b.label.as_str(),
+                "Cancel" | "Close" | "Continue in background"
+            )
+        })
+    }
     pub fn paste(&mut self, text: &str) {
-        if let Some(field) = self.fields.get_mut(self.selected) {
-            field.input.insert(text);
+        if let Some(i) = self.editor() {
+            self.fields[i].input.insert(text);
+            self.status = None;
         }
     }
     pub fn key(&mut self, key: KeyEvent) -> Event {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return Event::None;
         }
-        let count = self.fields.len() + self.buttons.len();
+        let slots = self.field_slots();
+        let count = slots + self.buttons.len();
+        self.selected = self.selected.min(count.saturating_sub(1));
         match key.code {
             KeyCode::Esc => return Event::Dismiss,
-            KeyCode::PageDown => {
+            KeyCode::PageDown if self.wrapped > self.visible => {
                 self.offset = (self.offset + self.visible.max(1))
                     .min(self.wrapped.saturating_sub(self.visible))
             }
-            KeyCode::PageUp => self.offset = self.offset.saturating_sub(self.visible.max(1)),
+            KeyCode::PageUp if self.wrapped > self.visible => {
+                self.offset = self.offset.saturating_sub(self.visible.max(1))
+            }
             KeyCode::Up if count > 0 => self.selected = (self.selected + count - 1) % count,
             KeyCode::Down | KeyCode::Tab if count > 0 => {
                 self.selected = (self.selected + 1) % count
             }
-            KeyCode::Enter if self.selected >= self.fields.len() => {
-                let button = self.selected - self.fields.len();
+            KeyCode::Enter if self.selected >= slots => {
+                let button = self.selected - slots;
+                let cancel = self.dismiss_button(button);
                 if self.buttons.get(button).is_some_and(|b| b.enabled)
-                    && (self.busy || self.offset + self.visible >= self.wrapped)
+                    && (cancel || self.fields.iter().all(Field::valid))
+                    && (cancel
+                        || self.busy
+                        || self.visible > 0 && self.offset + self.visible >= self.wrapped)
                 {
                     return Event::Choose(button, self.values());
                 }
@@ -109,8 +174,9 @@ impl Dialog {
             KeyCode::Enter => self.selected = (self.selected + 1).min(count.saturating_sub(1)),
             KeyCode::Char(c) => self.paste(&c.to_string()),
             code => {
-                if let Some(f) = self.fields.get_mut(self.selected) {
-                    f.input.edit(code);
+                if let Some(i) = self.editor() {
+                    self.fields[i].input.edit(code);
+                    self.status = None;
                 }
             }
         }
@@ -119,8 +185,10 @@ impl Dialog {
     pub fn paint(&mut self, canvas: &mut Canvas, palette: &Palette) {
         let width = canvas.width.saturating_sub(4).min(76);
         let max_height = canvas.height.saturating_sub(4);
-        let reserved = self.fields.len() * 2 + self.buttons.len() + 6;
-        if width < 20 || max_height < reserved + usize::from(!self.body.is_empty()) {
+        let reserved = self.fields.len() * 3 + self.buttons.len() + 6;
+        if width < 20 || max_height < reserved + 1 {
+            self.visible = 0;
+            self.wrapped = 1;
             canvas.text(
                 0,
                 1,
@@ -131,18 +199,11 @@ impl Dialog {
             return;
         }
         let x = (canvas.width - width) / 2;
-        let lines: Vec<_> = self
-            .body
-            .iter()
-            .flat_map(|l| {
-                if l.is_empty() {
-                    vec![String::new()]
-                } else {
-                    wrap(l, width - 4)
-                }
-            })
-            .collect();
-        let height = max_height.min(lines.len() + reserved);
+        let mut lines: Vec<_> = self.body.iter().flat_map(|l| wrap(l, width - 4)).collect();
+        if let Some(status) = &self.status {
+            lines.extend(wrap(status, width - 4));
+        }
+        let height = max_height.min(lines.len().max(1) + reserved);
         let y = (canvas.height - height) / 2;
         let body_height = height - reserved;
         self.visible = body_height;
@@ -153,13 +214,13 @@ impl Dialog {
             bg: Some(palette.panel),
             ..Cell::default()
         };
-        for row in y..y + height {
-            canvas.text(x, row, &" ".repeat(width), style.clone(), false);
-        }
         let border = Cell {
             fg: palette.accent,
             ..style.clone()
         };
+        for row in y..y + height {
+            canvas.text(x, row, &" ".repeat(width), style.clone(), false);
+        }
         for row in y + 1..y + height - 1 {
             canvas.text(x, row, "│", border.clone(), false);
             canvas.text(x + width - 1, row, "│", border.clone(), false);
@@ -178,32 +239,82 @@ impl Dialog {
             border.clone(),
             false,
         );
-        canvas.text(x + 2, y, &clip(&self.title, width - 4), border, false);
+        canvas.text(
+            x + 2,
+            y,
+            &clip(&format!(" {} ", self.title), width - 4),
+            border,
+            false,
+        );
         for (i, line) in lines.iter().skip(self.offset).take(body_height).enumerate() {
             canvas.text(x + 2, y + 1 + i, line, style.clone(), false);
         }
-        let mut row = y + 1 + body_height;
+        let mut row = y + 2 + body_height;
         for (index, field) in self.fields.iter().enumerate() {
-            canvas.text(x + 2, row, &field.label, style.clone(), false);
+            let field_style = Cell {
+                fg: if field.valid() { palette.text } else { INVALID },
+                ..style.clone()
+            };
+            let label = clip(&format!(" {} ", field.label), width - 8);
+            let label_width = UnicodeWidthStr::width(label.as_str());
+            canvas.text(
+                x + 2,
+                row,
+                &format!(
+                    "┌─{}{}┐",
+                    label,
+                    "─".repeat((width - 7).saturating_sub(label_width))
+                ),
+                field_style.clone(),
+                false,
+            );
+            canvas.text(x + 2, row + 1, "│", field_style.clone(), false);
+            canvas.text(x + width - 3, row + 1, "│", field_style.clone(), false);
             field
                 .input
-                .paint(canvas, x + 2, row + 1, width - 4, index == self.selected);
-            row += 2;
+                .paint(canvas, x + 3, row + 1, width - 7, field.valid());
+            canvas.text(
+                x + 2,
+                row + 2,
+                &format!("└{}┘", "─".repeat(width - 6)),
+                field_style.clone(),
+                false,
+            );
+            if !field.valid() {
+                for col in x + 2..x + width - 2 {
+                    let cell = &mut canvas.cells[(row + 1) * canvas.width + col];
+                    if cell.bg.is_some_and(|bg| bg != palette.panel) {
+                        cell.bg = Some(INVALID);
+                    } else {
+                        cell.fg = INVALID;
+                    }
+                }
+            }
+            // Single editors stay active. Multi-field selection is still visible.
+            if self.fields.len() > 1 && self.selected == index {
+                canvas.text(x + 3, row, "▶", field_style, false);
+            }
+            row += 3;
         }
         row += 1;
+        let slots = self.field_slots();
         for (index, button) in self.buttons.iter().enumerate() {
+            let mut button = button.clone();
+            if !self.dismiss_button(index) && !self.fields.iter().all(Field::valid) {
+                button.enabled = false;
+            }
             button.paint(
                 canvas,
                 x + 2,
                 row + index,
-                self.selected == self.fields.len() + index,
+                self.selected == slots + index,
                 false,
             );
         }
-        let hint = if self.offset + self.visible < self.wrapped {
-            "PgDn: Read more before confirming"
-        } else {
+        let hint = if self.wrapped > self.visible {
             "Esc: Back   PgUp/PgDn: Scroll"
+        } else {
+            "Esc: Back"
         };
         canvas.text(x + 2, y + height - 2, &clip(hint, width - 4), style, false);
         for row in y..y + height {
@@ -221,57 +332,89 @@ impl Dialog {
         }
     }
 }
-// Preserve entire paths, IDs and consent text, including unbroken tokens.
+/// Prefer a space or dash; split a token only when the token exceeds the viewport.
 fn wrap(text: &str, width: usize) -> Vec<String> {
-    let mut lines = vec![];
-    let mut line = String::new();
-    let mut used = 0;
-    for g in text.graphemes(true) {
-        let cells = UnicodeWidthStr::width(g);
-        if g == "\n" || used + cells > width {
-            lines.push(std::mem::take(&mut line));
-            used = 0;
-            if g == "\n" {
-                continue;
+    let mut out = vec![];
+    for paragraph in text.split('\n') {
+        let mut remaining = paragraph;
+        while UnicodeWidthStr::width(remaining) > width {
+            let mut used = 0;
+            let mut end = 0;
+            let mut boundary = None;
+            for (i, g) in remaining.grapheme_indices(true) {
+                if used + UnicodeWidthStr::width(g) > width {
+                    break;
+                }
+                used += UnicodeWidthStr::width(g);
+                end = i + g.len();
+                if g == " " || g == "-" {
+                    boundary = Some(end);
+                }
             }
+            let end = boundary.filter(|n| *n > 0).unwrap_or(end);
+            if end == 0 {
+                break;
+            }
+            out.push(remaining[..end].trim_end().to_owned());
+            remaining = remaining[end..].trim_start();
         }
-        line.push_str(g);
-        used += cells;
+        out.push(remaining.to_owned());
     }
-    lines.push(line);
-    lines
+    out
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn consent_wrap_preserves_long_paths_and_graphemes() {
-        let text = "/very/long/unbroken/path/αβγ/with-combining-é-and-👩‍💻";
-        let lines = wrap(text, 12);
-        assert_eq!(lines.concat(), text);
-        assert!(
-            lines
-                .iter()
-                .all(|l| UnicodeWidthStr::width(l.as_str()) <= 12)
-        );
+    fn enter() -> KeyEvent {
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
     }
     #[test]
-    fn confirmation_requires_reading_all_pages_and_resize_keeps_input() {
+    fn wraps_words_dashes_and_unsplittable_graphemes() {
+        assert_eq!(wrap("One two three", 8), vec!["One two", "three"]);
+        assert_eq!(wrap("codex-personal", 8), vec!["codex-", "personal"]);
+        let text = "/very/long/unbroken/αβ/é/👩‍💻";
+        assert_eq!(wrap(text, 12).concat(), text);
+    }
+    #[test]
+    fn cancel_works_before_reading_and_single_editor_never_takes_selection() {
         let mut d = Dialog::new(
-            "Confirm",
-            (0..50).map(|n| format!("Affected session {n}")).collect(),
-            &["Confirm"],
+            "Remove",
+            (0..50).map(|i| format!("Session {i}")).collect(),
+            &["Remove", "Cancel"],
         );
-        d.fields.push(Field::new("Account ID", "codex:test"));
-        d.selected = 1;
+        d.fields.push(
+            Field::new("Type codex-personal", "").validated(Rule::Exact("codex-personal".into())),
+        );
         d.paint(&mut Canvas::new(60, 24), &Palette::default());
-        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        assert!(matches!(d.key(enter), Event::None));
+        assert!(matches!(d.key(enter()), Event::None));
+        d.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        d.paste("codex-personal");
+        assert_eq!(d.selected, 1);
+        assert!(matches!(d.key(enter()), Event::Choose(1, _)));
+        d.selected = 0;
+        assert!(matches!(d.key(enter()), Event::None));
         for _ in 0..50 {
             d.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
         }
-        assert!(matches!(d.key(enter), Event::Choose(0, _)));
-        d.paint(&mut Canvas::new(40, 16), &Palette::default());
-        assert_eq!(d.values(), vec!["codex:test"]);
+        assert!(matches!(d.key(enter()), Event::Choose(0, _)));
+    }
+    #[test]
+    fn invalid_field_stays_red_with_cancel_selected_and_short_body_has_no_scroll_hint() {
+        let mut d = Dialog::new(
+            "Remove",
+            vec!["Keep history.".into()],
+            &["Remove", "Cancel"],
+        );
+        d.fields.push(
+            Field::new("Type codex-personal", "").validated(Rule::Exact("codex-personal".into())),
+        );
+        d.selected = 1;
+        let mut c = Canvas::new(70, 24);
+        d.paint(&mut c, &Palette::default());
+        assert!(c.cells.iter().any(|c| c.fg == INVALID));
+        let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+        assert!(!text.contains("PgUp"));
+        d.paste("codex-personal");
+        assert!(d.fields[0].valid());
     }
 }

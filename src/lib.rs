@@ -14,3 +14,5 @@ pub mod management;
 pub mod status;
 pub mod usage;
 pub mod widgets;
+
+pub mod session_list;

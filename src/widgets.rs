@@ -103,7 +103,7 @@ impl TextInput {
                 glyph,
                 Cell {
                     fg: [0; 3],
-                    bg: Some([238; 3]),
+                    bg: Some(style.fg),
                     ..style
                 },
                 false,

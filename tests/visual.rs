@@ -90,7 +90,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
             "actions" => m.page = Page::Account("codex:fixture0".into()),
             "modal" => {
                 m.dialog = Some(Dialog::new(
-                    "Remove account",
+                    "Deregister account",
                     vec![
                         "Credentials and conversation history remain recoverable.".into(),
                         "Account: codex:fixture0".into(),
