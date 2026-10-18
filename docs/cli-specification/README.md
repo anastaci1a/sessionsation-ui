@@ -1,8 +1,8 @@
 # cli-main-menu reference specification
 
 This is a source audit for rebuilding sessionsation-ui faithfully. It describes
-the reference, not an implemented replacement. The installed UI is the earlier
-numbered launcher; the rejected animated redesign remains recoverable in Git.
+the reference. The [deployment record](../deployment.json) identifies the installed
+Rust replacement; the earlier numbered launcher remains available for rollback.
 
 Reference: [cli-main-menu ae 786 af](https://github.com/anastaci1a/cli-main-menu/tree/ae786af695791fdf858eacf5780e04b5138be49d),
 the clean Satellite checkout inspected on 2026-10-18. Fetched remote main
@@ -19,7 +19,7 @@ Read by purpose:
 - [Flows and integration boundaries](flows.md): every reference action, discovery and installation.
 - [Complete source map](source-map.md): all tracked files and their audit destinations.
 - [Verification](verification.md): reference evidence, limitations and comparison method.
-- [Architecture discussion](architecture.md): proposed implementation boundary and language choices for dot.
+- [Approved Rust design](architecture.md): implementation boundary and reviewed interactions.
 
 ## Required adaptations
 
@@ -46,6 +46,7 @@ and review; a similar-looking mockup is insufficient.
   are outside this rebuild.
 
 Ana approved the Rust design and editable-summary flow. Implementation and
-verification follow the architecture document; the installed launcher is unchanged.
+verification follow the architecture document; current evidence lives in
+[verification](../verification.md).
 [Issue 5](https://github.com/anastaci1a/sessionsation-ui/issues/5) owns decisions,
 tasks and acceptance gates; this directory owns the specification.

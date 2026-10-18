@@ -64,6 +64,12 @@ pub fn config_path() -> PathBuf {
             }
         })
 }
+/// Resolve a deployed config pointer before choosing its writable sidecar.
+pub fn preferences_path(config: &Path) -> PathBuf {
+    std::fs::canonicalize(config)
+        .unwrap_or_else(|_| config.into())
+        .with_file_name("preferences.json")
+}
 impl Client {
     pub async fn launch(&self, operation: &str, mut request: Value) -> Result<Value> {
         let paths: Vec<PathBuf> = serde_json::from_value(request["directory"]["create"].clone())?;
@@ -193,5 +199,28 @@ impl Client {
     }
     pub fn host_value(&self) -> Value {
         json!({"session":self.session,"socket":self.socket})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn deployment_pointer_keeps_preferences_beside_real_config() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let runtime = root.path().join("runtime");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::create_dir(&runtime).unwrap();
+        let config = data.join("popup.json");
+        std::fs::write(&config, "{}").unwrap();
+        let link = runtime.join("config.json");
+        std::os::unix::fs::symlink(&config, &link).unwrap();
+        let preferences = preferences_path(&link);
+        assert_eq!(preferences, data.join("preferences.json"));
+        crate::preferences::Preferences::default()
+            .save(&preferences)
+            .unwrap();
+        assert!(!runtime.join("preferences.json").exists());
     }
 }

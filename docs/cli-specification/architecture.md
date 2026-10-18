@@ -1,7 +1,8 @@
 # Rust launcher design
 
-Ana approved Rust and this interaction model. Implementation is incremental; the
-installed numbered launcher remains described in [current architecture](../architecture.md).
+Ana approved Rust and this interaction model. Implemented components are described
+in [current architecture](../architecture.md); [deployment](../deployment.json)
+identifies the selected artifacts and preserved rollback entrypoints.
 [Issue 5](https://github.com/anastaci1a/sessionsation-ui/issues/5) owns acceptance.
 
 ## User flow

@@ -2,7 +2,7 @@
 
 ## Rust popup
 
-The release candidate passes **24 Rust tests** (23 unit tests and one test covering
+The release candidate passes **25 Rust tests** (24 unit tests and one test covering
 four complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
 regressions**. Syntax, manifest fields and documentation links pass. The goldens
 exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,

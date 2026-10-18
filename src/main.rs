@@ -267,7 +267,8 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
         "A terminal is required; use sessionsation api for machine access"
     );
     let client = Client::load()?;
-    let pref = preferences.unwrap_or_else(|| config_path().with_file_name("preferences.json"));
+    let pref =
+        preferences.unwrap_or_else(|| sessionsation_ui::client::preferences_path(&config_path()));
     let prefs = Preferences::load(&pref)?;
     let (origin_space, origin_cwd) = sessionsation_ui::client::origin(
         std::env::var("HERDR_PLUGIN_CONTEXT_JSON").ok().as_deref(),

@@ -25,6 +25,10 @@ plain future tabs when replacing the previous default-menu setup; it does not
 restart terminals. The wrapper reads only its runtime artifact/client paths; all
 rendering, interaction and backend communication is Rust.
 
+Preferences live in `preferences.json` beside the resolved client configuration.
+A symlink from `.runtime/config.json` therefore keeps writable settings beside the
+real config, rather than attempting to replace a symlink or writing into the checkout.
+
 Open **New Session**, edit Account, Space, Name and Directory in any order, then
 select Start Session. Pickers preserve the draft on Back. Existing automatic paths
 require explicit selection. Directory Enter selects; Right/Tab browses; Left goes
