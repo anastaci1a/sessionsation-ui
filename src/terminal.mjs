@@ -13,7 +13,7 @@ export function cellWidth(s) {
 function glyphWidth(g) {
   const c=g.codePointAt(0);
   if (/^\p{Mark}+$/u.test(g)) return 0;
-  return /\p{Extended_Pictographic}/u.test(g) || c>=0x1100 && (c<=0x115f || c>=0x2e80&&c<=0xa4cf || c>=0xac00&&c<=0xd7af || c>=0xf900&&c<=0xfaff || c>=0xfe10&&c<=0xfe6f || c>=0xff01&&c<=0xff60 || c>=0x20000) ? 2:1;
+  return /\p{Emoji_Presentation}|\uFE0F|\u200D/u.test(g) || c>=0x1100 && (c<=0x115f || c>=0x2e80&&c<=0xa4cf || c>=0xac00&&c<=0xd7af || c>=0xf900&&c<=0xfaff || c>=0xfe10&&c<=0xfe6f || c>=0xff01&&c<=0xff60 || c>=0x20000) ? 2:1;
 }
 export function clip(s,width) {
   let text='',used=0;
@@ -80,7 +80,7 @@ export function render(screen,{cols=80,rows=24,elapsed=0,clock=new Date(),host=h
   if(g.compact){center(Math.min(2,rows-1),'Enlarge terminal',{selected:true});}
   else {
     center(2,screen.title??'sessionsation',{accent:true,bold:true});
-    if(screen.description)center(3,screen.description,{fg:[165,165,180]});
+    if(screen.description&&g.start>3)center(3,screen.description,{fg:[165,165,180]});
     if(screen.kind==='text') {
       const width=Math.max(1,cols-8),chars=glyphs(screen.value??'');
       const cursor=screen.cursor??chars.length;
@@ -120,7 +120,7 @@ export function diffFrame(frame,previous,cols) {
     if(cell.char==='')continue;
     const token=`${cell.bold?1:22};38;2;${cell.fg.join(';')};${cell.bg?'48;2;'+cell.bg.join(';'):49}`;
     if(old&&old.char===cell.char&&old.bold===cell.bold&&String(old.fg)===String(cell.fg)&&String(old.bg)===String(cell.bg))continue;
-    if(i!==at)out+=`\x1b[${Math.floor(i/cols)+1};${i%cols+1}H`;
+    if(i!==at||i%cols===0)out+=`\x1b[${Math.floor(i/cols)+1};${i%cols+1}H`;
     if(token!==style){out+=`\x1b[${token}m`;style=token;}
     out+=cell.char;at=i+glyphWidth(cell.char);
   }

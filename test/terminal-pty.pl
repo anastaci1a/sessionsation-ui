@@ -57,6 +57,7 @@ sub calls {return '' unless -e "$root/backend.calls";open my $f,'<',"$root/backe
 
 start(0);expect(qr/\?2004h/,'raw animated screen');
 my $startup_ms=int((time-$started)*1000);
+if($ENV{UI_TEST_CAPTURE}){pump(.04);open my $capture,'>',$ENV{UI_TEST_CAPTURE} or die $!;print $capture $buf;close $capture;}
 my $t=time;syswrite($pty,"\e");finish();my $escape_ms=int((time-$t)*1000);die 'Escape delayed' if time-$t>.4;
 die 'home cancel called backend' if calls() ne '';
 print "PASS standalone Escape restores terminal without backend calls (startup=${startup_ms}ms cancel=${escape_ms}ms)\n";

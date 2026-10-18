@@ -1,7 +1,7 @@
 # Verification
 
 Run `npm test` for isolated client/configuration/terminal regressions and `npm run check`
-for JavaScript/Bash syntax, manifest fields and documentation links. Thirty-three tests
+for JavaScript/Bash syntax, manifest fields and documentation links. Thirty-four tests
 pass, including literal argv, stale/version/protocol errors, exact launcher exec,
 viewer exit without lifecycle mutation, plain-shell execution, selected-session
 switch identity/generation, exact removal confirmation/revision, active-account
@@ -19,14 +19,15 @@ linked from [architecture](architecture.md).
 behavior against an inert backend. It checks fragmented CSI/SS3 arrows, queued
 selection, resize, disabled accounts, chosen-directory inheritance, Escape during
 a deliberately slow read, Ctrl-C and exact terminal restoration before handoff.
-The Node suite also covers full-height field/gradient geometry, bottom controls,
+The Node suite also compares emitted ANSI cells against the renderer with autowrap
+disabled, including the initial frame and selection repairs. It covers full-height field/gradient geometry, bottom controls,
 cycling colors, shimmer, Unicode clipping, long-list scrolling, cursor editing,
 paste safety, signal/EOF cleanup, backpressure and directory history/cancel/errors.
 
 `node scripts/benchmark-terminal.mjs` measures renderer and navigation-diff cost
 without invoking a backend. [Terminal evidence](terminal-verification.json) owns
 exact passing counts, measurements and deployment/rollback scope. The committed
-preview renders fixture cells from the actual renderer. It contains no account
+preview decodes actual PTY ANSI output from an inert launcher run. It contains no account
 inventory, credentials or conversation content. Provider startup is unmeasured.
 
 ## Installed HERDR acceptance

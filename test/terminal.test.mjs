@@ -32,6 +32,7 @@ test('shimmer and shared hue cycle change stars and options without shifting geo
 });
 test('resize clips Unicode safely and scrolls long lists around the selected row',()=>{
   assert.equal(cellWidth('資料 é'),6);assert.equal(clip('資料 abc',5),'資料 ');
+  assert.equal(cellWidth('◀—'),2);assert.equal(cellWidth('🌟'),2);
   const many={...screen,items:Array.from({length:80},(_,i)=>({label:`資料 ${i}`})),selected:79};
   for(const [cols,rows] of [[22,9],[40,14],[100,40],[8,3]]) {
     const f=render(many,{cols,rows});assert.equal(f.cells.length,cols*rows);
@@ -45,6 +46,25 @@ test('frame diff repairs cells, has no scrolling clears, and avoids unchanged ou
   assert.equal(diffFrame(a.cells,a.cells,80),'');
   const delta=diffFrame(b.cells,a.cells,80);
   assert.ok(delta.length<2500);assert.doesNotMatch(delta,/\x1b\[(2J|H)|\n/);
+});
+test('ANSI emission matches rendered cells with terminal autowrap disabled',()=>{
+  const cols=80,rows=24;
+  const expected=render(screen,{cols,rows,elapsed:2000,clock:new Date(0)});
+  const actual=Array(cols*rows).fill(' ');let x=0,y=0;
+  const apply=output=>{
+    for(let p=0;p<output.length;) {
+      const escape=/^\x1b\[([\d;]*)([Hm])/.exec(output.slice(p));
+      if(escape){if(escape[2]==='H'){const [r,c]=escape[1].split(';').map(Number);y=r-1;x=c-1;}p+=escape[0].length;continue;}
+      const char=String.fromCodePoint(output.codePointAt(p));p+=char.length;
+      actual[y*cols+x]=char;if(cellWidth(char)===2)actual[y*cols+x+1]='';x=Math.min(cols-1,x+cellWidth(char));
+    }
+  };
+  const full=diffFrame(expected.cells,null,cols);apply(full);
+  for(let r=1;r<=rows;r++)assert.ok(full.includes(`\x1b[${r};1H`),`row ${r} must be addressed explicitly`);
+  assert.deepEqual(actual,expected.cells.map(c=>c.char));
+  const selected=render({...screen,selected:1},{cols,rows,elapsed:2050,clock:new Date(0)});
+  apply(diffFrame(selected.cells,expected.cells,cols));
+  assert.deepEqual(actual,selected.cells.map(c=>c.char));
 });
 
 function terminal(t) {

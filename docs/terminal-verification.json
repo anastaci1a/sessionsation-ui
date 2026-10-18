@@ -7,7 +7,7 @@
     "ascii_title": false
   },
   "verification": {
-    "node_tests_passed": 33,
+    "node_tests_passed": 34,
     "failed": 0,
     "pty_cases_passed": 5,
     "checks": [
@@ -16,8 +16,8 @@
       "local documentation links"
     ],
     "pty": "Perl IO::Pty with inert backend; zero model/provider launches",
-    "tty_startup_ms": 67,
-    "escape_to_restored_shell_ms": 51,
+    "tty_startup_ms": 64,
+    "escape_to_restored_shell_ms": 54,
     "tty_timing_boundary": "PTY fork of Bash wrapper to alternate-screen entry; Escape write to restored-terminal/clean-exit marker",
     "geometry_sizes": [
       [
@@ -55,7 +55,8 @@
       "tty_startup_ms": 60,
       "escape_to_restored_shell_ms": 53,
       "model_sessions_created": 0
-    }
+    },
+    "preview_source": "Actual PTY ANSI capture from inert launcher; decoded to terminal cells"
   },
   "renderer_benchmark": {
     "scope": "synchronous renderer + navigation diff; excludes backend, provider startup and terminal transport",
@@ -64,33 +65,33 @@
         "cols": 80,
         "rows": 24,
         "frames": 120,
-        "median_ms": 1.055,
-        "p95_ms": 2.691,
-        "max_ms": 8.863,
-        "mean_output_bytes": 4888
+        "median_ms": 1.036,
+        "p95_ms": 2.484,
+        "max_ms": 7.682,
+        "mean_output_bytes": 4889
       },
       {
         "cols": 120,
         "rows": 40,
         "frames": 120,
-        "median_ms": 2.11,
-        "p95_ms": 3.376,
-        "max_ms": 3.957,
-        "mean_output_bytes": 13086
+        "median_ms": 2.078,
+        "p95_ms": 3.396,
+        "max_ms": 4.301,
+        "mean_output_bytes": 13089
       },
       {
         "cols": 200,
         "rows": 70,
         "frames": 120,
-        "median_ms": 6.321,
-        "p95_ms": 7.337,
-        "max_ms": 9.648,
-        "mean_output_bytes": 39089
+        "median_ms": 6.329,
+        "p95_ms": 7.311,
+        "max_ms": 10.656,
+        "mean_output_bytes": 39095
       }
     ]
   },
   "deployment": {
-    "status": "deployed",
+    "status": "tested_correction",
     "source_branch": "redesign/terminal-launcher",
     "previous_ui_commit": "f18979cdf86c3637e9e24b3cb9db3a1769e7df74",
     "strategy": "Fast-forward existing source-backed checkout after tests; no HERDR reload/restart or backend configuration change",
