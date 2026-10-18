@@ -1,0 +1,10 @@
+# Retain this interactive shell as HERDR's host; the menu/agent is a foreground job.
+sessionsation_start_cwd=$PWD
+if [[ -f "$HOME/.bashrc" ]]; then source "$HOME/.bashrc"; fi
+cd -- "$sessionsation_start_cwd"
+unset sessionsation_start_cwd
+set -m
+if [[ ${SESSIONSATION_LAUNCHER_BYPASS:-} != 1 && ${SESSIONSATION_SHELL_ACTIVE:-} != 1 ]]; then
+  export SESSIONSATION_SHELL_ACTIVE=1
+  "$SESSIONSATION_UI_ROOT/bin/sessionsation-ui" launcher
+fi

@@ -10,5 +10,47 @@ plain shell. Run `./bin/sessionsation-ui manage` for account and selected-sessio
 management. Exiting management only closes the viewer. Stop is a separate explicit
 backend operation. Capability hints determine available choices.
 
-HERDR integration and safe configuration commands are documented here as they
-become verified. No existing shell startup files or restored agents are modified.
+No existing shell startup files or restored agents are modified.
+
+## Management plugin
+
+```sh
+herdr plugin link /absolute/path/to/sessionsation-ui --enabled
+herdr --session YOUR-SERVER plugin pane open --plugin sessionsation --entrypoint manage --placement overlay
+```
+
+The overlay targets that server's active pane. Choose sessions by their unique
+backend names; account switching uses the selected session's captured generation.
+Returned operations are admissions, not completion. Inspect Operations for progress
+or an explicit confirmation. Exiting the viewer never sends Stop. Usage displays
+only backend-reported data. Account removal shows the backend preview and requires
+typing the exact account ID; no credential/history purge is offered.
+
+## Future-terminal launcher
+
+First verify the backend artifact and choose its root explicitly. Then:
+
+```sh
+node scripts/configure.mjs apply --config /absolute/herdr/config.toml --binary /absolute/sessionsation --data-dir /explicit/backend/root --backup-dir /private/config-backups
+```
+
+This prints the private rollback receipt path. It saves backend settings in
+`~/.config/sessionsation-ui/config.json` (override with `--client-config`; clients
+then need `SESSIONSATION_UI_CONFIG`). Environment variables override stored settings.
+The configuration change sets HERDR's `terminal.default_shell` to this checkout's
+retained-shell wrapper. Keep the checkout and verified backend executable available.
+It changes neither user startup files nor running terminals. Reload configuration
+only on the intended HERDR server:
+
+```sh
+herdr --session YOUR-SERVER server reload-config
+node scripts/configure.mjs rollback /private/config-backups/launcher-RECEIPT.json
+herdr --session YOUR-SERVER server reload-config
+```
+
+Rollback restores exact original bytes, modes and ownership, and refuses to
+clobber edits made after apply. The receipt contains configuration backups and
+must stay outside Git. A plain shell and backend-created panes set
+`SESSIONSATION_LAUNCHER_BYPASS=1`; the wrapper also guards against recursive menus.
+The retained Bash parent permits agent restart/resume after the foreground agent
+exits. User `.bashrc` is sourced while retaining HERDR's requested working directory.

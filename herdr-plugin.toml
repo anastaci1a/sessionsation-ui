@@ -1,0 +1,11 @@
+id = "sessionsation"
+name = "sessionsation"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+platforms = ["linux"]
+
+[[panes]]
+id = "manage"
+title = "Accounts and sessions"
+placement = "overlay"
+command = ["./bin/sessionsation-ui", "manage"]

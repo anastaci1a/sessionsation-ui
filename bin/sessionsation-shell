@@ -1,0 +1,5 @@
+#!/bin/bash
+set -e
+ui_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export SESSIONSATION_UI_ROOT="$ui_root"
+exec /bin/bash --noprofile --rcfile "$ui_root/share/launcher.rc" -i

@@ -1,10 +1,18 @@
 # Verification
 
-Run `npm test` for isolated client/launcher/configuration regressions and
-`npm run check` for syntax, documentation links and manifest checks. No test needs
-credentials or model usage. Backend acceptance and artifact provenance are linked
-from [architecture](architecture.md), rather than duplicated here.
+Run `npm test` for isolated client/configuration regressions and `npm run check`
+for JavaScript/Bash syntax, manifest fields and documentation links. Eleven tests
+pass: literal argv, structured stale/version/protocol errors, exact launcher exec,
+viewer exit without lifecycle mutation, plain-shell plan execution, control-character
+sanitization, exact configuration rollback, concurrent-edit refusal, ambiguous or
+symlinked config rejection and quoted paths. No test uses credentials or models.
+Backend evidence/provenance remains authoritative in [architecture](architecture.md).
 
-Runtime integration evidence and remaining limitations will be recorded here after
-the thin client and retained-shell launcher pass their checks. This initial
-repository foundation does not claim a deployed launcher.
+Installed HERDR 0.9.5 accepted the manifest via an isolated plugin registry. An owned
+headless test server displayed the default launcher and the management overlay;
+exiting management left its underlying terminal alive. The launcher uses an actual
+v1 backend against an empty, separate test root for these checks.
+
+Real account enrollment/removal, UI-driven model usage and global default-launcher
+configuration are not established by fixture tests. Claude remains preparation-only.
+Further retained-shell and rollback acceptance must pass before global configuration.
