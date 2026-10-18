@@ -22,12 +22,3 @@ The management plugin is a viewer. It never launches an agent in an overlay.
 The separate terminal launcher executes backend-produced argv with process
 replacement. A Bash parent stays alive to retain the host prompt when an agent
 exits; an explicit environment bypass prevents recursive menus.
-
-The interactive launcher has an independent terminal-cell renderer and raw-key
-controller. Its visual reference is Ana's existing `cli-main-menu` (ae786af);
-the Node implementation does not import its Bash backend or copy its source.
-Animation geometry uses terminal dimensions, with sparse cell repairs, bounded
-typeahead and output-backpressure handling. Navigation does no backend polling.
-Directory reads are asynchronous; only explicit folder creation writes local data.
-Selected directories affect New's inherited cwd; backend-owned Resume cwd and opaque
-argv take priority. The numbered non-TTY path and management CLI remain separate.

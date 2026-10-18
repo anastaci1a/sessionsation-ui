@@ -20,11 +20,11 @@ export class Client {
       throw new BackendError('CONFIG_REQUIRED', 'Set absolute SESSIONSATION_BIN and SESSIONSATION_DATA_DIR');
     this.binary=binary; this.dataDir=dataDir;
   }
-  async call(args,{signal}={}) {
+  async call(args) {
     let stdout, stderr, failed=false;
     try { ({stdout,stderr}=await execute(this.binary,
       ['--data-dir',this.dataDir,'api','--api-version','1',...args],
-      {encoding:'utf8',maxBuffer:8*1024*1024,timeout:60000,signal})); }
+      {encoding:'utf8',maxBuffer:8*1024*1024,timeout:60000})); }
     catch (e) { failed=true; stdout=e.stdout; stderr=e.stderr; }
     let body;
     try { body=JSON.parse(failed ? stderr : stdout); }

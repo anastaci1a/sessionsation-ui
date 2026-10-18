@@ -1,12 +1,10 @@
 import {createInterface} from 'node:readline';
 import {Client,executePlan,targetArgs,display} from './client.mjs';
-import {runLauncher} from './launcher.mjs';
 
 const mode=process.argv[2]??'launcher';
 if (!['launcher','manage'].includes(mode)) { console.error('Usage: sessionsation-ui launcher|manage'); process.exit(2); }
-const animated=mode==='launcher'&&process.stdin.isTTY&&process.stdout.isTTY&&process.env.TERM!=='dumb';
-const lines=animated?null:createInterface({input:process.stdin,crlfDelay:Infinity});
-const input=lines?.[Symbol.asyncIterator]();
+const lines=createInterface({input:process.stdin,crlfDelay:Infinity});
+const input=lines[Symbol.asyncIterator]();
 const print=s=>console.log(display(s));
 async function ask(question) { process.stdout.write(`${display(question)} `); const r=await input.next(); return r.done ? null : r.value.trim(); }
 async function choose(title,items,label=x=>x.name??x.id) {
@@ -100,7 +98,6 @@ async function manage() {
     } catch(e) { print(`${e.code??'UI_ERROR'}: ${e.message}`); const response=await ask('Press Enter to refresh, or q to exit:'); if(response===null || response==='q') return; }
   }
 }
-try { if(animated){const result=await runLauncher(client);if(result){if(result.directory)process.chdir(result.directory);executePlan(result.plan);}}
-  else if(mode==='launcher') await launch(); else await manage(); }
+try { if(mode==='launcher') await launch(); else await manage(); }
 catch(e) { print(`${e.code??'UI_ERROR'}: ${e.message}`); process.exitCode=1; }
-finally { lines?.close(); }
+finally { lines.close(); }
