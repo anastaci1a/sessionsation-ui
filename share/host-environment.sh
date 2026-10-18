@@ -1,7 +1,7 @@
 # Terminal host context only; no account, credential or provider operations.
 sessionsation_host_environment() {
   [[ ${HERDR_ENV:-} == 1 ]] || return 0
-  if [[ ! ${HERDR_PANE_ID:-} =~ ^w[0-9]+:p[0-9]+$ ]]; then
+  if [[ ! ${HERDR_PANE_ID:-} =~ ^w[0-9A-Za-z]+:p[0-9A-Za-z]+$ ]]; then
     printf '%s\n' 'HERDR_HOST_CONTEXT: missing or invalid HERDR_PANE_ID; open a new HERDR terminal.' >&2
     return 1
   fi

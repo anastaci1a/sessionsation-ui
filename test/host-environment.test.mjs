@@ -23,6 +23,7 @@ async function fixture(t) {
 async function normalized(env){return run('/bin/bash',['-c','source "$1"; sessionsation_host_environment || exit; printf "%s|%s" "${SESSIONSATION_HERDR_SESSION-}" "${HERDR_SESSION-}"','test',helper],{env});}
 test('default HERDR missing session is resolved from real symlinked socket',async t=>{
   const f=await fixture(t);assert.equal((await normalized(f.env)).stdout,'default|');
+  assert.equal((await normalized({...f.env,HERDR_PANE_ID:'wA:pB'})).stdout,'default|');
 });
 test('named and explicit host contexts retain their exact session',async t=>{
   const f=await fixture(t);assert.equal((await normalized({...f.env,HERDR_SESSION:'named'})).stdout,'|named');assert.equal((await normalized({...f.env,SESSIONSATION_HERDR_SESSION:'explicit'})).stdout,'explicit|');
