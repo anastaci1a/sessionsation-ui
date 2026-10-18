@@ -95,5 +95,17 @@
     },
     "agent_dm_data_and_receipts": "untouched"
   },
-  "evidence": "popup-evidence.json"
+  "evidence": "popup-evidence.json",
+  "workspace_permissions": {
+    "scope": [
+      "/mnt/user/live/projects/sessionsation",
+      "/mnt/user/live/projects/sessionsation-ui"
+    ],
+    "group": "users",
+    "directories": "group rwx + setgid; default user/group/users/mask rwx, other none",
+    "files": "group rw, existing executable bits preserved",
+    "symlinks": "not followed",
+    "backup": "/mnt/user/appdata/sessionsation-ui/config-backups/project-permissions-before-20261018.acl",
+    "verification": "whole-tree group/mode scan clean; nobody:users read/write/create/rename/delete passed in both repositories"
+  }
 }

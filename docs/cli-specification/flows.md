@@ -21,18 +21,15 @@ New Terminal prints a green readiness line and returns to the calling shell.
 Focused home Exit actually exits that shell. Esc returns to shell without exiting
 it. Herdr runs the configured binary, leaves the alternate screen while attached,
 then returns to the same menu selection on detach. These are separate actions;
-these reference actions are distinct from cancellation and agent Stop. The target
-only creates new sessions; those reference shell/viewer actions are not ported.
+these reference actions are distinct from cancellation and agent Stop. Those
+reference shell/viewer actions are not ported directly.
 
-Target scope is new-session creation with account, directory and destination HERDR
-Space/workspace selection. Existing-session lists, resume, switching/attachment,
-standalone Plain Shell, nested Herdr, shell Exit, jobs and management are excluded.
-Preserve visual focus/navigation, not irrelevant action wiring. Installed `manage`
-and the numbered launcher remain unchanged while the replacement is discussed.
-The planned HERDR entry and exit behavior is specified in
-[architecture](architecture.md#user-flow):
-the popup requests a separate normal tab, then exits after confirmed handoff.
-Today's opaque exec plans alone do not implement that flow.
+Target creation, account/session management and explicit Focus tab behavior are
+defined in [architecture](architecture.md#user-flow). Preserve visual navigation
+while keeping lifecycle actions in the public sessionsation contract. Standalone
+Plain Shell, nested Herdr and shell Exit remain excluded. Creation requests a
+separate normal tab and exits after confirmed handoff, unless the user continues
+in the background. The preserved numbered launcher remains a rollback option.
 
 ## Reference creation and accounts
 
@@ -91,11 +88,11 @@ set-option uses exact session target plus colon, while attach/switch uses exact
 target. One ordered tmux command queue prepares recency/window/pane, and failure
 prevents attachment. Existing tmux clients switch; otherwise attach.
 
-This entire existing-session presentation/open flow is reference-only and excluded
-from the new-session launcher. Its audit preserves source coverage, not a planned
-Resume screen. Destination selection uses HERDR workspaces, not an agent/session
-list; [destination and ownership](architecture.md#destination-and-ownership) defines
-the target boundary.
+This automatic presentation/open flow remains reference-only. In the expanded
+target, selecting a session opens its action menu; Focus tab and Resume are
+separate explicit actions. Destination selection uses HERDR workspaces, not an
+agent/session list; [destination and ownership](architecture.md#destination-and-ownership)
+defines the target boundary.
 
 ## Discovery and errors
 

@@ -28,7 +28,7 @@
       "failed": 0,
       "standard_command": "scripts/check.sh",
       "host_test": "installed_herdr_new_tab_handoff_retains_exact_account_and_shell",
-      "standard_source": "277ec18e54f24b529596a486cd7617a3dd0b7a30",
+      "standard_source": "95950a2f4d84677340414ad6be98dbb362391761",
       "final_receipt_regression": {
         "source": "95950a2f4d84677340414ad6be98dbb362391761",
         "passed": true,
@@ -38,7 +38,18 @@
           "isolated HERDR new/same-account resume/transferred resume/stale request/dedup/receipt after Stop"
         ],
         "duration_seconds": 12.57
-      }
+      },
+      "tests": {
+        "unit": 117,
+        "cli": 7,
+        "external_move": 58,
+        "external_move_ignored": 1,
+        "messaging_cli": 8,
+        "persistence": 6,
+        "scheduling": 29,
+        "transport": 3
+      },
+      "passed": true
     }
   },
   "pty": {
