@@ -49,7 +49,13 @@
       "Render timings exclude backend/provider startup and terminal transport",
       "No new native model session was launched",
       "Actual HERDR viewer visual check remains an operator check; wrapper/environment regressions passed"
-    ]
+    ],
+    "installed_pty": {
+      "cases_passed": 5,
+      "tty_startup_ms": 60,
+      "escape_to_restored_shell_ms": 53,
+      "model_sessions_created": 0
+    }
   },
   "renderer_benchmark": {
     "scope": "synchronous renderer + navigation diff; excludes backend, provider startup and terminal transport",
@@ -84,7 +90,7 @@
     ]
   },
   "deployment": {
-    "status": "tested_candidate",
+    "status": "deployed",
     "source_branch": "redesign/terminal-launcher",
     "previous_ui_commit": "f18979cdf86c3637e9e24b3cb9db3a1769e7df74",
     "strategy": "Fast-forward existing source-backed checkout after tests; no HERDR reload/restart or backend configuration change",
@@ -93,6 +99,20 @@
     "rollback": "Restore the previously tested UI revision in the source-backed checkout; do not roll back backend data or use configuration receipts for a source-only UI repair",
     "model_sessions_created": 0,
     "backend_artifact_changed": false,
-    "pins_changed": false
+    "pins_changed": false,
+    "source_commit": "b869cd018da6a5d9095d83d9b0013386f4c84931",
+    "source_checkout": "/mnt/user/live/projects/sessionsation-ui",
+    "installed_entry": "/mnt/user/live/projects/sessionsation-ui/bin/sessionsation-shell",
+    "entry_hashes": {
+      "src/main.mjs": "bf5d7d8c2ee69ff567ab97f5f9de03fc5317cd9b6e98003af53542b8a598252e",
+      "src/terminal.mjs": "8aba65a3498a07b0d7706059732e149e6eac34f605cd5569a226d321d7e47bd8",
+      "src/launcher.mjs": "8ea46bd67fb3e5b912a148e1c70c892138a56f481ca3f564b7fd4aeaf230b0b1",
+      "bin/sessionsation-shell": "2dddb1ba288c37144644330e285891dc716ce08343246be3b1c677f22d97fd72",
+      "bin/sessionsation-ui": "2fda638cc383dc90c4e3331f0e66806d385af7d5a235f099d9fb470e17c0512b"
+    },
+    "protected_config_and_artifact_hashes_unchanged": true,
+    "existing_process_identities_retained": 31,
+    "herdr_reload": false,
+    "rollback_fixture": "Archived f18979c UI exits through its numbered launcher with /bin/false as backend; no backend call made. Restoring src/main.mjs and src/client.mjs from that revision selects the previous entrypoint; new renderer files may remain unused."
   }
 }
