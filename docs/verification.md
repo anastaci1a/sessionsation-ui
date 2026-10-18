@@ -11,7 +11,9 @@ linked from [architecture](architecture.md).
 
 ## Installed HERDR acceptance
 
-HERDR 0.9.5 accepted the manifest through an isolated registry. An owned headless
+HERDR 0.9.5 accepted the manifest. Plugin registration is user-wide; use
+`XDG_CONFIG_HOME` for isolated registration (`HERDR_DATA_DIR` does not isolate it).
+The requested plugin is linked in Ana's user registry. An owned headless
 server verified the default launcher and management overlay. Exiting management
 left the underlying terminal alive. Tests also verified:
 

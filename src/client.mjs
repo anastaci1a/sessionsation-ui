@@ -4,12 +4,13 @@ import {execFile} from 'node:child_process';
 import {isAbsolute} from 'node:path';
 import {promisify} from 'node:util';
 const execute = promisify(execFile);
+export const defaultClientConfig = () => existsSync('/mnt/user/appdata') ? '/mnt/user/appdata/sessionsation-ui/config.json' : homedir()+'/.config/sessionsation-ui/config.json';
 export class BackendError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 export class Client {
   constructor(options={}) {
-    const configPath=process.env.SESSIONSATION_UI_CONFIG ?? homedir()+'/.config/sessionsation-ui/config.json';
+    const configPath=process.env.SESSIONSATION_UI_CONFIG ?? defaultClientConfig();
     let stored={};
     if(existsSync(configPath)) { try { stored=JSON.parse(readFileSync(configPath,'utf8')); }
       catch { throw new BackendError('CONFIG_INVALID','Invalid UI configuration'); } }

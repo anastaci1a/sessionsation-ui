@@ -35,6 +35,7 @@ node scripts/configure.mjs apply --config /absolute/herdr/config.toml --binary /
 ```
 
 This prints the private rollback receipt path. It saves backend settings in
+`/mnt/user/appdata/sessionsation-ui/config.json` on Unraid, otherwise
 `~/.config/sessionsation-ui/config.json` (override with `--client-config`; clients
 then need `SESSIONSATION_UI_CONFIG`). Environment variables override stored settings.
 The configuration change sets HERDR's `terminal.default_shell` to this checkout's
