@@ -27,3 +27,11 @@ The installed frontend remains the numbered launcher. The animated redesign was
 reverted; the [reference specification](cli-specification/README.md) owns the
 intended fidelity requirements and [language discussion](cli-specification/architecture.md)
 before a replacement is built. Keep this document about implemented architecture.
+
+## Rust replacement under development
+
+The Rust library has a pure staged draft, versioned UI preferences, read-only
+path completion, bounded asynchronous public clients and a cell renderer. It is
+not connected to the installed entrypoint. Frame geometry is independent of option
+scrolling. See the [approved design](cli-specification/architecture.md) for target
+behavior; deterministic unit checks are not visual acceptance in HERDR.
