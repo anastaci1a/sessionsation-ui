@@ -3,9 +3,9 @@
   "kind": "Rust new-session popup; preserved legacy launcher and Agent DM selection",
   "artifacts": {
     "ui": {
-      "source_commit": "a28486b139dd894c24586ba6e2557c4b937ffd49",
-      "path": "/mnt/user/live/packages/sessionsation-ui/releases/a28486b139dd894c24586ba6e2557c4b937ffd49/sessionsation-ui",
-      "sha256": "486b236454b42097e0530913548315311de5e233122526b91bf18f0f363fbf72",
+      "source_commit": "0cd38320698f3a716953b45a5fba4bd63222cec4",
+      "path": "/mnt/user/live/packages/sessionsation-ui/releases/0cd38320698f3a716953b45a5fba4bd63222cec4/sessionsation-ui",
+      "sha256": "ff24ddbc59806138453d4817d148eda431dcb0c542442e051acc7d3173cfab82",
       "cargo_lock_sha256": "23c023cc7e9e3c1b1990ad39d0bed7e62085d7058a0e2340de5ea48ec4900dc8",
       "profile": "release",
       "rust_version": "1.95.0",
@@ -34,8 +34,8 @@
     "plugin": "sessionsation",
     "entrypoint": "launcher",
     "geometry": {
-      "width": "50%",
-      "height": "50%"
+      "width": "90%",
+      "height": "65%"
     },
     "future_terminal_shell": "/bin/bash",
     "runtime_pointer": "/mnt/user/live/projects/sessionsation-ui/.runtime/sessionsation-ui",
@@ -47,7 +47,21 @@
     "rollback_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/launcher-d8b0999e-90a4-48a0-8ad6-e024a966b8bb.json",
     "rollback_command": "node scripts/configure.mjs rollback /mnt/user/appdata/sessionsation-ui/config-backups/launcher-d8b0999e-90a4-48a0-8ad6-e024a966b8bb.json",
     "reload_command": "herdr --session default server reload-config",
-    "rollback_restores": "pre-popup default numbered launcher and exact HERDR configuration; removes popup client config; installed artifacts and UI preferences retained"
+    "rollback_restores": "pre-popup default numbered launcher and exact HERDR configuration; removes popup client config; installed artifacts and UI preferences retained",
+    "runtime_update": {
+      "backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/popup-layout-c2bbe823-2e26-4ebc-9eae-1ae261189cc8.json",
+      "previous_ui": {
+        "source_commit": "a28486b139dd894c24586ba6e2557c4b937ffd49",
+        "path": "/mnt/user/live/packages/sessionsation-ui/releases/a28486b139dd894c24586ba6e2557c4b937ffd49/sessionsation-ui",
+        "sha256": "486b236454b42097e0530913548315311de5e233122526b91bf18f0f363fbf72",
+        "cargo_lock_sha256": "23c023cc7e9e3c1b1990ad39d0bed7e62085d7058a0e2340de5ea48ec4900dc8",
+        "profile": "release",
+        "rust_version": "1.95.0",
+        "minimum_rust_version": "1.88"
+      },
+      "previous_manifest_revision": "f6b6bff",
+      "rollback": "Restore the previous UI pointer and manifest from the private receipt, then relink the plugin. The original full-setup rollback command is unchanged."
+    }
   },
   "preserved": {
     "legacy_client_config": "/mnt/user/appdata/sessionsation-ui/config.json",

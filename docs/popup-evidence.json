@@ -2,12 +2,12 @@
   "schema_version": 1,
   "scope": "Rust new-session popup; isolated fixtures only; no Agent DM activation",
   "source": {
-    "ui": "a28486b139dd894c24586ba6e2557c4b937ffd49",
+    "ui": "0cd38320698f3a716953b45a5fba4bd63222cec4",
     "backend": "8156e979e494683b6738acd13297458cad8388bf"
   },
   "checks": {
     "rust": {
-      "unit_passed": 24,
+      "unit_passed": 29,
       "visual_snapshot_test_passed": 1,
       "golden_frames": 4,
       "failed": 0,
@@ -33,31 +33,15 @@
   "pty": {
     "startup": {
       "samples": 20,
-      "p50_ms": 4.966765991412103,
-      "p95_ms": 5.581281962804496,
-      "max_ms": 5.581281962804496
+      "p50_ms": 5.314702983014286,
+      "p95_ms": 6.16954208817333,
+      "max_ms": 6.16954208817333
     },
     "input": {
       "samples": 238,
-      "p50_ms": 0.3170459531247616,
-      "p95_ms": 0.6150269182398915,
-      "max_ms": 0.987054081633687
-    },
-    "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration",
-    "models": 0
-  },
-  "preferences_regression": {
-    "startup": {
-      "samples": 5,
-      "p50_ms": 4.2935030069202185,
-      "p95_ms": 4.4054900063201785,
-      "max_ms": 4.4054900063201785
-    },
-    "input": {
-      "samples": 208,
-      "p50_ms": 0.39699405897408724,
-      "p95_ms": 0.887800008058548,
-      "max_ms": 1.1619770666584373
+      "p50_ms": 0.3448269562795758,
+      "p95_ms": 0.8905760478228331,
+      "max_ms": 1.0758889839053154
     },
     "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
     "models": 0
@@ -65,19 +49,21 @@
   "herdr": {
     "keybind_startup": {
       "samples": 20,
-      "p50_ms": 159.5511370105669,
-      "p95_ms": 176.7008330207318,
-      "max_ms": 176.7008330207318
+      "p50_ms": 160.46663105953485,
+      "p95_ms": 172.33108798973262,
+      "max_ms": 172.33108798973262
     },
     "installed_herdr": "0.9.5",
-    "plugin_to_first_paint_ms": 172.58943698834628,
+    "plugin_to_first_paint_ms": 275.0238199951127,
     "popup_size": [
-      64,
-      21
+      117,
+      28
     ],
     "checks": [
       "origin context without pane ID",
-      "half-size popup",
+      "90% width / 65% height popup",
+      "ui_busy refusal",
+      "real host resize preserves draft",
       "selected destination normal tab",
       "staged directory",
       "exact name/account",
@@ -90,58 +76,52 @@
   "frames": [
     {
       "height": 24,
-      "max_ms": 0.27605,
-      "mean_bytes": 1070,
-      "p50_ms": 0.083985,
-      "p95_ms": 0.112688,
+      "max_ms": 0.255572,
+      "mean_bytes": 1079,
+      "p50_ms": 0.07563,
+      "p95_ms": 0.098762,
       "samples": 600,
       "width": 80
     },
     {
       "height": 48,
-      "max_ms": 0.709731,
-      "mean_bytes": 3481,
-      "p50_ms": 0.316495,
-      "p95_ms": 0.466623,
+      "max_ms": 0.678163,
+      "mean_bytes": 3480,
+      "p50_ms": 0.26373800000000003,
+      "p95_ms": 0.35826199999999997,
       "samples": 600,
       "width": 160
     }
   ],
   "deployment": {
-    "herdr_config_check": "passed",
-    "default_server_reload": {
-      "status": "applied",
-      "diagnostics": []
-    },
-    "protected_processes": 31,
+    "herdr_config_check": "passed; host configuration unchanged",
+    "plugin_registration": "accepted launcher width 90%, height 65%",
+    "protected_processes": 28,
     "changed_process_identities": 0,
-    "model_sessions_started": 0
+    "model_sessions_started": 0,
+    "protected_backend_hashes": "unchanged"
   },
-  "herdr_modal_resize": {
-    "keybind_startup": {
-      "samples": 20,
-      "p50_ms": 159.32836499996483,
-      "p95_ms": 176.8105069641024,
-      "max_ms": 176.8105069641024
+  "decoder_and_preferences_regression": {
+    "startup": {
+      "samples": 5,
+      "p50_ms": 4.51596500352025,
+      "p95_ms": 5.198578000999987,
+      "max_ms": 5.198578000999987
     },
-    "installed_herdr": "0.9.5",
-    "plugin_to_first_paint_ms": 277.36477192956954,
-    "popup_size": [
-      64,
-      21
-    ],
-    "checks": [
-      "origin context without pane ID",
-      "half-size popup",
-      "ui_busy refusal",
-      "real host resize preserves draft",
-      "selected destination normal tab",
-      "staged directory",
-      "exact name/account",
-      "focus then popup exit",
-      "second popup cancel preserves new terminal",
-      "origin shell unchanged"
-    ],
+    "input": {
+      "samples": 208,
+      "p50_ms": 0.5869549931958318,
+      "p95_ms": 0.9437541011720896,
+      "max_ms": 1.0726519394665956
+    },
+    "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
     "models": 0
-  }
+  },
+  "layout_regressions": [
+    "Configuration labels and complete-fit optional directory previews",
+    "Back beside top option; Home expands to Close",
+    "Right/Tab action rows are no-ops",
+    "Focused Space default; unset without focus; explicit choice and highlighted IDs survive refresh/reorder",
+    "Summary fields/separator/Start stay contiguous across heights"
+  ]
 }
