@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "scope": "Rust new-session popup; isolated fixtures only; no Agent DM activation",
+  "scope": "Rust account/session popup; isolated synthetic provider acceptance; no model turns or Agent DM activation",
   "source": {
-    "ui": "0cd38320698f3a716953b45a5fba4bd63222cec4",
-    "backend": "8156e979e494683b6738acd13297458cad8388bf"
+    "ui": "acc9281c3ebfdbbb9b8e2dd876c64280da130afa",
+    "backend": "95950a2f4d84677340414ad6be98dbb362391761"
   },
   "checks": {
     "rust": {
-      "unit_passed": 29,
-      "visual_snapshot_test_passed": 1,
-      "golden_frames": 4,
+      "unit_passed": 44,
+      "visual_snapshot_test_passed": 2,
+      "golden_frames": 9,
       "failed": 0,
       "command": "scripts/check-rust.sh"
     },
@@ -23,25 +23,36 @@
       "command": "npm run check"
     },
     "backend": {
-      "standard_tests_passed": 226,
+      "standard_tests_passed": 228,
       "installed_herdr_test_passed": 1,
       "failed": 0,
-      "standard_command": "SESSIONSATION_CHECK_TARGET=target-popup scripts/check.sh",
-      "host_test": "installed_herdr_new_tab_handoff_retains_exact_account_and_shell"
+      "standard_command": "scripts/check.sh",
+      "host_test": "installed_herdr_new_tab_handoff_retains_exact_account_and_shell",
+      "standard_source": "277ec18e54f24b529596a486cd7617a3dd0b7a30",
+      "final_receipt_regression": {
+        "source": "95950a2f4d84677340414ad6be98dbb362391761",
+        "passed": true,
+        "checks": [
+          "format",
+          "Clippy all targets",
+          "isolated HERDR new/same-account resume/transferred resume/stale request/dedup/receipt after Stop"
+        ],
+        "duration_seconds": 12.57
+      }
     }
   },
   "pty": {
     "startup": {
       "samples": 20,
-      "p50_ms": 5.314702983014286,
-      "p95_ms": 6.16954208817333,
-      "max_ms": 6.16954208817333
+      "p50_ms": 5.706558004021645,
+      "p95_ms": 7.928723935037851,
+      "max_ms": 7.928723935037851
     },
     "input": {
       "samples": 238,
-      "p50_ms": 0.3448269562795758,
-      "p95_ms": 0.8905760478228331,
-      "max_ms": 1.0758889839053154
+      "p50_ms": 0.36852096673101187,
+      "p95_ms": 0.901476014405489,
+      "max_ms": 1.2883610324934125
     },
     "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
     "models": 0
@@ -49,12 +60,12 @@
   "herdr": {
     "keybind_startup": {
       "samples": 20,
-      "p50_ms": 160.46663105953485,
-      "p95_ms": 172.33108798973262,
-      "max_ms": 172.33108798973262
+      "p50_ms": 175.96158606465906,
+      "p95_ms": 217.2491590026766,
+      "max_ms": 217.2491590026766
     },
     "installed_herdr": "0.9.5",
-    "plugin_to_first_paint_ms": 275.0238199951127,
+    "plugin_to_first_paint_ms": 264.5428440300748,
     "popup_size": [
       117,
       28
@@ -76,46 +87,31 @@
   "frames": [
     {
       "height": 24,
-      "max_ms": 0.255572,
-      "mean_bytes": 1079,
-      "p50_ms": 0.07563,
-      "p95_ms": 0.098762,
+      "width": 80,
       "samples": 600,
-      "width": 80
+      "p50_ms": 0.075119,
+      "p95_ms": 0.100626,
+      "max_ms": 0.370094,
+      "mean_bytes": 1079
     },
     {
       "height": 48,
-      "max_ms": 0.678163,
-      "mean_bytes": 3480,
-      "p50_ms": 0.26373800000000003,
-      "p95_ms": 0.35826199999999997,
+      "width": 160,
       "samples": 600,
-      "width": 160
+      "p50_ms": 0.263227,
+      "p95_ms": 0.363071,
+      "max_ms": 0.555827,
+      "mean_bytes": 3480
     }
   ],
   "deployment": {
-    "herdr_config_check": "passed; host configuration unchanged",
-    "plugin_registration": "accepted launcher width 90%, height 65%",
-    "protected_processes": 28,
+    "herdr_config": "unchanged; 90% width / 65% height and prefix+shift+l retained",
+    "protected_processes": 24,
     "changed_process_identities": 0,
     "model_sessions_started": 0,
-    "protected_backend_hashes": "unchanged"
-  },
-  "decoder_and_preferences_regression": {
-    "startup": {
-      "samples": 5,
-      "p50_ms": 4.51596500352025,
-      "p95_ms": 5.198578000999987,
-      "max_ms": 5.198578000999987
-    },
-    "input": {
-      "samples": 208,
-      "p50_ms": 0.5869549931958318,
-      "p95_ms": 0.9437541011720896,
-      "max_ms": 1.0726519394665956
-    },
-    "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
-    "models": 0
+    "protected_backend_hashes": "original switcher and Agent DM pin unchanged",
+    "data_root": "/mnt/user/appdata/codex-switcher",
+    "supervisor": "existing original sole owner; no restart or competing owner"
   },
   "layout_regressions": [
     "Configuration labels and complete-fit optional directory previews",
@@ -123,5 +119,26 @@
     "Right/Tab action rows are no-ops",
     "Focused Space default; unset without focus; explicit choice and highlighted IDs survive refresh/reorder",
     "Summary fields/separator/Start stay contiguous across heights"
+  ],
+  "management": {
+    "passed": true,
+    "command": "python3 scripts/test-management.py --binary target-ui/release/sessionsation-ui",
+    "checks": [
+      "compact bars and separators",
+      "mixed-window right-aligned picker",
+      "saved selection never attaches",
+      "resume captured identity and readonly directory",
+      "background completion retains menu",
+      "reopened receipt without resend",
+      "TTY restoration"
+    ],
+    "models": 0
+  },
+  "limitations": [
+    "No live model/account mutation acceptance",
+    "Claude preparation only",
+    "HERDR outer border cannot follow animated status bar",
+    "Dynamic/terminal HERDR themes use explicit configured-base approximation",
+    "External plugin invocation measured 264.54ms; configured keybind p95 met 250ms"
   ]
 }

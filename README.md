@@ -9,8 +9,8 @@ lifecycle operations remain owned by the sessionsation CLI.
 The source now includes responsive account usage, account actions and lifecycle
 menus, saved-session Resume and recoverable background progress.
 [Issue 7](https://github.com/anastaci1a/sessionsation-ui/issues/7) defines the expanded scope.
-The [deployment record](docs/deployment.json) identifies the older installed launcher;
-source changes do not automatically replace that artifact.
+The [deployment record](docs/deployment.json) identifies the tested installed artifacts
+and preserved rollback paths.
 
 The directory follows `projects-root/session-name` until you choose a different path.
 Nothing creates directories or Spaces before **Start Session**, including the directory
