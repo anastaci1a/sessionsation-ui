@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "kind": "launcher-only performance repair; not Agent DM activation",
+  "source": {
+    "repository": "https://github.com/anastaci1a/sessionsation",
+    "commit": "0b8a394999234fcedc8aa869e4d96fb74fba1b1d",
+    "base_commit": "e4d7833e83e652dd87c02568e03fa6f9f786412f",
+    "branch": "repair/launcher-latency",
+    "cargo_lock_sha256": "13959dc2de624ff7f6bc4a7fed537b01b6d89572b61e8bb9238cb748afc17265"
+  },
+  "artifact": {
+    "path": "/mnt/user/live/packages/sessionsation/launcher/0b8a394999234fcedc8aa869e4d96fb74fba1b1d/sessionsation",
+    "sha256": "f34472c60cef3cda7964d420245ed984398f09fafd2d7c8bf216d1aadcb6ded5",
+    "profile": "debug",
+    "rust_version": "1.95.0",
+    "container_image": "sessionsation-build-tools:local",
+    "container_image_id": "sha256:4524fc318ec3fe78073bcf4573f940862031035901da2f46391c273a1a5bf320",
+    "build": "cargo build --offline --locked; network-disabled container, dependency cache read-only, no live homes/sockets mounted"
+  },
+  "verification": {
+    "tests_passed": 213,
+    "failed": 0,
+    "ignored": 0,
+    "test_threads": 2,
+    "checks": [
+      "fmt",
+      "Clippy all targets with warnings denied",
+      "locked offline Rust suite",
+      "documentation links",
+      "schema/fixtures and CLI envelopes"
+    ]
+  },
+  "selection": {
+    "client_config": "/mnt/user/appdata/sessionsation-ui/config.json",
+    "data_root": "/mnt/user/appdata/codex-switcher",
+    "credential_supervisor": "existing original data-root owner; unchanged",
+    "rollback_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/launcher-latency-8dea442d-6b68-49e6-ac88-d17d8e634de2.json",
+    "rollback_restores": "pre-latency e4d7833 launcher selection",
+    "herdr_config_changed": false
+  },
+  "isolation": {
+    "agent_dm_review_artifact_changed": false,
+    "agent_dm_data_changed": false,
+    "model_sessions_created": 0,
+    "contract_or_delivery_semantics_changed": false
+  }
+}

@@ -52,6 +52,32 @@ retained shell was still present. The owned smoke workspace was closed afterward
 
 This repair changes launcher environment preparation only. No new model session,
 prompt, credential operation or native provider call was made to verify it.
-The selected e4d7833 CLI binary, Agent DM's pinned review artifact and its data are
-unchanged. Saved conversations from failed attempts are preserved; no automatic
+That environment-only repair retained the selected e4d7833 binary. The subsequent
+performance repair below selects a separate launcher build. Agent DM's pinned
+review artifact and its data remain unchanged. Saved conversations from failed attempts are preserved; no automatic
 retry or cleanup is performed. Existing terminals are not restarted or migrated.
+
+## Launcher responsiveness
+
+[Timing evidence](latency.json) records measured input-to-menu and execution-plan
+handoff boundaries, before/after sources and individual samples. Profiling found
+that live-terminal discovery spent most of its time parsing complete conversation
+rollouts. The backend now reads at most 64 KiB for activity hints, retaining unknown
+when evidence is absent or damaged. Mutation-time native idle/ownership checks and
+locks remain intact. Dead/replaced HERDR bindings are rejected before socket calls;
+their files and histories remain recoverable. New requests only the account list.
+
+Regression coverage includes bounded reads, conservative activity hints, stale
+binding avoidance, live-host confirmation and alphanumeric HERDR pane IDs. The
+[deployed artifact](deployment.json) passed all 213 backend tests and required
+checks. The same fixes on backend main passed 219 tests. Two earlier unrestricted
+parallel runs hit different worker-timing fixtures; targeted reproduction passed,
+and the complete suite passed with two independent cases at a time. Explicit
+concurrency tests retain their own workers; no operation safeguards were relaxed.
+
+An owned terminal on Satellite's actual default server passed New, Resume, Back
+and plain Shell with no model selected, then was closed. Timings use real read/plan
+calls but replace returned execution argv with an inert marker. They measure
+launcher overhead, not provider startup, model response or shell-prompt readiness.
+No new model session was started. Agent DM retains its isolated native acceptance
+test; this repair changes neither Submit/Queue semantics nor legacy receipts.

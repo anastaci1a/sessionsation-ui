@@ -67,14 +67,21 @@ shell starts, so later relaunches inherit it as well. User `.bashrc` is sourced 
 
 The source-backed launcher is configured on Satellite for future terminals using
 `/mnt/user/live/projects/sessionsation-ui/bin/sessionsation-shell`. Its client settings
-are `/mnt/user/appdata/sessionsation-ui/config.json`; the backend path is the
-verified e4d7833 development artifact recorded by the backend provenance manifest.
-It uses the explicit existing-account data root through the existing supervisor.
-This does not install a new standalone backend or activate the Agent DM adapter.
+are `/mnt/user/appdata/sessionsation-ui/config.json`. The authoritative
+[deployment manifest](deployment.json) records the selected immutable backend
+path/hash, source, build checks, explicit data root and repair rollback receipt.
+This launcher-only build starts from e4d7833 with bounded discovery and HERDR handle
+repairs. It excludes the staged Agent DM observer candidate. The existing data-root
+supervisor retains credential ownership; no adapter activation is implied.
 
-The private rollback receipt is
-`/mnt/user/appdata/sessionsation-ui/config-backups/launcher-1e1b8d65-5fb5-4b63-8db5-ff0d60e44c9b.json`.
-The default server reloaded without diagnostics, and a new owned terminal displayed
+To undo the performance repair, run the documented rollback command with the
+repair receipt from the manifest; it restores the previous e4d7833 selection.
+No HERDR reload is needed for that client setting. To undo the entire launcher
+setup afterward, apply the original private receipt:
+`/mnt/user/appdata/sessionsation-ui/config-backups/launcher-1e1b8d65-5fb5-4b63-8db5-ff0d60e44c9b.json`,
+then reload configuration on the intended server. Rollback refuses conflicting
+edits, so restore the repair first. The default server reloaded without diagnostics
+during original setup, and a new owned terminal displayed
 the menu with its requested cwd. The smoke terminal was then closed. Existing
 agents and the original pane retained their process/terminal identities. Other
 already-running servers need their own explicit configuration reload for future
