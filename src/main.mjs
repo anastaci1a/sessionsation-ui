@@ -61,6 +61,7 @@ async function accountMenu(state) {
   if (action==='usage') { const end=Math.floor(Date.now()/1000); return show(await client.call(['account','usage',a.id,'--start',String(end-86400),'--end',String(end)])); }
   if (action==='remove') {
     const preview=await client.call(['account','remove',a.id]); show(preview);
+    if (!preview.can_remove) { print('Account is in use; resolve active sessions/operations before removal.'); return; }
     const typed=await ask(`Removal preserves recoverable local history. Type ${a.id} to confirm:`);
     if (typed!==a.id) return;
     return show(await client.call(['account','remove',a.id,'--confirm',typed,'--revision',preview.revision]));

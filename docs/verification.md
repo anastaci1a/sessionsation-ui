@@ -1,18 +1,30 @@
 # Verification
 
 Run `npm test` for isolated client/configuration regressions and `npm run check`
-for JavaScript/Bash syntax, manifest fields and documentation links. Eleven tests
-pass: literal argv, structured stale/version/protocol errors, exact launcher exec,
-viewer exit without lifecycle mutation, plain-shell plan execution, control-character
-sanitization, exact configuration rollback, concurrent-edit refusal, ambiguous or
-symlinked config rejection and quoted paths. No test uses credentials or models.
-Backend evidence/provenance remains authoritative in [architecture](architecture.md).
+for JavaScript/Bash syntax, manifest fields and documentation links. Fourteen tests
+pass, including literal argv, stale/version/protocol errors, exact launcher exec,
+viewer exit without lifecycle mutation, plain-shell execution, selected-session
+switch identity/generation, exact removal confirmation/revision, active-account
+refusal, configuration rollback, concurrent-edit refusal and unsafe-config rejection.
+No fixture test uses credentials or models. Backend evidence/provenance remains
+linked from [architecture](architecture.md).
 
-Installed HERDR 0.9.5 accepted the manifest via an isolated plugin registry. An owned
-headless test server displayed the default launcher and the management overlay;
-exiting management left its underlying terminal alive. The launcher uses an actual
-v1 backend against an empty, separate test root for these checks.
+## Installed HERDR acceptance
 
-Real account enrollment/removal, UI-driven model usage and global default-launcher
-configuration are not established by fixture tests. Claude remains preparation-only.
-Further retained-shell and rollback acceptance must pass before global configuration.
+HERDR 0.9.5 accepted the manifest through an isolated registry. An owned headless
+server verified the default launcher and management overlay. Exiting management
+left the underlying terminal alive. Tests also verified:
+
+- Plain-shell selection and menu exit retain a host shell.
+- The requested cwd survives user shell initialization.
+- The backend-created-pane bypass skips the menu and retains the original shell.
+- Applying actual configuration shows the menu in a new terminal; rollback restores
+  byte-identical original configuration and original plain-shell behavior after reload.
+- UI resume of the authorized disposable Codex conversation retains the stable
+  backend ID, provider UUID, selected `codex:personal` account, cwd and exact native
+  app-server socket. Discovery recognizes its HERDR attachment and lifecycle capabilities.
+- Configuration reload/rollback leaves that running disposable agent unchanged.
+
+No additional model message or real enrollment/removal was needed for UI acceptance.
+Claude remains preparation-only. Global future-terminal configuration is separate
+from isolated acceptance and is recorded only after application.

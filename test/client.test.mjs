@@ -48,3 +48,26 @@ test('plain-shell launcher execs backend plan, not provider command',async t=>{
   let resolve,reject;const result=new Promise((a,b)=>{resolve=a;reject=b});child.stdin.end('3\n'); assert.match(await result,/PLAN_EXECUTED/);
 });
 test('display removes terminal control characters',()=>assert.equal(display('\x1bhello\r\n'),'hello'));
+async function menuFixture(t,{canRemove=true}={}) {
+  const state={accounts:[{id:'codex:source',name:'source',enabled:true,selectable:true,membership:'enrolled'},{id:'codex:dest',name:'dest',enabled:true,selectable:true,membership:'enrolled'}],sessions:[{id:'stable-id',name:'chosen',account_id:'codex:source',generation:'captured-generation',availability:'running',capabilities:{rename:true,switch_account:true,restart:true,stop:true}}],account_source:'fixture',observed_at:1};
+  const f=await fixture(t,`const fs=require('node:fs');const args=process.argv.slice(7);fs.appendFileSync(__filename+'.calls',JSON.stringify(args)+'\\n');const result=args[0]==='state'?${JSON.stringify(state)}:args[0]==='account' && args[1]==='remove' && args.length===3?{can_remove:${canRemove},revision:'preview-revision'}:{phase:'queued'};console.log(JSON.stringify({api_version:1,ok:true,result}));`);
+  async function menu(input) {
+    return await new Promise((resolve,reject)=>{const child=execFile(process.execPath,['src/main.mjs','manage'],{env:{...process.env,SESSIONSATION_BIN:f.binary,SESSIONSATION_DATA_DIR:join(f.dir,'data')}},(e,stdout)=>e?reject(e):resolve(stdout));child.stdin.end(input);});
+  }
+  const calls=async()=> (await readFile(f.binary+'.calls','utf8')).trim().split('\n').map(JSON.parse);
+  return {...f,menu,calls};
+}
+test('selected-session switch uses stable ID and captured generation, with explicit consent',async t=>{
+  const f=await menuFixture(t);await f.menu('2\n1\n3\n1\nyes\n6\n');
+  assert.deepEqual((await f.calls()).filter(a=>a[0]==='switch'),[['switch','--session','stable-id','--expected-generation','captured-generation','--to','codex:dest']]);
+});
+test('removal carries preview revision only after exact typed confirmation',async t=>{
+  const f=await menuFixture(t);await f.menu('1\n1\n5\ncodex:source\n6\n');
+  assert.deepEqual((await f.calls()).filter(a=>a[0]==='account'),[['account','remove','codex:source'],['account','remove','codex:source','--confirm','codex:source','--revision','preview-revision']]);
+});
+test('incorrect confirmation and active-account preview never submit removal',async t=>{
+  for(const canRemove of [true,false]){
+    const f=await menuFixture(t,{canRemove});await f.menu(canRemove?'1\n1\n5\nwrong\n6\n':'1\n1\n5\n6\n');
+    assert.deepEqual((await f.calls()).filter(a=>a[0]==='account'),[['account','remove','codex:source']]);
+  }
+});
