@@ -86,6 +86,7 @@ enum Message {
     Directory(u64, Result<Listing, String>),
     Validation(u64, Result<(), String>),
     Receipt(Result<Value, String>),
+    Focused(Result<(), String>),
     Saved(Result<(), String>),
 }
 struct Effects {
@@ -194,6 +195,18 @@ impl Effects {
             let _ = tx.send(Message::Receipt(result)).await;
         });
     }
+    fn focus(&self, tab: String) {
+        let tx = self.sender.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let result = client
+                .host(&["tab", "focus", &tab])
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Message::Focused(result)).await;
+        });
+    }
 }
 fn now() -> i64 {
     SystemTime::now()
@@ -256,12 +269,17 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     let client = Client::load()?;
     let pref = preferences.unwrap_or_else(|| config_path().with_file_name("preferences.json"));
     let prefs = Preferences::load(&pref)?;
-    let initial = std::env::var_os("HERDR_ACTIVE_PANE_CWD")
-        .map(PathBuf::from)
+    let (origin_space, origin_cwd) = sessionsation_ui::client::origin(
+        std::env::var("HERDR_PLUGIN_CONTEXT_JSON").ok().as_deref(),
+    )?;
+    let initial = origin_cwd
+        .or_else(|| std::env::var_os("HERDR_ACTIVE_PANE_CWD").map(PathBuf::from))
         .unwrap_or(std::env::current_dir()?);
-    let space = std::env::var("HERDR_ACTIVE_WORKSPACE_ID")
-        .or_else(|_| std::env::var("HERDR_WORKSPACE_ID"))
-        .ok();
+    let space = origin_space.or_else(|| {
+        std::env::var("HERDR_ACTIVE_WORKSPACE_ID")
+            .or_else(|_| std::env::var("HERDR_WORKSPACE_ID"))
+            .ok()
+    });
     let mut app = App::new(
         prefs,
         initial.clone(),
@@ -343,7 +361,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
          _=term_signal.recv()=>{app.exit=true;},_ = hup_signal.recv()=>{app.exit=true;},
          _=frame.tick()=>{app.expire_prefill(now());app.dirty=true;},
          _=refresh.tick(),if !inventory_pending&&app.request.is_none()=>{inventory_pending=true;effects.inventory();},
-         _=receipt.tick(),if app.request.is_some()&&!receipt_pending=>{receipt_pending=true;effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into());},
+         _=receipt.tick(),if app.request.is_some()&&!app.success&&!receipt_pending=>{receipt_pending=true;effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into());},
          message=rx.recv()=>match message.context("Input channel closed")? {
           Message::Input(Event::Key(k))if k.kind!=KeyEventKind::Release=>{next=app.key(k);},
           Message::Input(Event::Paste(s))=>{next=app.paste(&s);},
@@ -355,11 +373,12 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           Message::Validation(revision,result)=>app.validation(revision,result),
           Message::Receipt(result)=>{receipt_pending=false;match result {
            Ok(r)=>match r["phase"].as_str().unwrap_or("uncertain") {
-            "running"=>{app.success=true;app.prefs.last_account=app.draft.account.clone();next.push(Effect::Save);},
+            "running" if !app.success=>{app.success=true;if let Some(tab)=r["tab_id"].as_str(){effects.focus(tab.into());}else{app.error="Session running; receipt has no tab identity. Esc closes.".into();}},
             "failed"=>{app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",r["detail"].as_str().unwrap_or("inspect launch status"));},
             phase=>{app.error=format!("{phase}: {}",r["detail"].as_str().unwrap_or("waiting for confirmed handoff"));},
            },Err(e)=>{app.error=format!("{e}; reconciling original request");}
           }app.dirty=true;},
+          Message::Focused(result)=>{match result { Ok(())=>{app.prefs.last_account=app.draft.account.clone();next.push(Effect::Save);},Err(e)=>{app.error=format!("Session is running; tab focus failed: {e}. Esc closes.");}}app.dirty=true;},
           Message::Saved(result)=>{if let Err(e)=result{app.error=format!("Preferences were not saved: {e}");if !app.success{app.page=Page::Config;}app.dirty=true;}else if app.success {app.exit=true;}},
          }
         }

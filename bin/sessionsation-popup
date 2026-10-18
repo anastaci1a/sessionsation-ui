@@ -1,0 +1,6 @@
+#!/bin/sh
+# Entrypoint glue only; presentation and interactions live in the Rust executable.
+set -eu
+popup_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export SESSIONSATION_UI_CONFIG="${SESSIONSATION_UI_CONFIG:-$popup_root/.runtime/config.json}"
+exec "${SESSIONSATION_UI_BIN:-$popup_root/.runtime/sessionsation-ui}" "$@"

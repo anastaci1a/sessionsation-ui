@@ -5,8 +5,46 @@ Set `SESSIONSATION_BIN` to the verified absolute backend executable and
 `/mnt/user/appdata/codex-switcher` with its existing credential owner. The independent
 backend default is not an automatic import. See the backend ownership guidance.
 
-The current launcher is numbered text; the animated redesign was reverted.
-The [reference specification](cli-specification/README.md) describes a planned rebuild.
+The Rust popup creates new sessions only. Its [approved design](cli-specification/architecture.md) describes the interaction and ownership boundaries.
+
+## Popup setup
+
+Build/copy the Rust executable into `.runtime/sessionsation-ui` as shown in the
+[README](../README.md), or point that path to a verified immutable artifact.
+Register the repository with `herdr plugin link /absolute/path/to/sessionsation-ui --enabled`.
+Then configure an explicit, separate popup client file and your chosen binding:
+
+```sh
+node scripts/configure.mjs popup --config /absolute/herdr/config.toml --client-config /absolute/path/to/sessionsation-ui/.runtime/config.json --binary /absolute/pinned/sessionsation --data-dir /explicit/backend/root --backup-dir /private/backups --key prefix+shift+l
+herdr --session YOUR-SERVER server reload-config
+```
+
+The installer preserves the prefix and unrelated bindings, refuses a conflicting
+key, and prints a private rollback receipt. `--shell /bin/bash` optionally restores
+plain future tabs when replacing the previous default-menu setup; it does not
+restart terminals. The wrapper reads only its runtime artifact/client paths; all
+rendering, interaction and backend communication is Rust.
+
+Open **New Session**, edit Account, Space, Name and Directory in any order, then
+select Start Session. Pickers preserve the draft on Back. Existing automatic paths
+require explicit selection. Directory Enter selects; Right/Tab browses; Left goes
+up or focuses Back. Typing and paste edit the path; Ctrl-U clears. Create stages
+intent and never calls mkdir. Configuration uses the same picker and saves on Back.
+Missing per-Space roots remain unset, without a global fallback. Last-account prefill
+requires fresh usage within existing limits; manually selecting a backend-permitted
+account does not rewrite its limits.
+
+Start records one request UUID. A timeout is reconciled using that ID, never
+replayed. The popup exits after the backend confirms the exact process and HERDR
+focuses its new normal tab. Esc while starting detaches the viewer; inspect the
+printed UUID with `sessionsation api launch status --request-id UUID`. It does not
+stop or cancel an admitted launch. No credentials are stored in UI preferences.
+
+Rollback uses `node scripts/configure.mjs rollback /private/backups/launcher-RECEIPT.json`,
+then reload the intended HERDR server. It restores both configuration files exactly
+and refuses conflicting later edits. Versioned binaries can remain for recovery.
+
+## Preserved legacy entrypoints
 
 Run `./bin/sessionsation-ui launcher` in an ordinary terminal for new, resume or
 plain shell. New reads the account list directly; it does not scan conversation
@@ -17,7 +55,7 @@ backend operation. Capability hints determine available choices.
 
 No existing shell startup files or restored agents are modified.
 
-## Management plugin
+### Management plugin
 
 ```sh
 herdr plugin link /absolute/path/to/sessionsation-ui --enabled
@@ -31,7 +69,7 @@ or an explicit confirmation. Exiting the viewer never sends Stop. Usage displays
 only backend-reported data. Account removal shows the backend preview and requires
 typing the exact account ID; no credential/history purge is offered.
 
-## Future-terminal launcher
+### Legacy future-terminal launcher
 
 First verify the backend artifact and choose its root explicitly. Then:
 

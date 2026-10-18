@@ -8,4 +8,5 @@ pub mod directory;
 
 pub mod app;
 
+pub mod status;
 pub mod widgets;

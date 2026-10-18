@@ -3,7 +3,7 @@ use crate::{
     directory::Listing,
     draft::{Directory, Draft, Space, valid_name},
     preferences::{Mode, Preferences},
-    render::{Canvas, Cell, Field},
+    render::{Accent, Canvas, Cell, Field},
     widgets::{Options, Row, TextInput},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -72,6 +72,7 @@ pub struct App {
     auto_account: bool,
     pub dirty: bool,
     pending_child: Option<PathBuf>,
+    status: crate::status::Status,
 }
 impl App {
     pub fn new(
@@ -112,6 +113,7 @@ impl App {
             auto_account: true,
             dirty: true,
             pending_child: None,
+            status: crate::status::Status::default(),
         }
     }
     pub fn rows(&self) -> Vec<Row> {
@@ -751,14 +753,36 @@ impl App {
     }
     pub fn paint(&mut self, field: &mut Field, now: u64, width: usize, height: usize) -> Canvas {
         field.resize(width, height);
+        field.options_top = if self.is_form() { 5 } else { 3 };
         let mut canvas = field.paint(now);
-        let accent = field.accent(now);
         let white = Cell {
             fg: [238; 3],
             ..Cell::default()
         };
-        if width < 24 || height < 12 {
-            canvas.text(0, 0, "Resize terminal (24×12)", white.clone(), false);
+        let tokens: &[&str] = if matches!(self.page, Page::Directory(_)) {
+            &[
+                "▲/▼: Choose",
+                "▶/Tab: Open",
+                "◀: Parent",
+                "Enter: Select",
+                "Esc: Back",
+                "Ctrl-U: Clear",
+            ]
+        } else if self.is_form() {
+            &["Enter: Accept", "Esc: Back", "Ctrl-U: Clear"]
+        } else {
+            &["▲/▼/◀/▶: Move", "Enter/Space: Select", "Esc: Back"]
+        };
+        let hints = crate::widgets::hint_lines(tokens, width);
+        let footer = height.saturating_sub(hints.len());
+        if width < 24 || footer < 11 {
+            canvas.text(
+                0,
+                0,
+                &format!("Resize terminal (24×{})", 11 + hints.len()),
+                white.clone(),
+                false,
+            );
             if height > 1 {
                 canvas.text(0, 1, "Esc: Back / close", white, false);
             }
@@ -781,22 +805,16 @@ impl App {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let status = format!(
-            " {:02}:{:02}:{:02} | {}",
-            seconds / 3600 % 24,
-            seconds / 60 % 60,
-            seconds % 60,
-            self.initial.display()
-        );
+        let status = self.status.line(seconds as i64, &self.initial, width);
         let bar = Cell {
-            bg: Some(accent.map(|v| (v as u16 * 55 / 100) as u8)),
+            bg: Some(canvas.theme.as_ref().unwrap().bar(false)),
             ..white.clone()
         };
         canvas.text(0, 0, &" ".repeat(width), bar.clone(), false);
         canvas.text(0, 0, &status, bar, false);
         if !title.is_empty() {
             let bar = Cell {
-                bg: Some(accent.map(|v| (v as u16 * 35 / 100) as u8)),
+                bg: Some(canvas.theme.as_ref().unwrap().bar(true)),
                 bold: true,
                 ..white.clone()
             };
@@ -805,8 +823,8 @@ impl App {
         }
         let rows = self.rows();
         let top = if self.is_form() { 5 } else { 3 };
-        let bottom = height - 5 - usize::from(self.page == Page::Summary) * 2;
-        let (left, capacity) = self.options.paint(&mut canvas, &rows, top, bottom, accent);
+        let bottom = footer - 4 - usize::from(self.page == Page::Summary) * 2;
+        let (left, capacity) = self.options.paint(&mut canvas, &rows, top, bottom);
         if self.is_form() {
             let valid = if matches!(self.page, Page::Directory(_)) {
                 self.listing.existing || self.listing.creatable
@@ -817,28 +835,28 @@ impl App {
         }
         if self.page == Page::Summary {
             let enabled = self.draft.ready() && self.launch_supported && !self.pending;
-            canvas.text(
+            canvas.accent_text(
                 left,
-                height - 7,
+                footer - 6,
                 "•",
-                Cell {
-                    fg: accent,
-                    ..Cell::default()
+                Accent {
+                    brightness: 600,
+                    flash: false,
+                    ..Accent::default()
                 },
-                false,
             );
             Row::gate("Start Session", enabled).paint(
                 &mut canvas,
                 left,
-                height - 6,
+                footer - 5,
                 self.options.selected == 4 && !self.options.back,
-                accent,
+                self.options.back,
             );
         }
         if rows.len() > capacity {
             canvas.text(
                 left,
-                height - 4,
+                footer - 3,
                 &format!(
                     "{}–{} of {}",
                     self.options.scroll + 1,
@@ -868,7 +886,7 @@ impl App {
         };
         canvas.text(
             1,
-            height - 3,
+            footer - 2,
             &note,
             Cell {
                 fg: [215, 135, 0],
@@ -878,7 +896,7 @@ impl App {
         );
         canvas.text(
             2,
-            height - 2,
+            footer - 1,
             if self.options.back {
                 "◀— Back"
             } else {
@@ -895,23 +913,26 @@ impl App {
             },
             false,
         );
-        let hints = if matches!(self.page, Page::Directory(_)) {
-            "↑/↓ Choose  →/Tab Open  Enter Select  Esc Back"
-        } else if self.is_form() {
-            "Enter Accept  Esc Back  Ctrl-U Clear"
-        } else {
-            "↑/↓ Move  Enter/Space Select  Esc Back"
-        };
-        canvas.text(
-            2,
-            height - 1,
-            hints,
-            Cell {
-                fg: accent.map(|v| (v as u16 * 55 / 100) as u8),
-                ..Cell::default()
-            },
-            true,
-        );
+        let hint_width = hints
+            .iter()
+            .map(|s| unicode_width::UnicodeWidthStr::width(s.as_str()))
+            .max()
+            .unwrap_or(0);
+        let hint_left = width.saturating_sub(hint_width) / 2;
+        for (i, line) in hints.iter().enumerate() {
+            canvas.accent_text(
+                hint_left,
+                height - hints.len() + i,
+                line,
+                Accent {
+                    soft: true,
+                    brightness: 550,
+                    flash: false,
+                    ..Accent::default()
+                },
+            );
+        }
+        field.apply_masks(&canvas);
         canvas
     }
 }
@@ -978,5 +999,31 @@ mod tests {
         a.draft.name = "name".into();
         a.revalidate();
         assert_eq!(a.draft.directory, Directory::Unset);
+    }
+    #[test]
+    fn new_directory_edit_waits_for_matching_read_only_validation() {
+        let mut a = app();
+        a.page = Page::NewDirectory(Target::Global, "/tmp".into());
+        let effects = a.paste("planned-root");
+        assert!(matches!(&effects[..],[Effect::Inspect(_,path)] if path=="/tmp/planned-root"));
+        assert!(!a.rows()[0].enabled);
+        a.listing(
+            a.revision,
+            Ok(Listing {
+                creatable: true,
+                ..Listing::default()
+            }),
+        );
+        assert!(a.rows()[0].enabled);
+        a.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert!(!a.rows()[0].enabled);
+        a.listing(
+            a.revision - 1,
+            Ok(Listing {
+                creatable: true,
+                ..Listing::default()
+            }),
+        );
+        assert!(!a.rows()[0].enabled);
     }
 }

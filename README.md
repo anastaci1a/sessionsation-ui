@@ -1,26 +1,40 @@
 # sessionsation-ui
 
-A terminal launcher and thin HERDR management viewer for
-[sessionsation](https://github.com/anastaci1a/sessionsation). Account, credential and
-agent lifecycle decisions belong to the backend. Detaching a viewer leaves agents
-running.
+A Rust **new-session launcher** for HERDR and
+[sessionsation](https://github.com/anastaci1a/sessionsation). Open a terminal popup,
+choose an account, destination Space, name and directory, then start in a normal tab.
+Account management and agent lifecycle remain in the sessionsation CLI.
 
-Requires Node.js 22.18+, Bash, coreutils `readlink`, HERDR 0.9.5+ and a separately verified sessionsation
-CLI with public API v1. Claude remains preparation-only in the backend.
+The directory follows `projects-root/session-name` until you choose a different path.
+Nothing creates directories or Spaces before **Start Session**, including the directory
+picker's Create action. Closing the popup leaves running agents alone.
+
+Requires Linux, HERDR 0.9.5+, and a verified sessionsation backend with public launch
+API v1. Build from source with Rust 1.88+; Node.js 22.18+ runs the optional configuration
+installer and preserved legacy tools. Claude is preparation-only.
 
 ```sh
-export SESSIONSATION_BIN=/absolute/path/to/sessionsation
-export SESSIONSATION_DATA_DIR=/explicit/backend/data-root
-./bin/sessionsation-ui launcher
-./bin/sessionsation-ui manage
+CARGO_TARGET_DIR=target-ui cargo build --release --locked
+mkdir -p .runtime
+install -m 755 target-ui/release/sessionsation-ui .runtime/sessionsation-ui
+herdr plugin link "$PWD" --enabled
 ```
 
-The installed numbered launcher offers new sessions, saved-session resume and a plain shell. The
-management viewer provides account/usage inspection and backend-driven operations.
-The animated redesign has been rolled back. Its replacement is being specified
-from [cli-main-menu](docs/cli-specification/README.md) as a **new-session-only popup**:
-choose an account, directory and destination HERDR Space, then create a normal tab
-there. Ana approved the Rust replacement; it is being implemented and is not deployed.
-HERDR integration and future-terminal configuration are documented in
-[usage](docs/usage.md). See [documentation](docs/README.md) and
+Configure the explicit backend path/data root and your own binding using
+[setup instructions](docs/usage.md). Ana's binding is **prefix + uppercase L**.
+Configuration in the popup selects Global or Per-Space projects roots; inactive
+settings are retained. Start stays disabled until every choice is valid.
+
+Useful commands after setup:
+
+```sh
+./bin/sessionsation-popup open
+./bin/sessionsation-popup --help
+sessionsation api --api-version 1 account list
+```
+
+The old numbered launcher and management viewer remain available for rollback;
+they are separate from the new popup. See [architecture](docs/architecture.md),
+[verification and limitations](docs/verification.md), the
+[reference specification](docs/cli-specification/README.md), and
 [contributor instructions](agents/README.md).

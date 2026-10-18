@@ -1,5 +1,5 @@
 //! Reusable terminal controls. No filesystem, provider, host or application policy.
-use crate::render::{Canvas, Cell};
+use crate::render::{Accent, Canvas, Cell};
 use crossterm::event::KeyCode;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -127,23 +127,19 @@ impl Row {
             enabled,
         }
     }
-    pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, selected: bool, accent: [u8; 3]) {
-        canvas.text(
+    pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, selected: bool, back: bool) {
+        canvas.accent_text(
             x,
             y,
             if selected { "●" } else { "○" },
-            Cell {
-                fg: if self.enabled {
-                    accent
-                } else {
-                    accent.map(|v| (v as u16 * 60 / 100) as u8)
-                },
+            Accent {
+                brightness: if self.enabled && !back { 1000 } else { 600 },
                 bold: selected,
                 strike: !self.enabled,
-                ..Cell::default()
+                ..Accent::default()
             },
-            false,
         );
+        canvas.text(x + 1, y, " ", Cell::default(), true);
         canvas.text(
             x + 2,
             y,
@@ -160,7 +156,7 @@ impl Row {
                 strike: !self.enabled,
                 ..Cell::default()
             },
-            true,
+            self.enabled,
         );
     }
 }
@@ -170,6 +166,36 @@ pub struct Options {
     pub selected: usize,
     pub back: bool,
     pub scroll: usize,
+}
+
+/// Shared bottom hints: token wrapping never changes the star-field geometry.
+pub fn hint_lines(tokens: &[&str], width: usize) -> Vec<String> {
+    let available = width.saturating_sub(4).max(1);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for token in tokens {
+        let mut clipped = String::new();
+        let mut used = 0;
+        for glyph in token.graphemes(true) {
+            let w = UnicodeWidthStr::width(glyph);
+            if used + w > available {
+                break;
+            }
+            clipped.push_str(glyph);
+            used += w;
+        }
+        if !line.is_empty() && UnicodeWidthStr::width(line.as_str()) + 3 + used > available {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push_str("   ");
+        }
+        line.push_str(&clipped);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 impl Options {
     /// Optional bottom action participates in focus without scrolling the list.
@@ -197,7 +223,6 @@ impl Options {
         rows: &[Row],
         top: usize,
         bottom: usize,
-        accent: [u8; 3],
     ) -> (usize, usize) {
         let capacity = bottom.saturating_sub(top);
         if self.selected < rows.len() {
@@ -222,7 +247,7 @@ impl Options {
                 left,
                 top + i - self.scroll,
                 i == self.selected && !self.back,
-                accent,
+                self.back,
             );
         }
         (left, capacity)
@@ -251,10 +276,10 @@ mod tests {
         assert_eq!(options.selected, 2);
         let mut canvas = Canvas::new(24, 10);
         canvas.cells[9 * 24].glyph = "*".into();
-        options.paint(&mut canvas, &rows, 3, 4, [200; 3]);
+        options.paint(&mut canvas, &rows, 3, 4);
         assert_eq!(options.scroll, 2);
         options.step(&rows, true, false);
-        options.paint(&mut canvas, &rows, 3, 4, [200; 3]);
+        options.paint(&mut canvas, &rows, 3, 4);
         assert_eq!(options.scroll, 2);
         assert_eq!(canvas.cells[9 * 24].glyph, "*");
     }

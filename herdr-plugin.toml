@@ -1,8 +1,21 @@
 id = "sessionsation"
 name = "sessionsation"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.9.5"
 platforms = ["linux"]
+
+[[actions]]
+id = "launcher"
+title = "New Session"
+command = ["./bin/sessionsation-popup", "open"]
+
+[[panes]]
+id = "launcher"
+title = "New Session"
+placement = "popup"
+width = "50%"
+height = "50%"
+command = ["./bin/sessionsation-popup", "popup"]
 
 [[panes]]
 id = "manage"

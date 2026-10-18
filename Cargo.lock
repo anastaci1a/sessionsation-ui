@@ -502,6 +502,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

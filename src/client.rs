@@ -35,6 +35,23 @@ pub struct Workspace {
     pub workspace_id: String,
     pub label: String,
 }
+/// Popup panes have no pane ID; the host supplies the originating tiled context.
+pub fn origin(context: Option<&str>) -> Result<(Option<String>, Option<PathBuf>)> {
+    let Some(raw) = context else {
+        return Ok((None, None));
+    };
+    let value: Value = serde_json::from_str(raw).context("Invalid HERDR plugin context")?;
+    let space = value["workspace_id"].as_str().map(str::to_owned);
+    let cwd = value["focused_pane_cwd"]
+        .as_str()
+        .or_else(|| value["workspace_cwd"].as_str())
+        .map(PathBuf::from);
+    ensure!(
+        cwd.as_ref().is_none_or(|p| p.is_absolute()),
+        "Invalid originating directory"
+    );
+    Ok((space, cwd))
+}
 pub fn config_path() -> PathBuf {
     std::env::var_os("SESSIONSATION_UI_CONFIG")
         .map(PathBuf::from)

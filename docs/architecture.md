@@ -1,6 +1,6 @@
 # Architecture
 
-The Node.js client invokes `sessionsation api --api-version 1` without a shell and
+The Rust popup and preserved Node.js clients invoke `sessionsation api --api-version 1` without a shell and
 consumes structured JSON envelopes. The backend owns account state, credential
 writers, catalogs, runtime generations, operation locks, message receipts and all
 provider behavior. UI state contains no account credentials.
@@ -23,16 +23,16 @@ The separate terminal launcher executes backend-produced argv with process
 replacement. A Bash parent stays alive to retain the host prompt when an agent
 exits; an explicit environment bypass prevents recursive menus.
 
-The installed frontend remains the numbered launcher. The animated redesign was
-reverted; the [reference specification](cli-specification/README.md) owns the
-intended fidelity requirements and [language discussion](cli-specification/architecture.md)
-before a replacement is built. Keep this document about implemented architecture.
+The [deployment record](deployment.json) identifies the selected artifacts. The
+numbered launcher remains available for rollback. The [reference specification](cli-specification/README.md)
+owns source behavior; the [approved Rust design](cli-specification/architecture.md)
+owns intentional adaptations.
 
-## Rust replacement under development
+## Reusable Rust launcher
 
 The Rust executable implements the New Session summary, Configuration, account and
 Space choices, name forms, shared directory picker and durable Start/status flow.
-It is not connected to the installed entrypoint. Its reusable components are:
+Its reusable components are:
 
 - `render`: terminal-sized animated field, Unicode cell canvas and output deltas.
   Background geometry is independent of option scrolling.
@@ -51,4 +51,8 @@ root ancestors can be reused; an existing session leaf still requires explicit
 selection. Resize/input uses Crossterm's level-triggered TTY reader to avoid losing
 input readiness when resize and a key arrive together. No automatic Start replay.
 See the [approved design](cli-specification/architecture.md) for target behavior;
-PTY and deterministic unit checks are not visual acceptance in HERDR.
+PTY, decoded-cell snapshots and installed-HERDR acceptance have distinct evidence
+in [verification](verification.md). Baseline/twinkle placement uses a deterministic
+seeded Rust PRNG with the audited distributions, rather than Bash's process-global
+RANDOM stream; exact random coordinates are not a compatibility promise. Shared
+hue rotation retains the reference's independent 32-bit LCG and integer timing math.

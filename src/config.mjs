@@ -31,8 +31,35 @@ export function updateShell(text,shell) {
 }
 export async function apply({config,clientConfig,binary,dataDir,shell,backupDir}) {
   for(const p of [config,clientConfig,binary,dataDir,shell,backupDir]) if(!isAbsolute(p)) throw new Error('Absolute paths required');
+  return applyPair({config,clientConfig,binary,dataDir,backupDir,rewrite:text=>updateShell(text,shell)});
+}
+export function updatePopup(text,key,shell) {
+  if(!/^prefix\+(?:(?:shift|alt|ctrl)\+)*[a-z0-9]$/.test(key)) throw new Error('Choose an explicit prefix key binding');
+  const blocks=[...text.matchAll(/^\s*\[\[keys\.command\]\]\s*(?:#.*)?$/gm)];
+  const owned=[];
+  for(const match of blocks) {
+    const start=match.index;
+    const following=text.slice(start+match[0].length).search(/^\s*\[/m);
+    const end=following<0?text.length:start+match[0].length+following;
+    const block=text.slice(start,end);
+    const get=name=>{const m=block.match(new RegExp('^\\s*'+name+'\\s*=\\s*(["\'])(.*?)\\1\\s*(?:#.*)?$','m'));return m?.[2];};
+    const command=get('command');
+    if(get('key')===key && command!=='sessionsation.launcher') throw new Error('Key binding already belongs to another command');
+    if(command==='sessionsation.launcher') owned.push({start,end});
+  }
+  if(owned.length>1) throw new Error('Ambiguous launcher bindings');
+  const entry=`[[keys.command]]\nkey = ${JSON.stringify(key)}\ntype = "plugin_action"\ncommand = "sessionsation.launcher"\ndescription = "New session"\n`;
+  let result=owned.length?text.slice(0,owned[0].start)+entry+text.slice(owned[0].end):text.replace(/\n?$/,'\n')+'\n'+entry;
+  if(shell) result=updateShell(result,shell);
+  return result;
+}
+export async function applyPopup({config,clientConfig,binary,dataDir,backupDir,key,shell}) {
+  for(const p of [config,clientConfig,binary,dataDir,backupDir]) if(!isAbsolute(p)) throw new Error('Absolute paths required');
+  return applyPair({config,clientConfig,binary,dataDir,backupDir,rewrite:text=>updatePopup(text,key,shell)});
+}
+async function applyPair({config,clientConfig,binary,dataDir,backupDir,rewrite}) {
   const before=[await snapshot(config),await snapshot(clientConfig,true)];
-  const after=[Buffer.from(updateShell(Buffer.from(before[0].bytes,'base64').toString('utf8'),shell)),Buffer.from(JSON.stringify({binary,dataDir},null,2)+'\n')];
+  const after=[Buffer.from(rewrite(Buffer.from(before[0].bytes,'base64').toString('utf8'))),Buffer.from(JSON.stringify({binary,dataDir},null,2)+'\n')];
   if(before[0].hash===hash(after[0])) throw new Error('Launcher already configured; preserve its existing rollback receipt');
   const receipt={version:1,files:before.map((b,i)=>({...b,appliedHash:hash(after[i])}))};
   await mkdir(backupDir,{recursive:true,mode:0o700});

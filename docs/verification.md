@@ -1,21 +1,44 @@
 # Verification
 
-## Rust replacement (not deployed)
+## Rust popup
 
-`scripts/check-rust.sh` checks formatting, Clippy and Rust unit regressions in an
-offline container. `scripts/test-terminal.py --binary PATH` adds isolated PTY
-acceptance with fake backend/HERDR commands: 20 process startups, 238 key events,
-two-second backend delays, editable summary, bracketed paste, staged directories,
-exact Start request identity, resize/cancel and byte-equivalent TTY restoration.
-It decodes ANSI cell updates rather than searching incremental output as plain text.
-The resize/cancel case exercises simultaneous signal/input readiness; the default
-Crossterm Mio reader intermittently lost the key, while its level-triggered reader
-passes. No test invokes a model or reads production account state.
+The release candidate passes **24 Rust tests** (23 unit tests and one test covering
+four complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
+regressions**. Syntax, manifest fields and documentation links pass. The goldens
+exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,
+shared palette/shimmer and terminal-bottom controls. The rendered
+[summary preview](assets/popup-summary.png) was inspected against the reference;
+random star coordinates intentionally use a deterministic Rust generator.
 
-The release build measured p95 first paint 7.99 ms, key feedback 0.85 ms, and frame
-computation/diff 0.102 ms at 80×24 / 0.381 ms at 160×48 (600 frames each).
-These are local PTY/renderer measurements, not host invocation or provider startup.
-Actual popup handoff, visual fidelity and deployment remain acceptance gates.
+`scripts/test-terminal.py --binary PATH` uses isolated fake APIs and real PTYs:
+20 process startups, 238 key events, two-second backend delays, summary edits,
+bracketed paste, staged directory/request identity, resize/cancel and exact TTY
+restoration. ANSI updates are decoded into cells. Simultaneous resize/input exposed
+an intermittent key-readiness loss in the default Crossterm Mio reader; the
+level-triggered TTY reader passes this regression.
+
+`scripts/test-herdr.py --binary PATH` runs against installed HERDR 0.9.5 inside a
+network-disabled container, with separate config/socket/state and a synthetic public
+backend. It verifies half-size popup geometry, origin context without a pane ID,
+selection of a different Space, normal-tab handoff, focus before exit, second-popup
+cancellation and unchanged origin shell. Twenty actual prefix+uppercase-L openings
+passed. The separate backend test uses the real new-launch API with an inert compiled
+provider to verify exact account/UUID/socket, deduplication and retained shell.
+No acceptance test starts a model or touches production accounts/Agent DM state.
+
+Measured release p95: first responsive PTY paint **5.58 ms**, key feedback **0.62 ms**,
+keybind-to-popup paint **176.70 ms**, frame computation/diff **0.113 ms** at 80×24 and
+**0.467 ms** at 160×48 (600 frames each). These exclude provider startup/model response.
+CLI-triggered plugin invocation additionally pays the external command round trip;
+one earlier observation was 284 ms, whereas the configured key path met 250 ms.
+
+Run `scripts/check-rust.sh`, `npm test` and `npm run check`. The PTY/host scripts
+require Python 3; use the existing offline build container, mount only this checkout
+and the HERDR executable at `/usr/local/bin/herdr`, and pass the release executable.
+Never mount production homes, sockets or account roots into these fixtures.
+`UPDATE_GOLDENS=1 cargo test --test visual` deliberately regenerates cell fixtures;
+ordinary checks compare them unchanged. Deployment/provenance is recorded separately
+in [deployment.json](deployment.json).
 
 ## Preserved installed client
 
