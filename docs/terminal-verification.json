@@ -115,6 +115,13 @@
     "protected_config_and_artifact_hashes_unchanged": true,
     "existing_process_identities_retained": 28,
     "herdr_reload": false,
-    "rollback_fixture": "Archived f18979c UI exits through its numbered launcher with /bin/false as backend; no backend call made. Restoring src/main.mjs and src/client.mjs from that revision selects the previous entrypoint; new renderer files may remain unused."
+    "rollback_fixture": "Archived f18979c UI exits through its numbered launcher with /bin/false as backend; no backend call made. Restoring src/main.mjs and src/client.mjs from that revision selects the previous entrypoint; new renderer files may remain unused.",
+    "process_observation": {
+      "initial_process_identities": 31,
+      "first_deployment_retained": 31,
+      "final_check_retained": 28,
+      "exited_during_interval": 3,
+      "cause": "not established; no live process signals, lifecycle API calls, host reloads or restarts were issued by this deployment"
+    }
   }
 }
