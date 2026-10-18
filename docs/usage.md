@@ -55,3 +55,20 @@ must stay outside Git. A plain shell and backend-created panes set
 `SESSIONSATION_LAUNCHER_BYPASS=1`; the wrapper also guards against recursive menus.
 The retained Bash parent permits agent restart/resume after the foreground agent
 exits. User `.bashrc` is sourced while retaining HERDR's requested working directory.
+
+## Ana's configured host
+
+The source-backed launcher is configured on Satellite for future terminals using
+`/mnt/user/live/projects/sessionsation-ui/bin/sessionsation-shell`. Its client settings
+are `/mnt/user/appdata/sessionsation-ui/config.json`; the backend path is the
+verified e4d7833 development artifact recorded by the backend provenance manifest.
+It uses the explicit existing-account data root through the existing supervisor.
+This does not install a new standalone backend or activate the Agent DM adapter.
+
+The private rollback receipt is
+`/mnt/user/appdata/sessionsation-ui/config-backups/launcher-1e1b8d65-5fb5-4b63-8db5-ff0d60e44c9b.json`.
+The default server reloaded without diagnostics, and a new owned terminal displayed
+the menu with its requested cwd. The smoke terminal was then closed. Existing
+agents and the original pane retained their process/terminal identities. Other
+already-running servers need their own explicit configuration reload for future
+terminals; existing terminals are never retrofitted.

@@ -26,7 +26,11 @@ left the underlying terminal alive. Tests also verified:
   backend ID, provider UUID, selected `codex:personal` account, cwd and exact native
   app-server socket. Discovery recognizes its HERDR attachment and lifecycle capabilities.
 - Configuration reload/rollback leaves that running disposable agent unchanged.
+- Backend restart of the UI-launched agent completes on the same account and UUID
+  through the retained shell; no additional input or model usage is sent.
 
 No additional model message or real enrollment/removal was needed for UI acceptance.
-Claude remains preparation-only. Global future-terminal configuration is separate
-from isolated acceptance and is recorded only after application.
+Claude remains preparation-only. The applied future-terminal configuration and private rollback location are
+recorded in [usage](usage.md#anas-configured-host). All 17 existing Codex/Claude
+processes retained their PIDs/start times across default-server reload, and its
+original pane retained its terminal identity.
