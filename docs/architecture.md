@@ -22,3 +22,8 @@ The management plugin is a viewer. It never launches an agent in an overlay.
 The separate terminal launcher executes backend-produced argv with process
 replacement. A Bash parent stays alive to retain the host prompt when an agent
 exits; an explicit environment bypass prevents recursive menus.
+
+The installed frontend remains the numbered launcher. The animated redesign was
+reverted; the [reference specification](cli-specification/README.md) owns the
+intended fidelity requirements and [language discussion](cli-specification/architecture.md)
+before a replacement is built. Keep this document about implemented architecture.

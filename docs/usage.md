@@ -5,6 +5,9 @@ Set `SESSIONSATION_BIN` to the verified absolute backend executable and
 `/mnt/user/appdata/codex-switcher` with its existing credential owner. The independent
 backend default is not an automatic import. See the backend ownership guidance.
 
+The current launcher is numbered text; the animated redesign was reverted.
+The [reference specification](cli-specification/README.md) describes a planned rebuild.
+
 Run `./bin/sessionsation-ui launcher` in an ordinary terminal for new, resume or
 plain shell. New reads the account list directly; it does not scan conversation
 histories or terminal attachments just to show accounts. Resume still discovers
