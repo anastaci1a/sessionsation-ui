@@ -25,9 +25,11 @@ network-disabled container, with separate config/socket/state and a synthetic pu
 backend. It verifies the requested percentage popup geometry, origin context without a pane ID,
 selection of a different Space, normal-tab handoff, focus before exit, second-popup
 cancellation and unchanged origin shell. Twenty actual prefix+uppercase-L openings
-passed. The separate backend test uses the real new-launch API with an inert compiled
-provider to verify exact account/UUID/socket, deduplication and retained shell.
-No acceptance test starts a model or touches production accounts/Agent DM state.
+passed. Separate backend fixtures cover exact account/UUID/socket handoff, normal exit,
+preserved-history resume after local account deletion and the pinned-original
+supervisor handoff. Their details and limits belong to the backend guidance.
+No acceptance test starts a model or changes production accounts/Agent DM state;
+production capability/status previews are read-only.
 
 Measured release p95: first responsive PTY paint **5.43 ms**, key feedback **0.38 ms**,
 keybind-to-popup paint **183.61 ms**, frame computation/diff **0.105 ms** at 80×24 and

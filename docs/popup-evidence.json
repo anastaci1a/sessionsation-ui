@@ -3,7 +3,7 @@
   "scope": "Rust account/session popup; isolated synthetic provider acceptance; no model turns or Agent DM activation",
   "source": {
     "ui": "8809571e0d7970479750b922337e84b012ac95e2",
-    "backend": "4966eb2ac302f2d4861cbd27b10e0320216053fe"
+    "backend": "7459e77d9f0292bf77303228dd3f8f3162d4c076"
   },
   "checks": {
     "rust": {
@@ -23,33 +23,72 @@
       "command": "npm run check"
     },
     "backend": {
-      "standard_tests_passed": 230,
-      "installed_herdr_test_passed": 1,
+      "standard_tests_passed": 236,
+      "installed_herdr_test_passed": 2,
       "failed": 0,
       "standard_command": "scripts/check.sh",
-      "host_test": "installed_herdr_new_tab_handoff_retains_exact_account_and_shell",
-      "standard_source": "4966eb2ac302f2d4861cbd27b10e0320216053fe",
+      "standard_source": "06f3fc87f9e5a9a472da957449a9998cba460222",
       "final_receipt_regression": {
-        "source": "4966eb2ac302f2d4861cbd27b10e0320216053fe",
+        "source": "06f3fc87f9e5a9a472da957449a9998cba460222",
         "passed": true,
         "checks": [
           "format",
           "Clippy all targets",
-          "isolated HERDR normal /exit, new/same-account resume/transferred resume/stale request/dedup/receipt after Stop"
+          "normal /exit and exact account/UUID resume",
+          "fresh loaded-conversation recheck before metadata stop",
+          "explicit recovery and preserved paginated archive transfer",
+          "native history 70 turns/270 items verified",
+          "zero model turns"
         ],
-        "duration_seconds": 12.8
+        "duration_seconds": 12.16
       },
       "tests": {
-        "unit": 119,
-        "cli": 7,
+        "unit": 124,
+        "cli": 8,
         "external_move": 58,
-        "external_move_ignored": 1,
+        "external_move_ignored": 2,
         "messaging_cli": 8,
         "persistence": 6,
         "scheduling": 29,
         "transport": 3
       },
-      "passed": true
+      "passed": true,
+      "cli_profile_checks": {
+        "source": "7459e77d9f0292bf77303228dd3f8f3162d4c076",
+        "debug_passed": 8,
+        "release_passed": 8,
+        "debug_seconds": 2.52,
+        "release_seconds": 10.92,
+        "product_sources_identical_to_standard_source": true,
+        "difference": "Only tests/cli.rs startup readiness changed; src/, Cargo.toml and Cargo.lock are identical"
+      },
+      "host_tests": [
+        "installed_herdr_new_tab_handoff_retains_exact_account_and_shell",
+        "installed_herdr_resumes_preserved_paginated_archive_after_account_deletion"
+      ],
+      "owner_handoff": {
+        "source": "ce749e9ed7080f0b8ba74fcac0df318b33404f3c",
+        "test": "installed_owner_handoff_preserves_native_agent_and_catalog",
+        "passed": true,
+        "duration_seconds": 1.13,
+        "original_executable": "deployment.json#/preserved/original_switcher",
+        "checks": [
+          "hash-pinned original executable mounted read-only",
+          "isolated root and synthetic active native thread only",
+          "single owner stop/start, original to new",
+          "native socket and active status preserved",
+          "client PID/start and tmux pane preserved",
+          "account/conversation/backend ID preserved"
+        ],
+        "model_turns": 0,
+        "production_activation": false
+      },
+      "deletion_preview": {
+        "root": "deployment.json#/selection/data_root",
+        "milliseconds": 28.453695,
+        "file_scanning": false,
+        "owner_upgrade_required": true
+      }
     }
   },
   "pty": {
@@ -129,7 +168,8 @@
     "tracked_herdr_processes": 2,
     "unchanged_herdr_process_identities": 1,
     "missing_herdr_process_identities": 1,
-    "process_signal_scope": "Only isolated test-owned processes received stop/signal operations; no production process was signalled"
+    "process_signal_scope": "Only isolated test-owned processes received stop/signal operations; no production process was signalled",
+    "backend_client": "/mnt/user/live/packages/sessionsation/popup/7459e77d9f0292bf77303228dd3f8f3162d4c076/sessionsation"
   },
   "layout_regressions": [
     "Configuration labels and complete-fit optional directory previews",
@@ -162,6 +202,7 @@
     "Claude preparation only",
     "HERDR outer border cannot follow animated status bar",
     "Dynamic/terminal HERDR themes use explicit configured-base approximation",
-    "External CLI plugin invocation measured 282.44ms; configured keybind p95 was 183.61ms"
+    "External CLI plugin invocation measured 282.44ms; configured keybind p95 was 183.61ms",
+    "Production deletion is gated until the separately approved live supervisor handoff; no owner replacement performed"
   ]
 }

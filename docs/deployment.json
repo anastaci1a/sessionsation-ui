@@ -12,9 +12,9 @@
       "minimum_rust_version": "1.88"
     },
     "backend": {
-      "source_commit": "4966eb2ac302f2d4861cbd27b10e0320216053fe",
-      "path": "/mnt/user/live/packages/sessionsation/popup/4966eb2ac302f2d4861cbd27b10e0320216053fe/sessionsation",
-      "sha256": "86f71c0fc31b160b8e9b5cc3cea8b432726ee5de17f9034c48689a324e3a225a",
+      "source_commit": "7459e77d9f0292bf77303228dd3f8f3162d4c076",
+      "path": "/mnt/user/live/packages/sessionsation/popup/7459e77d9f0292bf77303228dd3f8f3162d4c076/sessionsation",
+      "sha256": "8620a9f665667756a9d36486ef27ab48ae7222e10aace9b7e540dcf09b85c736",
       "cargo_lock_sha256": "13959dc2de624ff7f6bc4a7fed537b01b6d89572b61e8bb9238cb748afc17265",
       "profile": "release",
       "rust_version": "1.95.0",
@@ -50,8 +50,18 @@
     "rollback_restores": "pre-popup default numbered launcher and exact HERDR configuration; removes popup client config; installed artifacts and UI preferences retained",
     "runtime_update": {
       "ui_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/ui-6ed2649e-bd3b-4d02-9e1f-c621d9e4a106.json",
-      "backend_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/backend-2e4464e9-b94d-4179-9086-43385072c10b.json",
+      "backend_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/backend-39bd8dd3-cc1d-41a8-9177-206585cce5dc.json",
       "rollback": "Restore the previous UI symlink or exact popup client config bytes from the corresponding private receipt; no HERDR configuration, account data or running agent change is needed."
+    },
+    "account_deletion": {
+      "enabled": false,
+      "reason": "OWNER_UPGRADE_REQUIRED",
+      "approval": "Separate live owner handoff awaits Ana approval; current client updates are already authorized",
+      "installed_client_preview": {
+        "milliseconds": 28.453695,
+        "file_scanning": false,
+        "owner_upgrade_required": true
+      }
     }
   },
   "preserved": {
