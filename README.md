@@ -5,7 +5,7 @@ A terminal launcher and thin HERDR management viewer for
 agent lifecycle decisions belong to the backend. Detaching a viewer leaves agents
 running.
 
-Requires Node.js 22.18+, Bash, HERDR 0.9.5+ and a separately verified sessionsation
+Requires Node.js 22.18+, Bash, coreutils `readlink`, HERDR 0.9.5+ and a separately verified sessionsation
 CLI with public API v1. Claude remains preparation-only in the backend.
 
 ```sh
