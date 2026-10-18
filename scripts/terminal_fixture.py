@@ -15,8 +15,8 @@ else: result={'phase':'running','tab_id':'w1:t2'}
 print(json.dumps({'api_version':1,'ok':True,'result':result}))
 '''
 HERDR='''#!/usr/bin/env python3
-import json
-print(json.dumps({'result':{'workspaces':[{'workspace_id':'w1','label':'Fixture'}]}}))
+import json,os,pathlib
+print(json.dumps({'result':{'workspaces':[{'workspace_id':'w1','label':'Fixture','focused':not pathlib.Path(os.environ['FIXTURE_ROOT'],'no-focused').exists()}]}}))
 '''
 class Screen:
  def __init__(self): self.grid=[[' ']*200 for _ in range(100)];self.x=0;self.y=0;self.pending='';self.decoder=codecs.getincrementaldecoder('utf8')('replace')
@@ -27,7 +27,10 @@ class Screen:
     if len(self.pending)<2:return
     if self.pending[1]=='[':
      match=re.match(r'\x1b\[([\x30-\x3f]*[\x20-\x2f]*)([@-~])',self.pending)
-     if not match:return
+     if not match:
+      restart=self.pending.find('\x1b',2)
+      if restart>=0:self.pending=self.pending[restart:];continue
+      return
      values=[int(x) if x.isdigit() else 0 for x in match[1].lstrip('?><=').split(';')];command=match[2]
      if command in ['H','f']:self.y=max(0,(values[0] or 1)-1);self.x=max(0,((values[1] if len(values)>1 else 1) or 1)-1)
      elif command=='J' and values[0]==2:self.grid=[[' ']*200 for _ in range(100)]

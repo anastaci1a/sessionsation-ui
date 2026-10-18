@@ -30,13 +30,26 @@ A symlink from `.runtime/config.json` therefore keeps writable settings beside t
 real config, rather than attempting to replace a symlink or writing into the checkout.
 
 Open **New Session**, edit Account, Space, Name and Directory in any order, then
-select Start Session. Pickers preserve the draft on Back. Existing automatic paths
-require explicit selection. Directory Enter selects; Right/Tab browses; Left goes
+select Start Session directly below the fields and separator. The default Space is
+the one currently focused in HERDR; no focus leaves it unset. Pickers preserve the
+draft on Back. Existing automatic paths require explicit selection. Directory Enter
+selects; Right/Tab browses child rows only, leaving the two action rows unchanged; Left goes
 up or focuses Back. Typing and paste edit the path; Ctrl-U clears. Create stages
 intent and never calls mkdir. Configuration uses the same picker and saves on Back.
 Missing per-Space roots remain unset, without a global fallback. Last-account prefill
 requires fresh usage within existing limits; manually selecting a backend-permitted
 account does not rewrite its limits.
+
+The Back arrow is beside the top visible option. Left selects and expands it;
+Right returns to the option. On the main page its expanded label is **Close**.
+Configuration uses short labels and shows a directory preview only when the full
+path fits beside its label.
+
+HERDR owns the outer popup border. Installed 0.9.5 draws it using the shared theme
+accent and exposes no per-popup color override, so it cannot track the launcher's
+animated status bar. This is verified in its
+[popup renderer](https://github.com/herdrdev/herdr/blob/v0.9.5/src/client/shell/composition.rs#L571)
+and [plugin-pane API](https://herdr.dev/docs/socket-api/). No host theme changes are required.
 
 Start records one request UUID. A timeout is reconciled using that ID, never
 replayed. The popup exits after the backend confirms the exact process and HERDR

@@ -3,30 +3,38 @@
 Ana approved Rust and this interaction model. Implemented components are described
 in [current architecture](../architecture.md); [deployment](../deployment.json)
 identifies the selected artifacts and preserved rollback entrypoints.
-[Issue 5](https://github.com/anastaci1a/sessionsation-ui/issues/5) owns acceptance.
+[Issue 6](https://github.com/anastaci1a/sessionsation-ui/issues/6) owns the current layout acceptance.
 
 ## User flow
 
-The HERDR plugin opens a half-terminal popup. Ana uses `prefix+shift+l`; each
+The HERDR plugin opens a popup using the manifest's percentage dimensions. Ana uses `prefix+shift+l`; each
 installer chooses a binding without replacing unrelated keys or the user's prefix.
 Main menu: New Session and Configuration. No decorative title or reserved title
-area. Stars/gradient cover the entire popup PTY; only options scroll. Back and hints
-stay at the bottom. No existing-session operations or standalone shell action.
+area. Stars/gradient cover the entire popup PTY; only options scroll. Hints stay
+at the bottom. The compact Back arrow sits immediately left of the first visible
+option. Left focuses it and expands its label where space permits; Right returns
+to the remembered option. The main page says Close and dismisses the popup;
+other pages say Back. No existing-session operations or standalone shell action.
 
 New Session is an editable summary: Account, Space, Name, Directory. Pickers open
 as separate pages. Start Session uses the reference Sessions page's separator
-before Session Manager, anchored above bottom navigation. It is gray/struck through
+before Session Manager: the fields, separator and Start form one contiguous group.
+It is gray/struck through
 and disabled until all fields are valid. Back preserves draft choices.
 
-- Space starts with the originating Space when known. Existing choices use IDs;
-  proposed new names reject duplicates. Creation waits until Start.
+- Space defaults to HERDR's currently focused Space, using its explicit focused
+  flag and stable ID. No focused Space means unset, even when other Spaces exist.
+  The picker initially highlights the chosen Space and preserves highlighted IDs
+  through reorder. Explicit choices survive focus changes; proposed new names
+  reject duplicates. Creation waits until Start.
 - Name is the unique backend name and normal tab label, also a valid single path
   component. No silent slugification.
 - Directory is `<unset>` until a valid name/root yields `root/name`. Automatically
   derived paths follow Name/Space changes; manually chosen paths remain unchanged.
   An existing automatic path requires explicit selection. Every Create Directory
   action stages intent, including configuration pickers; no directory is created
-  before Start. Enter accepts a child, Right/Tab browses, and the path stays typable.
+  before Start. Enter accepts a child; Right/Tab browses only a child row, doing
+  nothing on the two action rows. The path stays typable.
 - Account remembers the last successful launch. Backend-computed fresh usage and
   existing limits govern prefill; otherwise show `<unset>`. Manual selection may
   override this preference restriction when the backend permits launch. Never
@@ -36,6 +44,8 @@ Configuration has Global/Per-Space directory mode. Inactive controls use referen
 gray/strike styling; all values survive mode switches. Back saves atomically without
 Save/Cancel buttons. Missing per-Space roots require manual directory selection,
 not global fallback. Preferences own no credentials or lifecycle state.
+Labels are short: Defaults, Global root and Space roots. Root previews appear only
+when the complete value fits beside the label without recentering the option block.
 
 ## Destination and ownership
 
@@ -47,7 +57,8 @@ not global fallback. Preferences own no credentials or lifecycle state.
 | UI | Draft choices, preferences and public-contract results |
 
 No Projects entity is introduced. Workspace selections are scoped to the HERDR
-instance and stable workspace ID, never label/order/focus. Launch revalidates the
+instance and stable workspace ID, never label/order. Focus supplies only the default;
+it cannot retarget an explicit choice. Launch revalidates the
 chosen target; disappearing targets fail instead of falling back to current focus.
 The popup has no agent pane identity. Start creates a normal tab in the destination
 (or uses the initial normal tab of a newly created Space), with retained shell,

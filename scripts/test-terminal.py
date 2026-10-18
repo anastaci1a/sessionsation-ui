@@ -4,6 +4,7 @@ import terminal_fixture as fixture_module
 from terminal_fixture import Terminal, Screen, fixture
 parser=argparse.ArgumentParser();parser.add_argument('--binary',required=True);parser.add_argument('--samples',type=int,default=20);args=parser.parse_args();binary=str(pathlib.Path(args.binary).resolve())
 fixture_module.BINARY=binary
+probe=Screen();probe.feed(b'\x1b[38;2;4\x1b[2;2HConfiguration');assert probe.contains('Configuration'),'interrupted host frame must recover at next ESC'
 starts=[];keys=[]
 with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  root=pathlib.Path(tmp);fixture(root)
@@ -11,6 +12,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
   t=Terminal(root,delay=2 if i==0 else 0)
   try:
    starts.append(t.wait('New Session'));t.drain()
+   t.send(b'\x1b[D');t.wait('Close');t.send(b'\x1b[C');t.wait('New Session',selected=True)
    for n in range(200 if i==0 else 2):
     t.start=time.perf_counter();t.send(b'\x1b[B' if n%2==0 else b'\x1b[A');keys.append(t.wait('Configuration' if n%2==0 else 'New Session',selected=True));t.drain()
    # Summary opens while backend reads may still be delayed.
@@ -37,12 +39,17 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  (settings/'preferences.json').write_text((root/'prefs.json').read_text());pointer=root/'config-pointer.json';pointer.symlink_to(settings/'popup.json')
  t=Terminal(root,client_config=pointer)
  try:
-  t.wait('New Session');t.send(b'\x1b[B\r');t.wait('Directory defaults:');t.send(b'\r\x1b');t.wait('New Session')
+  t.wait('New Session');t.send(b'\x1b[B\r');t.wait('Defaults:');t.send(b'\r\x1b');t.wait('New Session')
   until=time.monotonic()+2
   while json.loads((settings/'preferences.json').read_text())['mode']!='per_space' and time.monotonic()<until:
    t.drain();time.sleep(.01)
   assert json.loads((settings/'preferences.json').read_text())['mode']=='per_space'
   assert not (root/'preferences.json').exists()
+ finally:t.close()
+ # Existing Spaces with no focused Space must leave the default unset.
+ (root/'no-focused').touch();t=Terminal(root)
+ try:
+  t.wait('New Session');time.sleep(.2);t.drain();t.send(b'\r');t.wait('Space: <unset>')
  finally:t.close()
 def report(a):
  s=sorted(a);return {'samples':len(s),'p50_ms':s[len(s)//2],'p95_ms':s[min(len(s)-1,int(len(s)*.95))],'max_ms':max(s)}

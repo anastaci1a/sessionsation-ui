@@ -36,7 +36,8 @@ and review; a similar-looking mockup is insufficient.
   reservation. Functional page labels and the reference status bar are distinct.
 - Star field, density and fade extend to the **terminal bottom**, independent of
   option count. In a popup, terminal means its full PTY content viewport, excluding
-  the HERDR border. Controls are bottom-anchored. Reference list-relative coordinates
+  the HERDR border. Hints are bottom-anchored; Back sits beside the top option and
+  Start follows the summary fields and separator. Reference list-relative coordinates
   are documented, then adapted explicitly in [visuals](visuals.md#target-geometry).
 - Existing public backend API v 1, opaque launch plans, stable identities,
   generation checks and retained HERDR shell remain authoritative. No copied

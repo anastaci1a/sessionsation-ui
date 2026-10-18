@@ -270,16 +270,17 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     let pref =
         preferences.unwrap_or_else(|| sessionsation_ui::client::preferences_path(&config_path()));
     let prefs = Preferences::load(&pref)?;
-    let (origin_space, origin_cwd) = sessionsation_ui::client::origin(
-        std::env::var("HERDR_PLUGIN_CONTEXT_JSON").ok().as_deref(),
-    )?;
+    let context = std::env::var("HERDR_PLUGIN_CONTEXT_JSON").ok();
+    let (origin_space, origin_cwd) = sessionsation_ui::client::origin(context.as_deref())?;
     let initial = origin_cwd
         .or_else(|| std::env::var_os("HERDR_ACTIVE_PANE_CWD").map(PathBuf::from))
         .unwrap_or(std::env::current_dir()?);
     let space = origin_space.or_else(|| {
-        std::env::var("HERDR_ACTIVE_WORKSPACE_ID")
-            .or_else(|_| std::env::var("HERDR_WORKSPACE_ID"))
-            .ok()
+        if context.is_none() {
+            std::env::var("HERDR_ACTIVE_WORKSPACE_ID").ok()
+        } else {
+            None
+        }
     });
     let mut app = App::new(
         prefs,

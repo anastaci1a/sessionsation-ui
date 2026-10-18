@@ -116,6 +116,7 @@ impl TextInput {
 pub struct Row {
     pub label: String,
     pub enabled: bool,
+    pub preview: Option<String>,
 }
 impl Row {
     pub fn yes(label: impl Into<String>) -> Self {
@@ -125,7 +126,12 @@ impl Row {
         Self {
             label: label.into(),
             enabled,
+            preview: None,
         }
+    }
+    pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
+        self.preview = Some(preview.into());
+        self
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, selected: bool, back: bool) {
         canvas.accent_text(
@@ -158,6 +164,21 @@ impl Row {
             },
             self.enabled,
         );
+        if let Some(preview) = &self.preview {
+            let start = x + 2 + UnicodeWidthStr::width(self.label.as_str()) + 2;
+            if start + UnicodeWidthStr::width(preview.as_str()) <= canvas.width.saturating_sub(2) {
+                canvas.text(
+                    start,
+                    y,
+                    preview,
+                    Cell {
+                        fg: if self.enabled { [188; 3] } else { [108; 3] },
+                        ..Cell::default()
+                    },
+                    false,
+                );
+            }
+        }
     }
 }
 
@@ -239,7 +260,7 @@ impl Options {
             .map(|r| UnicodeWidthStr::width(r.label.as_str()))
             .max()
             .unwrap_or(0)
-            .min(canvas.width.saturating_sub(4));
+            .min(canvas.width.saturating_sub(8));
         let left = canvas.width.saturating_sub(longest + 2) / 2;
         for (i, row) in rows.iter().enumerate().skip(self.scroll).take(capacity) {
             row.paint(
@@ -251,6 +272,28 @@ impl Options {
             );
         }
         (left, capacity)
+    }
+    /// Reference Back/Exit control belongs beside the first visible option.
+    pub fn paint_back(&self, canvas: &mut Canvas, left: usize, top: usize, label: &str) {
+        let text = format!("◀— {label}");
+        let expanded_width = UnicodeWidthStr::width(text.as_str()) + 1;
+        let expanded = self.back && left >= expanded_width;
+        let (x, text) = if expanded {
+            (left - expanded_width, text.as_str())
+        } else {
+            (left.saturating_sub(3), "◀—")
+        };
+        canvas.text(
+            x,
+            top,
+            text,
+            Cell {
+                fg: if self.back { [238; 3] } else { [188; 3] },
+                bold: self.back,
+                ..Cell::default()
+            },
+            false,
+        );
     }
 }
 
@@ -290,5 +333,36 @@ mod tests {
         input.paint(&mut canvas, 0, 0, 9, true);
         assert_eq!(canvas.cells.iter().filter(|c| c.bg.is_some()).count(), 1);
         assert_eq!(canvas.cells[9], Cell::default());
+    }
+    #[test]
+    fn optional_preview_never_recenters_or_partially_displays_a_path() {
+        let rows = [Row::yes("Global root").with_preview("/projects/long/directory")];
+        let mut options = Options::default();
+        let mut small = Canvas::new(40, 12);
+        let (small_left, _) = options.paint(&mut small, &rows, 3, 8);
+        assert_eq!(small_left, (40 - 13) / 2);
+        assert!(!small.cells.iter().any(|c| c.glyph == "/"));
+        let mut wide = Canvas::new(120, 30);
+        let (wide_left, _) = options.paint(&mut wide, &rows, 3, 8);
+        assert_eq!(wide_left, (120 - 13) / 2);
+        assert!(wide.cells.iter().any(|c| c.glyph == "/"));
+    }
+    #[test]
+    fn back_is_compact_until_focused_and_expands_left_of_the_top_option() {
+        let mut options = Options::default();
+        let mut canvas = Canvas::new(80, 24);
+        options.paint_back(&mut canvas, 30, 3, "Close");
+        assert_eq!(canvas.cells[3 * 80 + 27].glyph, "◀");
+        assert!(!canvas.cells.iter().any(|c| c.glyph == "C"));
+        options.back = true;
+        let mut focused = Canvas::new(80, 24);
+        options.paint_back(&mut focused, 30, 3, "Close");
+        let text: String = focused.cells[3 * 80..4 * 80]
+            .iter()
+            .map(|c| c.glyph.as_str())
+            .collect();
+        assert!(text.contains("◀— Close"));
+        assert!(focused.cells[3 * 80 + 21].bold);
+        assert_eq!(focused.cells[3 * 80 + 30].glyph, " ");
     }
 }

@@ -127,15 +127,16 @@ an individual too-long token is clipped. No Ctrl-L hint is shown.
 ## Target geometry
 
 Required: omit home title and its reserved rows, retain functional bars/form
-fields, draw stars down to row H, and anchor Back plus wrapped key hints to the
-terminal bottom. List length must affect only its viewport, never field bottom,
+fields, draw stars down to row H, and anchor wrapped key hints to the
+terminal bottom. Back sits beside the first visible option and expands on Left;
+on the main page its label is Close. Start follows the summary fields and separator.
+List length must affect only its viewport, never field bottom,
 density depth or fade endpoint. Shrink/grow must reflow controls without losing
 selection, picker path, cursor or history. Long lists scroll above reserved controls.
 
 Proposed coordinate contract for dot's review: row 1 status; row 2 functional label
 only on subpages; form input row 4; options row 4 on home/submenu and row 6 on forms.
-Reserve K bottom hint rows and one Back row above them; place a pagination row
-immediately above Back only when needed. Compute capacity from this reservation,
+Reserve K bottom hint rows and rows for status/pagination when needed. Compute capacity from this reservation,
 not from option count. Use `stars_top=3`, `stars_bottom=H`; exclude occupied control
 glyphs through masks, allowing the field through their spaces. The ordinary fade
 starts at options but reaches its endpoint relative to H; density and shimmer

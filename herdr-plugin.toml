@@ -13,8 +13,8 @@ command = ["./bin/sessionsation-popup", "open"]
 id = "launcher"
 title = "New Session"
 placement = "popup"
-width = "50%"
-height = "50%"
+width = "90%"
+height = "65%"
 command = ["./bin/sessionsation-popup", "popup"]
 
 [[panes]]

@@ -1,7 +1,7 @@
 //! Reviewed cell snapshots cover motion, common controls and terminal-bottom masks.
 //! UPDATE_GOLDENS=1 is an explicit developer operation, never enabled by CI.
 use sessionsation_ui::{
-    render::{Accent, Cell, Field},
+    render::{Accent, Field},
     widgets::{Options, Row, TextInput},
 };
 
@@ -19,9 +19,9 @@ fn fixed_seed_time_and_geometry_match_cell_goldens() {
         let mut frame = None;
         for tick in (0..=time).step_by(20) {
             let mut c = field.paint(tick);
-            options.paint(&mut c, &rows, 5, height - 5);
+            let (left, _) = options.paint(&mut c, &rows, 5, height - 5);
             TextInput::new("界e\u{301}".into()).paint(&mut c, 2, 3, width - 4, true);
-            c.text(2, height - 2, "◀— Back", Cell::default(), false);
+            options.paint_back(&mut c, left, 5, "Back");
             c.accent_text(
                 2,
                 height - 1,

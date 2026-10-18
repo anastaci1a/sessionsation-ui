@@ -34,6 +34,8 @@ pub struct Account {
 pub struct Workspace {
     pub workspace_id: String,
     pub label: String,
+    #[serde(default)]
+    pub focused: bool,
 }
 /// Popup panes have no pane ID; the host supplies the originating tiled context.
 pub fn origin(context: Option<&str>) -> Result<(Option<String>, Option<PathBuf>)> {

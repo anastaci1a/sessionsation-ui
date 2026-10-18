@@ -70,6 +70,7 @@ pub struct App {
     stack: Vec<Saved>,
     history: BTreeMap<PathBuf, usize>,
     auto_account: bool,
+    auto_space: bool,
     pub dirty: bool,
     pending_child: Option<PathBuf>,
     status: crate::status::Status,
@@ -111,6 +112,7 @@ impl App {
             stack: vec![],
             history: BTreeMap::new(),
             auto_account: true,
+            auto_space: true,
             dirty: true,
             pending_child: None,
             status: crate::status::Status::default(),
@@ -149,38 +151,26 @@ impl App {
             ],
             Page::Config => vec![
                 Row::yes(format!(
-                    "Directory defaults: {}",
+                    "Defaults: {}",
                     if self.prefs.mode == Mode::Global {
                         "Global"
                     } else {
                         "Per-Space"
                     }
                 )),
-                Row::gate(
-                    format!(
-                        "Global projects root: {}",
-                        path(self.prefs.global_root.as_deref())
-                    ),
-                    self.prefs.mode == Mode::Global,
-                ),
-                Row::gate(
-                    "Per-Space projects roots",
-                    self.prefs.mode == Mode::PerSpace,
-                ),
+                Row::gate("Global root", self.prefs.mode == Mode::Global)
+                    .with_preview(path(self.prefs.global_root.as_deref())),
+                Row::gate("Space roots", self.prefs.mode == Mode::PerSpace),
             ],
             Page::Roots => self
                 .spaces
                 .iter()
                 .map(|s| {
-                    Row::yes(format!(
-                        "{}: {}",
-                        s.label,
-                        path(
-                            self.prefs
-                                .space_roots
-                                .get(&Preferences::key(&self.instance, &s.workspace_id))
-                                .map(PathBuf::as_path)
-                        )
+                    Row::yes(&s.label).with_preview(path(
+                        self.prefs
+                            .space_roots
+                            .get(&Preferences::key(&self.instance, &s.workspace_id))
+                            .map(PathBuf::as_path),
                     ))
                 })
                 .collect(),
@@ -253,6 +243,12 @@ impl App {
         });
         self.page = page;
         self.options.selected = 0;
+        if self.page == Page::Spaces
+            && let Some(Space::Existing { id, .. }) = &self.draft.space
+            && let Some(index) = self.spaces.iter().position(|s| s.workspace_id == *id)
+        {
+            self.options.selected = index + 1;
+        }
         self.options.scroll = 0;
         self.options.back = false;
         self.input.value = text;
@@ -381,8 +377,35 @@ impl App {
     ) -> Vec<Effect> {
         let old_account = self.draft.account.clone();
         let old_space = self.draft.space.clone();
+        let picker_space = if self.page == Page::Spaces {
+            self.options
+                .selected
+                .checked_sub(1)
+                .and_then(|i| self.spaces.get(i))
+                .map(|s| s.workspace_id.clone())
+        } else {
+            None
+        };
         self.accounts = accounts;
         self.spaces = spaces;
+        if let Some(id) = picker_space {
+            self.options.selected = self
+                .spaces
+                .iter()
+                .position(|s| s.workspace_id == id)
+                .map(|i| i + 1)
+                .unwrap_or(0);
+        }
+        if self.auto_space {
+            let mut focused = self.spaces.iter().filter(|s| s.focused);
+            self.draft.space = focused
+                .next()
+                .filter(|_| focused.next().is_none())
+                .map(|s| Space::Existing {
+                    id: s.workspace_id.clone(),
+                    label: s.label.clone(),
+                });
+        }
         if let Some(Space::Existing { id, label }) = &mut self.draft.space {
             if let Some(s) = self.spaces.iter().find(|s| s.workspace_id == *id) {
                 *label = s.label.clone();
@@ -562,6 +585,7 @@ impl App {
                 if self.options.selected == 0 {
                     self.push(Page::SpaceName, String::new())
                 } else {
+                    self.auto_space = false;
                     let s = &self.spaces[self.options.selected - 1];
                     self.draft.space = Some(Space::Existing {
                         id: s.workspace_id.clone(),
@@ -577,6 +601,7 @@ impl App {
                 self.revalidate()
             }
             Page::SpaceName => {
+                self.auto_space = false;
                 self.draft.space = Some(Space::New {
                     label: self.input.value.clone(),
                 });
@@ -701,7 +726,9 @@ impl App {
                     self.options.back = false;
                     return vec![];
                 }
-                let index = self.options.selected.saturating_sub(2);
+                let Some(index) = self.options.selected.checked_sub(2) else {
+                    return vec![];
+                };
                 if let Some(child) = self.listing.children.get(index).cloned() {
                     if let Some(path) = &self.listing.path {
                         self.history.insert(path.clone(), self.options.selected);
@@ -719,8 +746,7 @@ impl App {
                 }
             }
             KeyCode::Left if matches!(self.page, Page::Directory(_)) => {
-                if self.options.selected == 0
-                    || self.listing.path.as_deref() == Some(Path::new("/"))
+                if self.options.selected < 2 || self.listing.path.as_deref() == Some(Path::new("/"))
                 {
                     self.options.back = true;
                     return vec![];
@@ -737,7 +763,13 @@ impl App {
                 vec![]
             }
             KeyCode::Left | KeyCode::Right if self.is_form() => {
-                self.input.edit(key.code);
+                if self.options.back && key.code == KeyCode::Right {
+                    self.options.back = false;
+                } else if key.code == KeyCode::Left && self.input.cursor == 0 {
+                    self.options.back = true;
+                } else {
+                    self.input.edit(key.code);
+                }
                 vec![]
             }
             KeyCode::Left => {
@@ -770,6 +802,10 @@ impl App {
             ]
         } else if self.is_form() {
             &["Enter: Accept", "Esc: Back", "Ctrl-U: Clear"]
+        } else if self.page == Page::Home {
+            &["▲/▼/◀/▶: Move", "Enter/Space: Select", "Esc: Close"]
+        } else if self.page == Page::Launching {
+            &["Esc: Detach"]
         } else {
             &["▲/▼/◀/▶: Move", "Enter/Space: Select", "Esc: Back"]
         };
@@ -792,7 +828,7 @@ impl App {
             Page::Home => "",
             Page::Summary => "New Session",
             Page::Config => "Configuration",
-            Page::Roots => "Per-Space projects roots",
+            Page::Roots => "Space roots",
             Page::Accounts => "Choose Account",
             Page::Spaces => "Choose Space",
             Page::Name => "Session name",
@@ -825,6 +861,18 @@ impl App {
         let top = if self.is_form() { 5 } else { 3 };
         let bottom = footer - 4 - usize::from(self.page == Page::Summary) * 2;
         let (left, capacity) = self.options.paint(&mut canvas, &rows, top, bottom);
+        if self.page != Page::Launching {
+            self.options.paint_back(
+                &mut canvas,
+                left,
+                top,
+                if self.page == Page::Home {
+                    "Close"
+                } else {
+                    "Back"
+                },
+            );
+        }
         if self.is_form() {
             let valid = if matches!(self.page, Page::Directory(_)) {
                 self.listing.existing || self.listing.creatable
@@ -837,7 +885,7 @@ impl App {
             let enabled = self.draft.ready() && self.launch_supported && !self.pending;
             canvas.accent_text(
                 left,
-                footer - 6,
+                top + rows.len().min(capacity),
                 "•",
                 Accent {
                     brightness: 600,
@@ -848,7 +896,7 @@ impl App {
             Row::gate("Start Session", enabled).paint(
                 &mut canvas,
                 left,
-                footer - 5,
+                top + rows.len().min(capacity) + 1,
                 self.options.selected == 4 && !self.options.back,
                 self.options.back,
             );
@@ -890,25 +938,6 @@ impl App {
             &note,
             Cell {
                 fg: [215, 135, 0],
-                ..Cell::default()
-            },
-            false,
-        );
-        canvas.text(
-            2,
-            footer - 1,
-            if self.options.back {
-                "◀— Back"
-            } else {
-                "◀—"
-            },
-            Cell {
-                fg: if self.options.back {
-                    [238; 3]
-                } else {
-                    [188; 3]
-                },
-                bold: self.options.back,
                 ..Cell::default()
             },
             false,
@@ -1025,5 +1054,96 @@ mod tests {
             }),
         );
         assert!(!a.rows()[0].enabled);
+    }
+    #[test]
+    fn directory_right_and_tab_do_not_browse_from_action_rows() {
+        let mut a = app();
+        a.page = Page::Directory(Target::Draft);
+        a.input = TextInput::new("/tmp".into());
+        a.listing = Listing {
+            path: Some("/tmp".into()),
+            existing: true,
+            children: vec!["/tmp/child".into()],
+            ..Listing::default()
+        };
+        for row in [0, 1] {
+            for code in [KeyCode::Right, KeyCode::Tab] {
+                a.options.selected = row;
+                assert!(a.key(KeyEvent::new(code, KeyModifiers::NONE)).is_empty());
+                assert_eq!(a.input.value, "/tmp");
+                assert_eq!(a.options.selected, row);
+            }
+        }
+        a.options.selected = 2;
+        assert!(
+            matches!(&a.key(KeyEvent::new(KeyCode::Right,KeyModifiers::NONE))[..],[Effect::Inspect(_,p)] if p=="/tmp/child")
+        );
+    }
+    #[test]
+    fn space_defaults_to_exact_focused_id_and_never_to_the_first_space() {
+        let mut a = app();
+        let spaces = vec![
+            Workspace {
+                workspace_id: "w1".into(),
+                label: "First".into(),
+                focused: false,
+            },
+            Workspace {
+                workspace_id: "w2".into(),
+                label: "Active".into(),
+                focused: true,
+            },
+        ];
+        a.inventory(vec![], spaces.clone(), 0);
+        assert!(matches!(&a.draft.space,Some(Space::Existing {id,..}) if id=="w2"));
+        a.push(Page::Spaces, String::new());
+        assert_eq!(a.options.selected, 2);
+        let mut reordered = spaces.clone();
+        reordered.reverse();
+        a.inventory(vec![], reordered, 0);
+        assert_eq!(a.options.selected, 1);
+        let none = spaces
+            .iter()
+            .cloned()
+            .map(|mut s| {
+                s.focused = false;
+                s
+            })
+            .collect();
+        a.inventory(vec![], none, 0);
+        assert_eq!(a.draft.space, None);
+        a.inventory(vec![], spaces.clone(), 0);
+        a.options.selected = 1;
+        a.activate();
+        a.inventory(vec![], spaces, 0);
+        assert!(matches!(&a.draft.space,Some(Space::Existing {id,..}) if id=="w1"));
+    }
+    #[test]
+    fn summary_start_is_adjacent_to_fields_and_home_control_says_close() {
+        let mut a = app();
+        a.page = Page::Summary;
+        for (w, h) in [(80, 24), (140, 40)] {
+            let mut f = Field::new(w, h, 1967);
+            let c = a.paint(&mut f, 0, w, h);
+            let row = |y: usize| {
+                c.cells[y * w..(y + 1) * w]
+                    .iter()
+                    .map(|c| c.glyph.as_str())
+                    .collect::<String>()
+            };
+            assert!(row(6).contains("Directory:"));
+            assert!(row(7).contains('•'));
+            assert!(row(8).contains("Start Session"));
+        }
+        a.page = Page::Home;
+        a.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let c = a.paint(&mut Field::new(80, 24, 1967), 0, 80, 24);
+        let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+        assert!(text.contains("◀— Close"));
+        assert!(!text.contains("◀— Back"));
+        assert!(matches!(
+            &a.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))[..],
+            [Effect::Exit]
+        ));
     }
 }
