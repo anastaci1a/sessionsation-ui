@@ -52,8 +52,8 @@
     ],
     "installed_pty": {
       "cases_passed": 5,
-      "tty_startup_ms": 60,
-      "escape_to_restored_shell_ms": 53,
+      "tty_startup_ms": 65,
+      "escape_to_restored_shell_ms": 54,
       "model_sessions_created": 0
     },
     "preview_source": "Actual PTY ANSI capture from inert launcher; decoded to terminal cells"
@@ -91,7 +91,7 @@
     ]
   },
   "deployment": {
-    "status": "tested_correction",
+    "status": "deployed",
     "source_branch": "redesign/terminal-launcher",
     "previous_ui_commit": "f18979cdf86c3637e9e24b3cb9db3a1769e7df74",
     "strategy": "Fast-forward existing source-backed checkout after tests; no HERDR reload/restart or backend configuration change",
@@ -101,18 +101,19 @@
     "model_sessions_created": 0,
     "backend_artifact_changed": false,
     "pins_changed": false,
-    "source_commit": "b869cd018da6a5d9095d83d9b0013386f4c84931",
+    "source_commit": "0aca5be579c88efb44baf234ab26543f69a3cd4d",
     "source_checkout": "/mnt/user/live/projects/sessionsation-ui",
     "installed_entry": "/mnt/user/live/projects/sessionsation-ui/bin/sessionsation-shell",
     "entry_hashes": {
       "src/main.mjs": "bf5d7d8c2ee69ff567ab97f5f9de03fc5317cd9b6e98003af53542b8a598252e",
-      "src/terminal.mjs": "8aba65a3498a07b0d7706059732e149e6eac34f605cd5569a226d321d7e47bd8",
+      "src/client.mjs": "d8a88bcb5a530965c64bd6f6382d7d4a1536aae012233b96b58eebba2315ee4f",
+      "src/terminal.mjs": "b139f8bc312a90fd34ea79acbf0ce9302c6d6a17ef3a7749a97b97cfe660b70b",
       "src/launcher.mjs": "8ea46bd67fb3e5b912a148e1c70c892138a56f481ca3f564b7fd4aeaf230b0b1",
       "bin/sessionsation-shell": "2dddb1ba288c37144644330e285891dc716ce08343246be3b1c677f22d97fd72",
       "bin/sessionsation-ui": "2fda638cc383dc90c4e3331f0e66806d385af7d5a235f099d9fb470e17c0512b"
     },
     "protected_config_and_artifact_hashes_unchanged": true,
-    "existing_process_identities_retained": 31,
+    "existing_process_identities_retained": 28,
     "herdr_reload": false,
     "rollback_fixture": "Archived f18979c UI exits through its numbered launcher with /bin/false as backend; no backend call made. Restoring src/main.mjs and src/client.mjs from that revision selects the previous entrypoint; new renderer files may remain unused."
   }
