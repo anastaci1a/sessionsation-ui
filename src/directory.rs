@@ -8,6 +8,7 @@ use std::{
 pub struct Listing {
     pub path: Option<PathBuf>,
     pub children: Vec<PathBuf>,
+    pub resolved: BTreeMap<PathBuf, PathBuf>,
     pub existing: bool,
     pub creatable: bool,
     pub error: Option<String>,
@@ -92,9 +93,14 @@ pub fn inspect(input: &str, initial: &Path, env: &BTreeMap<String, String>) -> R
         path.file_name().unwrap().to_string_lossy().into_owned()
     };
     let mut children = Vec::new();
+    let mut resolved = BTreeMap::new();
     for entry in std::fs::read_dir(base)? {
         let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with(&prefix) && entry.path().is_dir() {
+        if entry.file_name().to_string_lossy().starts_with(&prefix)
+            && entry.path().is_dir()
+            && let Ok(real) = std::fs::canonicalize(entry.path())
+        {
+            resolved.insert(entry.path(), real);
             children.push(entry.path());
         }
     }
@@ -105,10 +111,37 @@ pub fn inspect(input: &str, initial: &Path, env: &BTreeMap<String, String>) -> R
     Ok(Listing {
         path: Some(path),
         children,
+        resolved,
         existing,
         creatable,
         error: None,
     })
+}
+
+/// Configured roots can have been materialized by an earlier successful launch.
+/// Consume only existing canonical ancestors; never adopt the session leaf.
+pub fn remaining_plan(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut remaining = Vec::new();
+    for (index, path) in paths.iter().enumerate() {
+        if index + 1 < paths.len() {
+            match std::fs::symlink_metadata(path) {
+                Ok(meta) => {
+                    anyhow::ensure!(
+                        meta.is_dir()
+                            && !meta.file_type().is_symlink()
+                            && std::fs::canonicalize(path)? == *path,
+                        "Staged projects root changed identity: {}",
+                        path.display()
+                    );
+                    continue;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        remaining.push(path.clone());
+    }
+    Ok(remaining)
 }
 #[cfg(test)]
 mod tests {
@@ -128,5 +161,20 @@ mod tests {
         assert!(l.creatable);
         assert!(!l.existing);
         assert!(!l.path.unwrap().exists());
+    }
+    #[test]
+    fn previous_launch_root_is_reusable_but_existing_leaf_is_never_adopted() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().join("projects");
+        let leaf = root.join("new");
+        std::fs::create_dir_all(&leaf).unwrap();
+        assert_eq!(remaining_plan(&[root, leaf.clone()]).unwrap(), vec![leaf]);
+    }
+    #[test]
+    fn changed_root_symlink_is_rejected() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().join("link");
+        std::os::unix::fs::symlink(t.path(), &root).unwrap();
+        assert!(remaining_plan(&[root.clone(), root.join("new")]).is_err());
     }
 }

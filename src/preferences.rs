@@ -25,6 +25,8 @@ pub struct Preferences {
     pub global_root: Option<PathBuf>,
     pub space_roots: BTreeMap<String, PathBuf>,
     pub last_account: Option<String>,
+    #[serde(default)]
+    pub root_plans: BTreeMap<String, Vec<PathBuf>>,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -34,6 +36,7 @@ impl Default for Preferences {
             global_root: None,
             space_roots: BTreeMap::new(),
             last_account: None,
+            root_plans: BTreeMap::new(),
         }
     }
 }
@@ -68,6 +71,24 @@ impl Preferences {
             ensure!(
                 absolute_clean(p),
                 "Project roots must be absolute paths without '..'"
+            );
+        }
+        for (key, paths) in &self.root_plans {
+            let root = if key == "global" {
+                self.global_root.as_ref()
+            } else {
+                self.space_roots.get(key)
+            };
+            ensure!(
+                paths.is_empty() || paths.last() == root,
+                "Staged root plan must end at its configured root"
+            );
+            ensure!(
+                paths.iter().all(|p| absolute_clean(p))
+                    && paths
+                        .windows(2)
+                        .all(|p| p[1].parent() == Some(p[0].as_path())),
+                "Invalid staged root plan"
             );
         }
         Ok(())

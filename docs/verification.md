@@ -1,5 +1,24 @@
 # Verification
 
+## Rust replacement (not deployed)
+
+`scripts/check-rust.sh` checks formatting, Clippy and Rust unit regressions in an
+offline container. `scripts/test-terminal.py --binary PATH` adds isolated PTY
+acceptance with fake backend/HERDR commands: 20 process startups, 238 key events,
+two-second backend delays, editable summary, bracketed paste, staged directories,
+exact Start request identity, resize/cancel and byte-equivalent TTY restoration.
+It decodes ANSI cell updates rather than searching incremental output as plain text.
+The resize/cancel case exercises simultaneous signal/input readiness; the default
+Crossterm Mio reader intermittently lost the key, while its level-triggered reader
+passes. No test invokes a model or reads production account state.
+
+The release build measured p95 first paint 7.99 ms, key feedback 0.85 ms, and frame
+computation/diff 0.102 ms at 80×24 / 0.381 ms at 160×48 (600 frames each).
+These are local PTY/renderer measurements, not host invocation or provider startup.
+Actual popup handoff, visual fidelity and deployment remain acceptance gates.
+
+## Preserved installed client
+
 Run `npm test` for isolated client/configuration regressions and `npm run check`
 for JavaScript/Bash syntax, manifest fields and documentation links. Twenty tests
 pass, including literal argv, stale/version/protocol errors, exact launcher exec,

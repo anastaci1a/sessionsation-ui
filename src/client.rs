@@ -48,6 +48,13 @@ pub fn config_path() -> PathBuf {
         })
 }
 impl Client {
+    pub async fn launch(&self, operation: &str, mut request: Value) -> Result<Value> {
+        let paths: Vec<PathBuf> = serde_json::from_value(request["directory"]["create"].clone())?;
+        let remaining =
+            tokio::task::spawn_blocking(move || crate::directory::remaining_plan(&paths)).await??;
+        request["directory"]["create"] = serde_json::to_value(remaining)?;
+        self.api(&["launch", operation], Some(request)).await
+    }
     pub fn load() -> Result<Self> {
         let stored = std::fs::read(config_path())
             .ok()

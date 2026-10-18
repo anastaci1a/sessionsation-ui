@@ -30,8 +30,25 @@ before a replacement is built. Keep this document about implemented architecture
 
 ## Rust replacement under development
 
-The Rust library has a pure staged draft, versioned UI preferences, read-only
-path completion, bounded asynchronous public clients and a cell renderer. It is
-not connected to the installed entrypoint. Frame geometry is independent of option
-scrolling. See the [approved design](cli-specification/architecture.md) for target
-behavior; deterministic unit checks are not visual acceptance in HERDR.
+The Rust executable implements the New Session summary, Configuration, account and
+Space choices, name forms, shared directory picker and durable Start/status flow.
+It is not connected to the installed entrypoint. Its reusable components are:
+
+- `render`: terminal-sized animated field, Unicode cell canvas and output deltas.
+  Background geometry is independent of option scrolling.
+- `widgets`: option focus/scrolling, enabled/disabled row styling and grapheme-aware
+  input editing/painting. Start uses the same row control as the pickers.
+- `directory`: read-only completion, canonical child resolution and staged paths.
+  One picker serves session directories and Global/Per-Space configuration roots.
+- `draft` / `preferences`: creation intent and atomic UI-only preferences.
+- `app`: page navigation, validation revisions and explicit effects. Pages supply
+  choices and policy; they do not implement their own editor or list renderer.
+- `client` / runtime: asynchronous public API calls, bounded input/output channels,
+  serialized off-thread directory reads and rejection of obsolete results.
+
+Configuration root plans remain intent until Start. Already materialized canonical
+root ancestors can be reused; an existing session leaf still requires explicit
+selection. Resize/input uses Crossterm's level-triggered TTY reader to avoid losing
+input readiness when resize and a key arrive together. No automatic Start replay.
+See the [approved design](cli-specification/architecture.md) for target behavior;
+PTY and deterministic unit checks are not visual acceptance in HERDR.
