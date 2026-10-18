@@ -195,8 +195,7 @@ line above and at least one before bottom controls. Reserve list/counter space
 for it while scrolling; hide it if width/height still cannot fit it. Range counters
 are centered and share the bottom controls’ animated hint palette/fading. Dialog
 hints use the same renderer; no flat gray override.
-Uncertain outcomes
-are inspected, never replayed. Cancellation/recovery are separate backend actions.
+Uncertain outcomes are inspected, never replayed. Cancellation/recovery are separate backend actions.
 
 Account deregistration previews open immediately while data loads. The confirmation
 shows the friendly provider-name label (for example `codex-personal`), which the UI

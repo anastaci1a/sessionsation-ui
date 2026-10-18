@@ -21,15 +21,15 @@ Its highlighted account's usage sits above the controls with a blank line betwee
 Growing the screen returns that list to Home; forms remain open and Back chooses
 the appropriate current layout without losing their account selection.
 
-Verified 5-hour accounts show paired 5h/weekly bars; weekly-only accounts show their weekly bar. Bars measure remaining
-allowance using capped lines (`╺━┿━──╴`): the thick remaining portion and limit crossing share the animated accent; the thin depleted portion is visible gray. Mixed-weight transitions `╾`/`┽` are
-also gray; depleted threshold crossings use `┼`. Caps and joins remain continuous
-at empty, partial and full allowance. Names share a bar start column;
-percentages precede period labels, with shared right-/left-aligned columns. Missing observations show Loading… rather than Ready; stale observations are marked. In the selection picker,
-usage is a separate right-aligned `x% 5h / x% wkly` column with aligned percent signs
-and slashes. Weekly-only accounts omit the short period and slash; shared padding
-uses the largest displayed number. New account names are
-limited to 12 characters. Existing longer names are shortened only in list display.
+Bars show remaining allowance for the periods the backend reports: 5h/weekly or
+weekly only. Capped accent lines deplete into visible gray; custom limits appear
+inside the bar. Percentages precede period labels in aligned columns. Missing
+observations show Loading…; stale observations are marked. The account picker uses
+a separate right-aligned `x% 5h / x% wkly` column, omitting the short period and
+slash for weekly-only accounts. Names are limited to 12 characters for new accounts;
+existing longer names are shortened only in display. See the
+[rendering specification](cli-specification/architecture.md#account-and-session-management)
+for the precise glyph, alignment and motion rules.
 
 Account actions group Usage details/Limits, Login/Enable/Disable, and
 Deregister/Restore/Delete with dot separators. Limits edit minimum remaining
