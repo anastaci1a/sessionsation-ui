@@ -53,7 +53,7 @@ below must be implemented before use:
 key = "prefix+shift+l"
 type = "plugin_action"
 command = "sessionsation.launcher"
-description = "create or resume a session"
+description = "create a new session"
 ```
 
 The popup is a terminal UI, not an agent pane. Official HERDR semantics give it
@@ -63,12 +63,13 @@ as the new agent target. Popup input, including Escape, belongs to its process.
 Normal cancellation restores the TTY and exits that process. Do not blindly issue
 global `popup.close`, which could close a replacement popup after a race.
 
-Selection requests a **separate normal tab**, with the chosen directory, account
-and retained host shell. Only after confirmed creation/handoff does the popup
-exit; the model process is never launched inside it or promoted out of it. Resume
-must preserve stable identity and fresh generation checks. Plain Shell also opens
-a normal tab. Errors stay visible; uncertain admission must be reconciled without
-automatic retry. Viewer detachment and popup cancellation never mean agent Stop.
+Selection requests a **new session in a separate normal tab in the chosen HERDR
+Space/workspace**, using the chosen directory, account and retained host shell.
+Only after confirmed creation/handoff does the popup exit; the model process is
+never launched inside it or promoted out of it. Errors stay visible; uncertain
+admission must be reconciled without automatic retry. Popup cancellation never
+means agent Stop. The replacement has no existing-session list, resume, attachment,
+account switching for running sessions, or standalone Plain Shell action.
 
 This needs a backend-owned public launch/host contract before wiring the UI:
 today `launcher new/resume/shell` returns an opaque argv plan for execution in the
@@ -81,6 +82,38 @@ inject reconstructed provider commands via terminal text. Preserve the existing
 launcher bypass so a newly created tab cannot recursively reopen the menu. The
 UI consumes this public operation; it owns neither a lifecycle engine nor a
 second data-root supervisor. Session naming should join the same atomic operation.
+
+## Destination and ownership
+
+The destination picker selects an existing **HERDR Space**, represented by a
+`workspace_id` in its public API. It is independent of the account and working
+directory choices. No separate Projects entity, project catalog or inferred
+directory-to-workspace hierarchy is part of this design. Creating/managing Spaces
+is not required by the picker. Page order and default selection remain for design
+discussion; the originating Space may be offered as an explicit visible default.
+
+| Component | Responsibility |
+| --- | --- |
+| Agent DM | Agent hierarchy and coordination |
+| sessionsation CLI | Accounts, credentials, session catalog and lifecycle; admission and host launch operation |
+| HERDR | Spaces/workspaces, normal tabs/panes and terminal presentation |
+| sessionsation-ui | Collect new-session choices and display public-contract results |
+
+HERDR's public workspace inventory supplies destination labels and IDs. Bind
+selection to the ID, scoped to the same HERDR instance/socket as creation, never
+to display order, label, directory or current focus. Labels may change or collide;
+refresh must retain the selected ID or clearly report that it disappeared. Check
+the destination at launch admission and return a structured error if it is gone;
+never silently use whichever workspace is now focused. The new tab and returned
+attachment must belong to that chosen workspace. Whether UI reads HERDR inventory
+directly or through a public backend host endpoint is a discussion item; either
+route preserves HERDR as its authority and adds no UI-owned catalog.
+
+The installed schema accepts an optional `workspace_id` for `tab.create`; this
+proposed launcher must pass the explicit chosen ID instead of relying on omission.
+The public launch contract still needs destination selection, directory, account
+and admission/identity behavior agreed before implementation. Workspace selection
+and tab presentation do not establish an Agent DM hierarchy or coordination link.
 
 Full-height means the popup's **entire PTY content viewport**: field, gradient and
 bottom controls reach its terminal bottom independently of list length. The HERDR
@@ -114,10 +147,11 @@ linked verification section; no runtime popup acceptance is claimed yet.
    existing public backend client. No backend calls in animation ticks or arrows.
    Request tokens reject stale read completions; mutation cancellation is not a
    claim of rollback or non-admission. No automatic retry or duplicate sends.
-6. **Launcher coordinator:** creation/resume/plain-shell only, consumes the agreed
+6. **Launcher coordinator:** new sessions only, consumes the agreed
    public host-aware operation above and closes its popup after confirmed handoff.
-   Retains account IDs/generations/cwd semantics. Existing management CLI remains
-   outside these models and screens. Never executes an agent in the popup.
+   Carries the selected account, directory and explicit destination workspace ID.
+   Lifecycle/account management remains in the CLI. Never executes an agent in
+   the popup or exposes existing-session operations.
 
 Use one renderer and one form/selection state machine shared across pages, with
 small explicit differences for directory navigation versus text cursor editing.
@@ -128,8 +162,9 @@ Avoid per-page copies or an independent lifecycle implementation in the UI.
 - Finalize Rust versus the existing Node runtime and choose build/dependency
   policy. Rust is dot's leading candidate, not an approved implementation choice.
 - Agree the plugin action → popup → backend-created normal tab contract, including
-  admission reconciliation, target identity, recursive-launch bypass and retained
-  shell. Resolve the installed CLI-help mismatch with an isolated host test before
+  explicit workspace selection, inventory access, admission reconciliation, target
+  identity, recursive-launch bypass and retained shell. Resolve the installed
+  CLI-help mismatch with an isolated host test before
   deployment; do not test by manipulating existing live panes.
 - Confirm target coordinate examples from [visuals](visuals.md#target-geometry):
   no decorative title, functional status/page bars, full-height field and bottom
@@ -137,8 +172,8 @@ Avoid per-page copies or an independent lifecycle implementation in the UI.
 - Reference asks for a session name before directory/account. Current public
   `launcher new` plan uses backend-generated naming. Should backend add an atomic
   public name parameter before this flow is ported? Do not fake it with a second
-  rename mutation, tmux name or UI catalog. Resume/live-attach availability likewise
-  stays capability-driven and must not be inferred from legacy code.
+  rename mutation, tmux name or UI catalog. Agree the account/directory/workspace
+  picker sequence without importing the reference's existing-session menu.
 - Confirm deliberate enhancements: safe bracketed paste, full grapheme width,
   cancellation during async directory reads, minimum-size view. Retain reference
   key semantics; no extra Home/End/Page/Delete behavior by accident.

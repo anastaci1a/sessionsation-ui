@@ -52,6 +52,7 @@ Read-only inspection on Satellite, 2026-10-18:
 | Exported schema SHA256 | `9e2af207e9aa8183d4aeca5fde9cc48e7909bb40cdbd7cf21608a6d3ea78075b` |
 | `herdr plugin pane open --help` | Lists overlay/split/tab/zoomed, omits popup and dimension flags |
 | `herdr tab create --help` and bundled `TabCreateParams` | cwd/env/label/focus/workspace, no command argv |
+| Bundled `WorkspaceInfo` and `TabCreateParams` | Workspace identity is `workspace_id`, separate from label/number/focused; tab creation accepts an explicit workspace ID |
 | Two isolated `herdr config check` invocations | Both exit 0, `config: ok`: qualified plugin action and direct popup with 80% dimensions, each bound to `prefix+shift+l` |
 
 Configuration checks used separate temporary TOML files selected with
@@ -170,11 +171,17 @@ Verification requirements below are for future work; the issue tracks completion
    hidden/symlink paths, mkdir failure/cancel and exact TTY restoration. Resize
    during scroll/edit/I/O/sweep; test EOF/INT/TERM/HUP, focus and output backpressure.
    Any added paste handling is an explicit deviation.
-4. Inert backend fixtures assert account-list-only New, stable-ID/generation Resume,
-   stale completion rejection, literal opaque plans and no automatic retries.
+4. Inert fixtures assert new-session-only operations, account-list reads without
+   existing-conversation discovery, stale completion rejection, literal opaque
+   plans and no automatic retries. Workspace fixtures cover duplicate labels,
+   reordered/renamed destinations, focus changes and destination removal; retain
+   selection by ID within the same HERDR instance and reject vanished targets.
    Popup integration must bind the newly created normal tab/pane, never its
-   underlying focus context; test confirmed handoff, failed/uncertain admission,
-   no recursive launcher and cancellation without stopping an agent.
+   underlying focus context; assert creation in the explicitly selected workspace
+   with the selected directory/account. Test confirmed handoff, failed/uncertain
+   admission, no recursive launcher and cancellation without stopping an agent.
+   Exclude resume, switching, attachment and standalone shell actions from the UI;
+   no Projects catalog or Agent DM hierarchy/coordination behavior belongs here.
    Measure every transition and backend-call count, not spinner visibility.
 5. Review actual HERDR viewer appearance and detach/cancel before claiming that
    host's visual acceptance. This audit does not open/control a live viewer. No

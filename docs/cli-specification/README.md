@@ -26,8 +26,9 @@ Read by purpose:
 These override reference behavior. Other differences need an explicit explanation
 and review; a similar-looking mockup is insufficient.
 
-- Creation-only UI: New, Resume and Plain Shell. Account/session management stays
-  in the separate CLI. No manager, jobs, stop/kill, or nested HERDR viewer action.
+- New-session-only UI: choose account, directory and destination HERDR
+  Space/workspace. Existing-session resume, switching, attachment, standalone
+  Plain Shell and management are outside this replacement's scope.
 - Preferred entry is a HERDR plugin popup with an installer-chosen keybinding;
   selection creates a normal tab, then the popup exits. It never hosts/promotes an
   agent. The proposed contract and Ana's binding are in [architecture](architecture.md#preferred-host-flow-popup-to-a-new-normal-tab).

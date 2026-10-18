@@ -18,8 +18,9 @@ export SESSIONSATION_DATA_DIR=/explicit/backend/data-root
 The installed numbered launcher offers new sessions, saved-session resume and a plain shell. The
 management viewer provides account/usage inspection and backend-driven operations.
 The animated redesign has been rolled back. Its replacement is being specified
-from [cli-main-menu](docs/cli-specification/README.md), with architecture discussion
-before rebuilding.
+from [cli-main-menu](docs/cli-specification/README.md) as a **new-session-only popup**:
+choose an account, directory and destination HERDR Space, then create a normal tab
+there. Architecture discussion precedes rebuilding.
 HERDR integration and future-terminal configuration are documented in
 [usage](docs/usage.md). See [documentation](docs/README.md) and
 [contributor instructions](agents/README.md).

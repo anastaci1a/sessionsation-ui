@@ -21,13 +21,14 @@ New Terminal prints a green readiness line and returns to the calling shell.
 Focused home Exit actually exits that shell. Esc returns to shell without exiting
 it. Herdr runs the configured binary, leaves the alternate screen while attached,
 then returns to the same menu selection on detach. These are separate actions;
-the target must not accidentally treat Plain Shell, cancel, viewer detach and
-agent Stop as synonyms.
+these reference actions are distinct from cancellation and agent Stop. The target
+only creates new sessions; those reference shell/viewer actions are not ported.
 
-Target scope is New/Resume/Plain Shell. No nested Herdr action, destructive shell
-Exit action, jobs or management row is required. Preserve visual focus/navigation,
-not irrelevant action wiring. The separate `manage` command remains outside this
-creation UI; its existing implementation is not being redesigned in this audit.
+Target scope is new-session creation with account, directory and destination HERDR
+Space/workspace selection. Existing-session lists, resume, switching/attachment,
+standalone Plain Shell, nested Herdr, shell Exit, jobs and management are excluded.
+Preserve visual focus/navigation, not irrelevant action wiring. Installed `manage`
+and the numbered launcher remain unchanged while the replacement is discussed.
 The planned HERDR entry and exit behavior is specified in
 [architecture](architecture.md#preferred-host-flow-popup-to-a-new-normal-tab):
 the popup requests a separate normal tab, then exits after confirmed handoff.
@@ -90,10 +91,11 @@ set-option uses exact session target plus colon, while attach/switch uses exact
 target. One ordered tmux command queue prepares recency/window/pane, and failure
 prevents attachment. Existing tmux clients switch; otherwise attach.
 
-Target may use this presentation for Resume where public capabilities permit.
-Whether to include live attachment alongside saved Resume needs explicit public
-plan support; never copy the legacy key-changing/thread-fallback identity model
-over sessionsation's stable IDs and generation checks.
+This entire existing-session presentation/open flow is reference-only and excluded
+from the new-session launcher. Its audit preserves source coverage, not a planned
+Resume screen. Destination selection uses HERDR workspaces, not an agent/session
+list; [destination and ownership](architecture.md#destination-and-ownership) defines
+the target boundary.
 
 ## Discovery and errors
 
