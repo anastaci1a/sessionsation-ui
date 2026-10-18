@@ -22,11 +22,12 @@ async function launch() {
     if (!action || action==='exit') return;
     let args=['launcher',action];
     if (action!=='shell') {
-      const state=await client.call(['state']);
       if (action==='new') {
-        const a=await choose('New session: account',state.accounts.filter(a=>a.selectable),a=>`${a.id} ${a.plan??''}`);
+        const accounts=await client.call(['account','list']);
+        const a=await choose('New session: account',accounts.filter(a=>a.selectable),a=>`${a.id} ${a.plan??''}`);
         if (!a) continue; args.push('--account',a.id);
       } else {
+        const state=await client.call(['state']);
         const s=await choose('Resume saved session',state.sessions.filter(s=>s.capabilities?.resume),s=>`${s.name} [${s.account_id}]`);
         if (!s) continue; args.push(...targetArgs(s));
       }

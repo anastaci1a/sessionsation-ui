@@ -1,13 +1,15 @@
 # Verification
 
 Run `npm test` for isolated client/configuration regressions and `npm run check`
-for JavaScript/Bash syntax, manifest fields and documentation links. Nineteen tests
+for JavaScript/Bash syntax, manifest fields and documentation links. Twenty tests
 pass, including literal argv, stale/version/protocol errors, exact launcher exec,
 viewer exit without lifecycle mutation, plain-shell execution, selected-session
 switch identity/generation, exact removal confirmation/revision, active-account
 refusal, configuration rollback, concurrent-edit refusal and unsafe-config rejection. Host regressions cover the
 default socket through a symlink, named/explicit sessions, unknown sockets/missing
 panes, non-HERDR terminals and the retained-shell new-account execution path.
+The New-page regression refuses global state discovery and accepts only the
+account-list request followed by the exact selected-account launch plan.
 No fixture test uses credentials or models. Backend evidence/provenance remains
 linked from [architecture](architecture.md).
 

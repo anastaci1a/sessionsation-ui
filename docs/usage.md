@@ -6,7 +6,9 @@ Set `SESSIONSATION_BIN` to the verified absolute backend executable and
 backend default is not an automatic import. See the backend ownership guidance.
 
 Run `./bin/sessionsation-ui launcher` in an ordinary terminal for new, resume or
-plain shell. Run `./bin/sessionsation-ui manage` for account and selected-session
+plain shell. New reads the account list directly; it does not scan conversation
+histories or terminal attachments just to show accounts. Resume still discovers
+current sessions and the backend revalidates the selected generation at execution. Run `./bin/sessionsation-ui manage` for account and selected-session
 management. Exiting management only closes the viewer. Stop is a separate explicit
 backend operation. Capability hints determine available choices.
 
