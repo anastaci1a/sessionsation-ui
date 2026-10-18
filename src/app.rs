@@ -218,9 +218,9 @@ impl App {
                 valid_name(&self.input.value) && self.listing.creatable,
             )],
             Page::Directory(_) => {
-                std::iter::once(Row::gate("Use this directory", self.listing.existing))
+                std::iter::once(Row::gate("<use this dir>", self.listing.existing))
                     .chain(std::iter::once(Row::gate(
-                        "Add new directory",
+                        "<create dir>",
                         self.listing.existing || self.listing.creatable,
                     )))
                     .chain(self.listing.children.iter().map(|p| {
@@ -355,20 +355,6 @@ impl App {
         self.error = result.err().unwrap_or_default();
         self.dirty = true;
     }
-    pub fn expire_prefill(&mut self, now: i64) {
-        if self.auto_account
-            && self.draft.account.as_ref().is_some_and(|id| {
-                !self
-                    .accounts
-                    .iter()
-                    .any(|a| a.id == *id && a.prefill["valid_until"].as_i64().unwrap_or(0) > now)
-            })
-        {
-            self.draft.account = None;
-            self.draft.name_valid = false;
-            self.dirty = true;
-        }
-    }
     pub fn inventory(
         &mut self,
         accounts: Vec<Account>,
@@ -413,7 +399,17 @@ impl App {
                 self.draft.space = None;
             }
         }
-        if self.auto_account {
+        // Freshness governs choosing a default, not retaining an existing choice.
+        // Only a successful authoritative inventory may invalidate its membership.
+        if self
+            .draft
+            .account
+            .as_ref()
+            .is_some_and(|id| !self.accounts.iter().any(|a| a.id == *id && a.selectable))
+        {
+            self.draft.account = None;
+        }
+        if self.auto_account && self.draft.account.is_none() {
             self.draft.account = self
                 .prefs
                 .last_account
@@ -680,7 +676,10 @@ impl App {
                     self.exit = true;
                     return vec![Effect::Exit];
                 }
-                KeyCode::Char('u') if self.is_form() => {
+                KeyCode::Char('u')
+                    if self.is_form()
+                        && !matches!(self.page, Page::Directory(_) | Page::NewDirectory(..)) =>
+                {
                     self.input.clear();
                     return if matches!(self.page, Page::Directory(_) | Page::NewDirectory(..)) {
                         self.inspect()
@@ -721,7 +720,7 @@ impl App {
                 );
                 vec![]
             }
-            KeyCode::Right | KeyCode::Tab if matches!(self.page, Page::Directory(_)) => {
+            KeyCode::Right if matches!(self.page, Page::Directory(_)) => {
                 if self.options.back && key.code == KeyCode::Right {
                     self.options.back = false;
                     return vec![];
@@ -794,12 +793,12 @@ impl App {
         let tokens: &[&str] = if matches!(self.page, Page::Directory(_)) {
             &[
                 "▲/▼: Choose",
-                "▶/Tab: Open",
-                "◀: Parent",
+                "◀/▶: Parent/Open",
                 "Enter: Select",
                 "Esc: Back",
-                "Ctrl-U: Clear",
             ]
+        } else if matches!(self.page, Page::NewDirectory(..)) {
+            &["Enter: Accept", "Esc: Back"]
         } else if self.is_form() {
             &["Enter: Accept", "Esc: Back", "Ctrl-U: Clear"]
         } else if self.page == Page::Home {
@@ -1045,6 +1044,8 @@ mod tests {
         );
         assert!(a.rows()[0].enabled);
         a.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(a.input.value, "planned-root");
+        a.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         assert!(!a.rows()[0].enabled);
         a.listing(
             a.revision - 1,
@@ -1054,6 +1055,26 @@ mod tests {
             }),
         );
         assert!(!a.rows()[0].enabled);
+    }
+    #[test]
+    fn refresh_retains_selected_default_until_authoritatively_invalid() {
+        let mut a = app();
+        a.prefs.last_account = Some("codex:work".into());
+        let account = |selectable, eligible, valid_until| {
+            serde_json::from_value(json!({
+                "id":"codex:work", "selectable":selectable,
+                "prefill":{"eligible":eligible,"valid_until":valid_until}, "usage":{}
+            }))
+            .unwrap()
+        };
+        a.inventory(vec![account(true, true, 105)], vec![], 100);
+        assert_eq!(a.draft.account.as_deref(), Some("codex:work"));
+        // Replacement arrives after the five-second prefill lease; stale usage
+        // must not erase a choice or silently select a different account.
+        a.inventory(vec![account(true, false, 105)], vec![], 107);
+        assert_eq!(a.draft.account.as_deref(), Some("codex:work"));
+        a.inventory(vec![account(false, false, 110)], vec![], 108);
+        assert!(a.draft.account.is_none());
     }
     #[test]
     fn directory_right_and_tab_do_not_browse_from_action_rows() {
@@ -1075,6 +1096,11 @@ mod tests {
             }
         }
         a.options.selected = 2;
+        assert!(
+            a.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+                .is_empty()
+        );
+        assert_eq!(a.input.value, "/tmp");
         assert!(
             matches!(&a.key(KeyEvent::new(KeyCode::Right,KeyModifiers::NONE))[..],[Effect::Inspect(_,p)] if p=="/tmp/child")
         );

@@ -361,7 +361,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
         let mut next = vec![];
         tokio::select! {
          _=term_signal.recv()=>{app.exit=true;},_ = hup_signal.recv()=>{app.exit=true;},
-         _=frame.tick()=>{app.expire_prefill(now());app.dirty=true;},
+         _=frame.tick()=>{app.dirty=true;},
          _=refresh.tick(),if !inventory_pending&&app.request.is_none()=>{inventory_pending=true;effects.inventory();},
          _=receipt.tick(),if app.request.is_some()&&!app.success&&!receipt_pending=>{receipt_pending=true;effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into());},
          message=rx.recv()=>match message.context("Input channel closed")? {

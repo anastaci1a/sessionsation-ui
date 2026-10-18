@@ -277,7 +277,7 @@ impl Options {
     pub fn paint_back(&self, canvas: &mut Canvas, left: usize, top: usize, label: &str) {
         let text = format!("◀— {label}");
         let expanded_width = UnicodeWidthStr::width(text.as_str()) + 1;
-        let expanded = self.back && left >= expanded_width;
+        let expanded = self.back && left > expanded_width;
         let (x, text) = if expanded {
             (left - expanded_width, text.as_str())
         } else {
@@ -346,6 +346,23 @@ mod tests {
         let (wide_left, _) = options.paint(&mut wide, &rows, 3, 8);
         assert_eq!(wide_left, (120 - 13) / 2);
         assert!(wide.cells.iter().any(|c| c.glyph == "/"));
+    }
+    #[test]
+    fn expanded_back_keeps_a_left_padding_cell() {
+        let options = Options {
+            back: true,
+            ..Options::default()
+        };
+        for (left, expands) in [(8, false), (9, true)] {
+            let mut canvas = Canvas::new(30, 8);
+            options.paint_back(&mut canvas, left, 3, "Back");
+            let row: String = canvas.cells[90..120]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect();
+            assert_eq!(row.contains("Back"), expands);
+            assert_eq!(canvas.cells[90].glyph, " ");
+        }
     }
     #[test]
     fn back_is_compact_until_focused_and_expands_left_of_the_top_option() {

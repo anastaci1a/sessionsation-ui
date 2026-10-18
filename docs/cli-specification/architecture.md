@@ -33,10 +33,12 @@ and disabled until all fields are valid. Back preserves draft choices.
   derived paths follow Name/Space changes; manually chosen paths remain unchanged.
   An existing automatic path requires explicit selection. Every Create Directory
   action stages intent, including configuration pickers; no directory is created
-  before Start. Enter accepts a child; Right/Tab browses only a child row, doing
-  nothing on the two action rows. The path stays typable.
+  before Start. Enter accepts a child; Right browses only a child row, doing
+  nothing on `<use this dir>` and `<create dir>`. Tab and Ctrl-U have no picker action.
+  The path stays typable.
 - Account remembers the last successful launch. Backend-computed fresh usage and
-  existing limits govern prefill; otherwise show `<unset>`. Manual selection may
+  existing limits govern initial prefill. Retain a selected account through refresh
+  and usage expiry; clear it only on authoritative unavailability. Manual selection may
   override this preference restriction when the backend permits launch. Never
   silently substitute an account or infer permission to spend purchased credits.
 

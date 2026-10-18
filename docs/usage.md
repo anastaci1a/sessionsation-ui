@@ -33,14 +33,17 @@ Open **New Session**, edit Account, Space, Name and Directory in any order, then
 select Start Session directly below the fields and separator. The default Space is
 the one currently focused in HERDR; no focus leaves it unset. Pickers preserve the
 draft on Back. Existing automatic paths require explicit selection. Directory Enter
-selects; Right/Tab browses child rows only, leaving the two action rows unchanged; Left goes
-up or focuses Back. Typing and paste edit the path; Ctrl-U clears. Create stages
+selects; Right browses child rows only, leaving `<use this dir>` and `<create dir>` unchanged; Left goes
+up or focuses Back. Tab and Ctrl-U have no directory-picker action. Typing and paste edit the path. Create stages
 intent and never calls mkdir. Configuration uses the same picker and saves on Back.
 Missing per-Space roots remain unset, without a global fallback. Last-account prefill
-requires fresh usage within existing limits; manually selecting a backend-permitted
+initially requires fresh usage within existing limits. Once selected, the account remains
+visible during refreshes and stale usage; only confirmed unavailability clears it.
+Launch validation remains authoritative. Manually selecting a backend-permitted
 account does not rewrite its limits.
 
-The Back arrow is beside the top visible option. Left selects and expands it;
+The Back arrow is beside the top visible option. Left selects and expands it only
+when the expanded label retains a left padding cell;
 Right returns to the option. On the main page its expanded label is **Close**.
 Configuration uses short labels and shows a directory preview only when the full
 path fits beside its label.
