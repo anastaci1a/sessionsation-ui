@@ -156,6 +156,7 @@ impl Manager {
         let selected = self.selected_account();
         self.accounts = accounts;
         self.inventory_known = true;
+        self.validate_dialog_names();
         if let Some(id) = selected {
             if let Some(index) = self.accounts.iter().position(|a| a.id == id) {
                 match self.page {
@@ -166,6 +167,25 @@ impl Manager {
             } else if matches!(self.page, Page::Home | Page::Accounts) {
                 self.options.selected = 0;
             }
+        }
+    }
+    fn validate_dialog_names(&mut self) {
+        let excluded = match &self.form {
+            Form::Add => self
+                .accounts
+                .iter()
+                .filter_map(|a| a.id.strip_prefix("codex:").map(str::to_owned))
+                .collect(),
+            Form::Rename(target) => self
+                .sessions
+                .iter()
+                .filter(|s| s["id"] != target["id"])
+                .filter_map(|s| s["name"].as_str().map(str::to_owned))
+                .collect(),
+            _ => return,
+        };
+        if let Some(field) = self.dialog.as_mut().and_then(|d| d.fields.first_mut()) {
+            field.excluded = excluded;
         }
     }
     pub fn title(&self) -> &str {
@@ -220,9 +240,22 @@ impl Manager {
                 rows
             }
             Page::Accounts => {
+                let column = self
+                    .accounts
+                    .iter()
+                    .map(|a| unicode_width::UnicodeWidthStr::width(short_name(&a.id).as_str()))
+                    .max()
+                    .unwrap_or(0)
+                    + 4;
                 std::iter::once(Row::yes("<add account>"))
                     .chain(self.accounts.iter().map(|a| {
-                        Row::yes(short_name(&a.id)).with_preview(Usage::account(a).status)
+                        let enabled =
+                            a.details.get("enabled").and_then(Value::as_bool) == Some(true);
+                        Row::yes(short_name(&a.id)).with_column_preview(
+                            if enabled { "Enabled" } else { "Disabled" },
+                            column,
+                            enabled,
+                        )
                     }))
                     .collect()
             }
@@ -455,6 +488,7 @@ impl Manager {
         self.show(title, body, &["Confirm", "Cancel"], Form::Confirm(args));
     }
     pub fn key(&mut self, key: KeyEvent) -> Vec<Intent> {
+        self.validate_dialog_names();
         if let Some(d) = &mut self.dialog {
             match d.key(key) {
                 dialog::Event::None => return vec![],
@@ -529,6 +563,7 @@ impl Manager {
             .unwrap()
             .fields
             .push(Field::new("Name", "").validated(Rule::AccountName));
+        self.validate_dialog_names();
     }
     fn activate(&mut self) -> Vec<Intent> {
         if !self
@@ -673,6 +708,7 @@ impl Manager {
                             Field::new("Name", s["name"].as_str().unwrap_or(""))
                                 .validated(Rule::Name),
                         );
+                        self.validate_dialog_names();
                     }
 
                     crate::session_list::Action::Switch => return vec![Intent::Switch(s)],
@@ -938,6 +974,7 @@ impl Manager {
                 };
                 self.sessions = value["sessions"].as_array().cloned().unwrap_or_default();
                 self.sessions_known = true;
+                self.validate_dialog_names();
                 self.sessions.sort_by_key(|s| {
                     (
                         match s["availability"].as_str() {
@@ -1325,7 +1362,11 @@ impl Manager {
                     u.paint(
                         canvas,
                         canvas.width.saturating_sub(u.width(bar, u.digits())) / 2,
-                        footer - preview_height - 1,
+                        if rows.len() > capacity {
+                            bottom + 2
+                        } else {
+                            3 + rows.len().saturating_sub(self.options.scroll).min(capacity) + 1
+                        },
                         bar,
                         u.digits(),
                     );
@@ -1366,6 +1407,57 @@ mod tests {
         m.capabilities =
             json!({"providers":[{"id":"codex","account_limits":true,"enrollment":true}]});
         m
+    }
+    #[test]
+    fn duplicate_account_validation_refreshes_without_io() {
+        let mut m = setup();
+        m.add();
+        m.dialog.as_mut().unwrap().paste("account1");
+        let mut canvas = Canvas::new(80, 30);
+        m.paint(&mut canvas, 29);
+        assert!(!m.dialog.as_ref().unwrap().fields[0].valid());
+        assert!(canvas.cells.iter().any(|c| c.fg == [215, 0, 0]));
+        assert!(
+            m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_empty()
+        );
+        m.dialog.as_mut().unwrap().fields[0].input.clear();
+        m.dialog.as_mut().unwrap().paste("fresh");
+        assert!(m.dialog.as_ref().unwrap().fields[0].valid());
+        let fresh: Account =
+            serde_json::from_value(json!({"id":"codex:fresh","selectable":false})).unwrap();
+        m.inventory(vec![fresh]);
+        assert!(!m.dialog.as_ref().unwrap().fields[0].valid());
+    }
+    #[test]
+    fn account_status_column_and_preview_follow_list_or_pagination() {
+        let mut m = setup();
+        m.accounts[0].id = "codex:a".into();
+        m.accounts[1].details.insert("enabled".into(), json!(false));
+        m.page = Page::Accounts;
+        let rows = m.rows();
+        assert_eq!(
+            rows[1].preview_position(60, 5),
+            rows[2].preview_position(60, 5)
+        );
+        assert_eq!(rows[1].preview.as_deref(), Some("Enabled"));
+        assert!(rows[1].preview_accent);
+        assert!(!rows[2].preview_accent);
+        m.inventory((0..30).map(account).collect());
+        m.page = Page::Accounts;
+        m.options.selected = 10;
+        let mut c = Canvas::new(60, 18);
+        m.paint(&mut c, 17);
+        let row = |y: usize| {
+            c.cells[y * 60..(y + 1) * 60]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+        };
+        let range = (0..18).find(|y| row(*y).contains(" of ")).unwrap();
+        assert!(!row(range + 1).contains('━'));
+        assert!(row(range + 2).contains("5h"));
+        assert!(row(range + 3).contains("wkly"));
     }
     #[test]
     fn selected_operation_id_falls_below_list_only_when_it_fits() {
@@ -1563,8 +1655,9 @@ mod tests {
                 .map(|c| c.glyph.as_str())
                 .collect::<String>()
         };
-        assert!(row(11).contains("5h"));
-        assert!(row(12).contains("wkly"));
+        assert!(row(6).trim().is_empty());
+        assert!(row(7).contains("5h"));
+        assert!(row(8).contains("wkly"));
         assert!(!row(13).contains('━'));
         m.paint(&mut Canvas::new(100, 40), 39);
         assert_eq!(m.page, Page::Home);

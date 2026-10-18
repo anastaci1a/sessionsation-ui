@@ -231,11 +231,11 @@ impl App {
     fn name_valid(&self, name: &str) -> bool {
         if self.resume.is_some() {
             !name.is_empty()
-                && name.len() <= 128
+                && name.chars().count() <= 12
                 && name.trim() == name
                 && !name.chars().any(char::is_control)
         } else {
-            valid_name(name)
+            valid_name(name) && name.chars().count() <= 12
         }
     }
     fn ready(&self) -> bool {
@@ -374,6 +374,7 @@ impl App {
         self.options.back = false;
         self.input.value = text;
         self.input.cursor = self.input.value.len();
+        self.input.max_chars = (self.page == Page::Name).then_some(12);
         self.listing = Listing::default();
         self.error.clear();
         self.dirty = true;
@@ -410,6 +411,7 @@ impl App {
             self.options.selected = old.selected;
             self.input.value = old.text;
             self.input.cursor = self.input.value.len();
+            self.input.max_chars = (self.page == Page::Name).then_some(12);
             self.listing = old.listing;
             self.options.back = false;
             self.options.scroll = 0;
@@ -1319,6 +1321,21 @@ mod tests {
         a.activate();
         a.inventory(vec![], spaces, 0);
         assert!(matches!(&a.draft.space,Some(Space::Existing {id,..}) if id=="w1"));
+    }
+    #[test]
+    fn session_editor_stops_at_twelve_and_does_not_limit_other_editors() {
+        let mut a = app();
+        a.push(Page::Name, String::new());
+        a.paste("abcdefghijklmnop");
+        assert_eq!(a.input.value, "abcdefghijkl");
+        assert!(a.name_valid(&a.input.value));
+        assert!(!a.name_valid("thirteenchars"));
+        a.push(Page::SpaceName, String::new());
+        a.paste("a longer workspace name");
+        assert_eq!(a.input.value, "a longer workspace name");
+        a.pop();
+        a.paste("ignored");
+        assert_eq!(a.input.value, "abcdefghijkl");
     }
     #[test]
     fn summary_start_is_adjacent_to_fields_and_home_control_says_close() {

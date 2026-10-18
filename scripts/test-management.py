@@ -8,7 +8,7 @@ root=pathlib.Path(os.environ['FIXTURE_ROOT']);args=sys.argv;api=args[args.index(
 with (root/'calls.jsonl').open('a') as log:log.write(json.dumps(api)+'\\n')
 caps={'launch':{'version':1,'list':True},'resume':{'version':1,'list':True},'providers':[{'id':'codex','account_limits':True,'enrollment':True,'account_deletion':True}]}
 accounts=[{'id':'codex:fixture'+str(i),'selectable':True,'enabled':True,'usage_fresh':True,'prefill':{'eligible':True,'valid_until':int(time.time())+60},'usage':{'observed_at':int(time.time()),'short':({'duration_minutes':300,'used_percent':95 if i==0 else 1} if i!=2 else None),'weekly':{'duration_minutes':10080,'used_percent':20 if i==0 else 94}},'switch_thresholds':{'customized':True,'short_percent':80,'weekly_percent':90}} for i in range(6)]
-session={'id':'11111111-1111-4111-8111-111111111111','generation':'captured','name':'Saved fixture','account_id':'codex:fixture0','account':'fixture0','availability':'saved','directory':str(root/'projects'),'capabilities':{'rename':True,'resume':True,'switch_account':False,'restart':False,'stop':False},'original_host':None}
+session={'id':'11111111-1111-4111-8111-111111111111','generation':'captured','name':'Savedfixture','account_id':'codex:fixture0','account':'fixture0','availability':'saved','directory':str(root/'projects'),'capabilities':{'rename':True,'resume':True,'switch_account':False,'restart':False,'stop':False},'original_host':None}
 receipt=None
 if (root/'start.json').exists():
  request=json.loads((root/'start.json').read_text());receipt={'request':request,'phase':'admitted' if (root/'hold').exists() else 'running','tab_id':'w1:t2','operation_id':None}
@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
   weekly=next(row for row in rows if '○ fixture2' in row);assert '/' not in weekly and 'wkly' in weekly
   t.send(b'\x1b');t.wait('Account:');t.send(b'\x1b');t.wait('Manage Sessions')
   # Select a saved session, then Resume (selection itself never attaches).
-  t.send(b'\x1b[B\r');t.wait('Saved fixture');t.send(b'\x1b[B\r');t.wait('Resume');t.send(b'\x1b[B\x1b[B\r');t.wait('Resume Session');t.wait('Directory:');time.sleep(.2);t.drain()
+  t.send(b'\x1b[B\r');t.wait('Savedfixture');t.send(b'\x1b[B\r');t.wait('Resume');t.send(b'\x1b[B\x1b[B\r');t.wait('Resume Session');t.wait('Directory:');time.sleep(.2);t.drain()
   t.send(b'\x1b[B\x1b[B\x1b[B\r');t.wait('Continue in background');t.send(b'\x1b');t.wait('Manage Sessions')
   deadline=time.monotonic()+3
   while not (root/'start.json').exists() and time.monotonic()<deadline:t.drain();time.sleep(.01)

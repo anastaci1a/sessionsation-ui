@@ -72,7 +72,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
     let accounts:Vec<Account>=(0..3).map(|n|serde_json::from_value(serde_json::json!({"id":format!("codex:fixture{n}"),"selectable":true,"usage_fresh":true,"enabled":true,"usage":{"observed_at":100,"short":if n==2{serde_json::Value::Null}else{serde_json::json!({"duration_minutes":300,"used_percent":if n==0{95}else{0}})},"weekly":{"duration_minutes":10080,"used_percent":20}},"switch_thresholds":{"customized":true,"short_percent":80,"weekly_percent":90}})).unwrap()).collect();
     for (name, width, height) in [
         ("inline", 100, 30),
-        ("compact", 60, 18),
+        ("compact", 60, 16),
         ("actions", 80, 24),
         ("picker", 60, 20),
         ("modal", 60, 24),

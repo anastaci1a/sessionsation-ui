@@ -104,21 +104,34 @@ impl Usage {
     }
     pub fn width(&self, bar: usize, digits: usize) -> usize {
         if self.windows.is_empty() {
-            8
+            UnicodeWidthStr::width(self.status.as_str())
         } else {
             bar + digits + 7 + if self.stale { 6 } else { 0 }
         }
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, digits: usize) {
         if self.windows.is_empty() {
-            canvas.accent_text(x, y, "Loading…", Accent::default());
+            canvas.accent_text(x, y, &self.status, Accent::default());
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
             let interior = bar.saturating_sub(2).max(1);
             let filled = window.remaining.map(|p| interior as f64 * p / 100.);
             let Some(filled) = filled else {
-                canvas.accent_text(x, y, "Loading…", Accent::default());
+                canvas.accent_text(
+                    x,
+                    y,
+                    &format!(
+                        "{}: {}",
+                        window.label,
+                        if self.status == "Ready" {
+                            "Usage unavailable"
+                        } else {
+                            &self.status
+                        }
+                    ),
+                    Accent::default(),
+                );
                 continue;
             };
             let marker = window
@@ -308,6 +321,27 @@ mod tests {
         }
     }
     #[test]
+    fn disabled_and_unconfigured_accounts_never_wait_for_impossible_usage() {
+        for (details, expected) in [
+            (json!({"enabled":false}), "Disabled"),
+            (
+                json!({"enabled":true,"auth_required":true}),
+                "Login required",
+            ),
+        ] {
+            let mut a = account();
+            a.usage = json!({});
+            for (key, value) in details.as_object().unwrap() {
+                a.details.insert(key.clone(), value.clone());
+            }
+            let mut c = Canvas::new(50, 4);
+            Usage::account(&a).paint(&mut c, 1, 1, 20, 2);
+            let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+            assert!(text.contains(expected));
+            assert!(!text.contains("Loading"));
+        }
+    }
+    #[test]
     fn weekly_only_and_missing_data_never_replace_usage_with_ready() {
         let mut a = account();
         a.usage["short"] = serde_json::Value::Null;
@@ -318,7 +352,7 @@ mod tests {
         let mut c = Canvas::new(40, 4);
         Usage::account(&a).paint(&mut c, 1, 1, 20, 2);
         let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
-        assert!(text.contains("Loading…"));
+        assert!(text.contains("Usage unavailable"));
         assert!(!text.contains("Ready"));
     }
     #[test]

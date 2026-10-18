@@ -17,17 +17,26 @@ separator and Settings. If every account fits above the bottom controls, account
 appear inline without selector circles and Add Account is available. The account/bar
 block is centered, caps bar width at 24 cells and shrinks to fit narrower popups.
 Otherwise Manage Accounts provides a scrolling list with `<add account>` first.
-Its highlighted account's usage sits above the controls with a blank line between.
+Enabled/Disabled values share a left-aligned column; Enabled uses the selected or dimmed accent.
+Its highlighted account's usage starts one blank line below the list, or below
+the visible-range counter when scrolling.
 Growing the screen returns that list to Home; forms remain open and Back chooses
 the appropriate current layout without losing their account selection.
 
 Bars show remaining allowance for the periods the backend reports: 5h/weekly or
 weekly only. Capped accent lines deplete into visible gray; custom limits appear
 inside the bar. Percentages precede period labels in aligned columns. Missing
-observations show Loading…; stale observations are marked. The account picker uses
+observations show Disabled, Login required or Usage unavailable as appropriate;
+stale observations are marked. The account picker uses
 a separate right-aligned `x% 5h / x% wkly` column, omitting the short period and
-slash for weekly-only accounts. Names are limited to 12 characters for new accounts;
-existing longer names are shortened only in display. See the
+slash for weekly-only accounts. Account names accept at most 12 ASCII characters;
+typing and paste stop at the limit.
+Duplicate names immediately invalidate the editor and disable confirmation.
+Session creation/resume/rename accepts at most 12 Unicode scalar values, also
+enforced by the CLI.
+Only the focused input shows a cursor in multi-input dialogs; single-input dialogs
+stay editable while navigating buttons. Existing longer account names are shortened
+only in display. See the
 [rendering specification](cli-specification/architecture.md#account-and-session-management)
 for the precise glyph, alignment and motion rules.
 

@@ -36,6 +36,7 @@ pub struct Field {
     pub label: String,
     pub input: TextInput,
     pub rule: Rule,
+    pub excluded: Vec<String>,
 }
 impl Field {
     pub fn new(label: &str, value: impl Into<String>) -> Self {
@@ -43,14 +44,21 @@ impl Field {
             label: label.into(),
             input: TextInput::new(value.into()),
             rule: Rule::Any,
+            excluded: vec![],
         }
     }
     pub fn validated(mut self, rule: Rule) -> Self {
+        if matches!(rule, Rule::AccountName | Rule::Name) {
+            self.input = self.input.limited(12);
+        }
         self.rule = rule;
         self
     }
     pub fn valid(&self) -> bool {
         let v = &self.input.value;
+        if self.excluded.contains(v) {
+            return false;
+        }
         match &self.rule {
             Rule::Any => true,
             Rule::Exact(expected) => v == expected,
@@ -64,7 +72,10 @@ impl Field {
                         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
             }
             Rule::Name => {
-                !v.is_empty() && v.trim() == v && v.len() <= 128 && !v.chars().any(char::is_control)
+                !v.is_empty()
+                    && v.trim() == v
+                    && v.chars().count() <= 12
+                    && !v.chars().any(char::is_control)
             }
         }
     }
@@ -270,9 +281,14 @@ impl Dialog {
             );
             canvas.text(x + 2, row + 1, "│", field_style.clone(), false);
             canvas.text(x + width - 3, row + 1, "│", field_style.clone(), false);
-            field
-                .input
-                .paint(canvas, x + 3, row + 1, width - 7, field.valid());
+            field.input.paint_focused(
+                canvas,
+                x + 3,
+                row + 1,
+                width - 7,
+                field.valid(),
+                self.editor() == Some(index),
+            );
             canvas.text(
                 x + 2,
                 row + 2,
@@ -367,6 +383,35 @@ mod tests {
     use super::*;
     fn enter() -> KeyEvent {
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+    }
+    #[test]
+    fn limited_editors_and_only_focused_field_has_a_cursor() {
+        let mut d = Dialog::new("Edit", vec!["Names".into()], &["Save", "Cancel"]);
+        let mut name = Field::new("Name", "").validated(Rule::AccountName);
+        name.excluded = vec!["duplicate".into()];
+        d.fields.push(name);
+        d.fields.push(Field::new("Other", "second"));
+        d.paste("duplicate");
+        assert!(!d.fields[0].valid());
+        d.selected = 2;
+        d.paint(&mut Canvas::new(80, 32), &Palette::default());
+        assert!(matches!(d.key(enter()), Event::None));
+        d.selected = 0;
+        d.fields[0].input.clear();
+        d.paste("abcdefghijklmnop");
+        assert_eq!(d.fields[0].input.value, "abcdefghijkl");
+        assert!(d.fields[0].valid());
+        for selected in 0..4 {
+            d.selected = selected;
+            let mut canvas = Canvas::new(80, 32);
+            d.paint(&mut canvas, &Palette::default());
+            let cursors = canvas
+                .cells
+                .iter()
+                .filter(|c| c.bg == Some([238; 3]))
+                .count();
+            assert_eq!(cursors, usize::from(selected < 2));
+        }
     }
     #[test]
     fn wraps_words_dashes_and_unsplittable_graphemes() {

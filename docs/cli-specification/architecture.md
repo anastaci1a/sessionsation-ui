@@ -128,7 +128,7 @@ to 12 ASCII characters excluding the provider prefix. Disabled/removed accounts
 remain selectable for management.
 
 Verified five-hour accounts show adjacent 5h/weekly remaining bars, then one blank
-line before the next account. Weekly-only accounts show their weekly bar. Missing observations show Loading….
+line before the next account. Weekly-only accounts show their weekly bar. Missing observations show the applicable Disabled, Login required or Usage unavailable state; they do not imply an in-flight fetch.
 Unknown values remain explicit; stale observations are marked. Bars use connected capped lines: heavy remaining segments and undepleted threshold
 crossings share the animated accent. Thin depleted segments and mixed-weight
 transitions are visible gray (RGB 144). The boundary uses `╾`; threshold crossings
@@ -139,8 +139,9 @@ uses three digits only when a displayed value is 100. Custom limits are vertical
 markers inside the bars, converted from maximum used to minimum remaining.
 
 Compact Manage Accounts has `<add account>` first. The highlighted account's same
-bar component appears immediately above the bottom controls with exactly one blank
-row between. Resize returns only this list to Home when the full module fits,
+bar component appears one blank row below the options, or below the visible-range
+counter when scrolling. Enabled/Disabled status text shares a left-aligned column;
+Enabled uses the selected/dimmed accent. Resize returns only this list to Home when the full module fits,
 retaining account focus. Account actions and open forms stay in place; Back resolves
 to Home or the compact list according to current fit.
 

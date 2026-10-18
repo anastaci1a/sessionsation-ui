@@ -9,15 +9,32 @@ pub struct TextInput {
     pub value: String,
     /// UTF-8 byte offset at a grapheme boundary.
     pub cursor: usize,
+    pub max_chars: Option<usize>,
 }
 impl TextInput {
     pub fn new(value: String) -> Self {
         let cursor = value.len();
-        Self { value, cursor }
+        Self {
+            value,
+            cursor,
+            max_chars: None,
+        }
+    }
+    pub fn limited(mut self, max_chars: usize) -> Self {
+        self.max_chars = Some(max_chars);
+        self
     }
     /// Bracketed paste and typing use the same path; control bytes never activate.
     pub fn insert(&mut self, text: &str) {
-        let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+        let available = self
+            .max_chars
+            .map(|n| n.saturating_sub(self.value.chars().count()))
+            .unwrap_or(usize::MAX);
+        let clean: String = text
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(available)
+            .collect();
         self.value.insert_str(self.cursor, &clean);
         self.cursor += clean.len();
         // Combining characters can merge across the insertion point.
@@ -64,6 +81,17 @@ impl TextInput {
         true
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, width: usize, valid: bool) {
+        self.paint_focused(canvas, x, y, width, valid, true);
+    }
+    pub fn paint_focused(
+        &self,
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        width: usize,
+        valid: bool,
+        focused: bool,
+    ) {
         if width < 3 {
             return;
         }
@@ -92,7 +120,7 @@ impl TextInput {
             .collect();
         canvas.text(x, y, &format!("> {visible}"), style.clone(), true);
         let cursor = x + 2 + UnicodeWidthStr::width(before).saturating_sub(removed);
-        if cursor < x + width {
+        if focused && cursor < x + width {
             let glyph = self.value[self.cursor..]
                 .graphemes(true)
                 .next()
@@ -119,6 +147,8 @@ pub struct Row {
     pub preview: Option<String>,
     pub right_preview: bool,
     pub preview_selected_only: bool,
+    pub preview_column: Option<usize>,
+    pub preview_accent: bool,
     pub separator: bool,
 }
 impl Row {
@@ -132,6 +162,8 @@ impl Row {
             preview: None,
             right_preview: false,
             preview_selected_only: false,
+            preview_column: None,
+            preview_accent: false,
             separator: false,
         }
     }
@@ -144,6 +176,17 @@ impl Row {
         self.right_preview = true;
         self
     }
+    pub fn with_column_preview(
+        mut self,
+        preview: impl Into<String>,
+        column: usize,
+        accent: bool,
+    ) -> Self {
+        self.preview = Some(preview.into());
+        self.preview_column = Some(column);
+        self.preview_accent = accent;
+        self
+    }
     pub fn with_selected_preview(mut self, preview: impl Into<String>) -> Self {
         self.preview = Some(preview.into());
         self.preview_selected_only = true;
@@ -152,7 +195,9 @@ impl Row {
     pub fn preview_position(&self, width: usize, x: usize) -> Option<usize> {
         let preview = self.preview.as_deref()?;
         let minimum = x + 2 + UnicodeWidthStr::width(self.label.as_str()) + 2;
-        let start = if self.right_preview {
+        let start = if let Some(column) = self.preview_column {
+            x + column
+        } else if self.right_preview {
             width.saturating_sub(2 + UnicodeWidthStr::width(preview))
         } else {
             minimum
@@ -167,6 +212,8 @@ impl Row {
             preview: None,
             right_preview: false,
             preview_selected_only: false,
+            preview_column: None,
+            preview_accent: false,
             separator: true,
         }
     }
@@ -218,16 +265,29 @@ impl Row {
             && (!self.preview_selected_only || (selected && !back))
             && let Some(start) = self.preview_position(canvas.width, x)
         {
-            canvas.text(
-                start,
-                y,
-                preview,
-                Cell {
-                    fg: if self.enabled { [188; 3] } else { [108; 3] },
-                    ..Cell::default()
-                },
-                false,
-            );
+            if self.preview_accent {
+                canvas.accent_text(
+                    start,
+                    y,
+                    preview,
+                    Accent {
+                        brightness: if selected && !back { 1000 } else { 600 },
+                        bold: selected && !back,
+                        ..Accent::default()
+                    },
+                );
+            } else {
+                canvas.text(
+                    start,
+                    y,
+                    preview,
+                    Cell {
+                        fg: if self.enabled { [188; 3] } else { [108; 3] },
+                        ..Cell::default()
+                    },
+                    false,
+                );
+            }
         }
     }
 }
