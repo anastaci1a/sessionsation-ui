@@ -3,18 +3,18 @@
   "kind": "Rust account/session popup; preserved original switcher and Agent DM selection",
   "artifacts": {
     "ui": {
-      "source_commit": "8809571e0d7970479750b922337e84b012ac95e2",
-      "path": "/mnt/user/live/packages/sessionsation-ui/releases/8809571e0d7970479750b922337e84b012ac95e2/sessionsation-ui",
-      "sha256": "092d5953397e02592f476947e8f070c2dde3098987ee11f52d2a23cba60f27ae",
+      "source_commit": "6c5c9e08e3a091881266472d3f52764404bca141",
+      "path": "/mnt/user/live/packages/sessionsation-ui/releases/6c5c9e08e3a091881266472d3f52764404bca141/sessionsation-ui",
+      "sha256": "6b798e4a2e17468d1f29f57cbb6a9f8d7b5beffe2f61e2452a5b62ebc44f2980",
       "cargo_lock_sha256": "91cbb0257cb3f9aca0b38fbfe5adb67af0f7e24510eadc232c9a39585f1e5e08",
       "profile": "release",
       "rust_version": "1.95.0",
       "minimum_rust_version": "1.88"
     },
     "backend": {
-      "source_commit": "7459e77d9f0292bf77303228dd3f8f3162d4c076",
-      "path": "/mnt/user/live/packages/sessionsation/popup/7459e77d9f0292bf77303228dd3f8f3162d4c076/sessionsation",
-      "sha256": "8620a9f665667756a9d36486ef27ab48ae7222e10aace9b7e540dcf09b85c736",
+      "source_commit": "5ae42ae483db99279c1623a16c01c39e620eee19",
+      "path": "/mnt/user/live/packages/sessionsation/popup/5ae42ae483db99279c1623a16c01c39e620eee19/sessionsation",
+      "sha256": "5a5f1fe7847ec6a735027c08e9762d3d821096f2fd692b19c729f729eaeb6fc9",
       "cargo_lock_sha256": "13959dc2de624ff7f6bc4a7fed537b01b6d89572b61e8bb9238cb748afc17265",
       "profile": "release",
       "rust_version": "1.95.0",
@@ -43,24 +43,34 @@
     "preferences": "/mnt/user/appdata/sessionsation-ui/preferences.json",
     "initial_global_projects_root": "/mnt/user/live/projects",
     "data_root": "/mnt/user/appdata/codex-switcher",
-    "credential_supervisor": "existing original data-root owner; no migration or competing supervisor",
+    "credential_supervisor": "selected immutable backend; sole owner of the existing explicit root; approved stop/lock-release/start handoff",
     "rollback_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/launcher-d8b0999e-90a4-48a0-8ad6-e024a966b8bb.json",
     "rollback_command": "node scripts/configure.mjs rollback /mnt/user/appdata/sessionsation-ui/config-backups/launcher-d8b0999e-90a4-48a0-8ad6-e024a966b8bb.json",
     "reload_command": "herdr --session default server reload-config",
     "rollback_restores": "pre-popup default numbered launcher and exact HERDR configuration; removes popup client config; installed artifacts and UI preferences retained",
     "runtime_update": {
-      "ui_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/ui-6ed2649e-bd3b-4d02-9e1f-c621d9e4a106.json",
-      "backend_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/backend-39bd8dd3-cc1d-41a8-9177-206585cce5dc.json",
-      "rollback": "Restore the previous UI symlink or exact popup client config bytes from the corresponding private receipt; no HERDR configuration, account data or running agent change is needed."
+      "ui_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/ui-f62b339f-5b98-456b-9e03-3a23c5cbfc37.json",
+      "backend_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/backend-9596023a-3a69-435f-82bc-6c1e1b07c3b4.json",
+      "rollback": "Restore the corresponding client config/UI symlink receipt. Owner rollback additionally requires public daemon stop, registry-lock release and previous immutable daemon start against the same root; never stop native agents."
     },
     "account_deletion": {
-      "enabled": false,
-      "reason": "OWNER_UPGRADE_REQUIRED",
-      "approval": "Separate live owner handoff awaits Ana approval; current client updates are already authorized",
+      "enabled": true,
+      "approval": "Ana approved the existing-root supervisor handoff; individual deletion still requires separate explicit account confirmation",
       "installed_client_preview": {
-        "milliseconds": 28.453695,
+        "milliseconds": 30.736172,
         "file_scanning": false,
-        "owner_upgrade_required": true
+        "owner_upgrade_required": false
+      },
+      "owner_activation": {
+        "source_commit": "5ae42ae483db99279c1623a16c01c39e620eee19",
+        "artifact_sha256": "5a5f1fe7847ec6a735027c08e9762d3d821096f2fd692b19c729f729eaeb6fc9",
+        "accounts": 4,
+        "managed_sessions": 0,
+        "preserved_native_process_identities": 22,
+        "missing_native_process_identities": 0,
+        "registry_backup": "private corresponding backend receipt .registry.db",
+        "initial_owner_rollback": "/mnt/user/appdata/sessionsation-ui/config-backups/owner-live-ccb423d0",
+        "original_startup_config": "unchanged; if it starts the old owner after reboot, deletion remains gated until approved owner activation is repeated"
       }
     }
   },

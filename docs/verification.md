@@ -2,7 +2,7 @@
 
 ## Rust popup
 
-The expanded popup passes **59 Rust tests** (57 unit tests and two tests covering
+The expanded popup passes **64 Rust tests** (62 unit tests and two tests covering
 12 complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
 regressions**. Syntax, manifest fields and documentation links pass. The goldens
 exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,
@@ -31,7 +31,7 @@ supervisor handoff. Their details and limits belong to the backend guidance.
 No acceptance test starts a model or changes production accounts/Agent DM state;
 production capability/status previews are read-only.
 
-Measured release p95: first responsive PTY paint **5.43 ms**, key feedback **0.38 ms**,
+Measured release p95: first responsive PTY paint **7.15 ms**, key feedback **0.89 ms**,
 keybind-to-popup paint **183.61 ms**, frame computation/diff **0.105 ms** at 80×24 and
 **0.412 ms** at 160×48 (600 frames each). These exclude provider startup/model response.
 CLI-triggered plugin invocation additionally pays the external command round trip;
@@ -61,7 +61,11 @@ to the public CLI and preserves conversations; the production owner must adverti
 its capability before it can run. New/Resume uncertainty stays
 visible through the original request ID; no automatic retry or resource deletion
 is implemented. Continue in background detaches, not stops. Existing Agent DM pins,
-receipt semantics and sole-root ownership are unchanged.
+receipt semantics and sole-root ownership remain intact. Ana approved activation
+of the selected backend owner on the existing root; the original executable and
+startup configuration remain preserved. The final owner update retained all 22
+captured native process identities. No account was deleted. After reboot, an old
+owner from the preserved startup configuration gates deletion until activation.
 
 `scripts/test-management.py --binary PATH` exercises compact bars/action groups,
 aligned picker percentages/slashes, saved-session selection, Resume identity and

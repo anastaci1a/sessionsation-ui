@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "scope": "Rust account/session popup; isolated synthetic provider acceptance; no model turns or Agent DM activation",
+  "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "8809571e0d7970479750b922337e84b012ac95e2",
-    "backend": "7459e77d9f0292bf77303228dd3f8f3162d4c076"
+    "ui": "6c5c9e08e3a091881266472d3f52764404bca141",
+    "backend": "5ae42ae483db99279c1623a16c01c39e620eee19"
   },
   "checks": {
     "rust": {
-      "unit_passed": 57,
+      "unit_passed": 62,
       "visual_snapshot_test_passed": 2,
       "golden_frames": 12,
       "failed": 0,
@@ -23,54 +23,31 @@
       "command": "npm run check"
     },
     "backend": {
-      "standard_tests_passed": 236,
+      "standard_tests_passed": 238,
       "installed_herdr_test_passed": 2,
       "failed": 0,
       "standard_command": "scripts/check.sh",
-      "standard_source": "06f3fc87f9e5a9a472da957449a9998cba460222",
-      "final_receipt_regression": {
-        "source": "06f3fc87f9e5a9a472da957449a9998cba460222",
-        "passed": true,
-        "checks": [
-          "format",
-          "Clippy all targets",
-          "normal /exit and exact account/UUID resume",
-          "fresh loaded-conversation recheck before metadata stop",
-          "explicit recovery and preserved paginated archive transfer",
-          "native history 70 turns/270 items verified",
-          "zero model turns"
-        ],
-        "duration_seconds": 12.16
-      },
+      "standard_source": "5ae42ae483db99279c1623a16c01c39e620eee19",
       "tests": {
-        "unit": 124,
+        "unit": 126,
         "cli": 8,
         "external_move": 58,
-        "external_move_ignored": 2,
+        "external_move_ignored": 3,
         "messaging_cli": 8,
         "persistence": 6,
         "scheduling": 29,
-        "transport": 3
+        "transport": 3,
+        "owner_handoff_ignored": 1
       },
       "passed": true,
-      "cli_profile_checks": {
-        "source": "7459e77d9f0292bf77303228dd3f8f3162d4c076",
-        "debug_passed": 8,
-        "release_passed": 8,
-        "debug_seconds": 2.52,
-        "release_seconds": 10.92,
-        "product_sources_identical_to_standard_source": true,
-        "difference": "Only tests/cli.rs startup readiness changed; src/, Cargo.toml and Cargo.lock are identical"
-      },
       "host_tests": [
         "installed_herdr_new_tab_handoff_retains_exact_account_and_shell",
         "installed_herdr_resumes_preserved_paginated_archive_after_account_deletion"
       ],
       "owner_handoff": {
-        "source": "ce749e9ed7080f0b8ba74fcac0df318b33404f3c",
+        "source": "5ae42ae483db99279c1623a16c01c39e620eee19",
         "test": "installed_owner_handoff_preserves_native_agent_and_catalog",
         "passed": true,
-        "duration_seconds": 1.13,
         "original_executable": "deployment.json#/preserved/original_switcher",
         "checks": [
           "hash-pinned original executable mounted read-only",
@@ -81,28 +58,36 @@
           "account/conversation/backend ID preserved"
         ],
         "model_turns": 0,
-        "production_activation": false
+        "production_activation": true,
+        "original_live_image_sha256": "ccb423d09545ebd1fd2b7e776ad18d62764df9689ea69be341364f38346ef728"
       },
       "deletion_preview": {
         "root": "deployment.json#/selection/data_root",
-        "milliseconds": 28.453695,
+        "milliseconds": 30.736172,
         "file_scanning": false,
-        "owner_upgrade_required": true
+        "owner_upgrade_required": false
+      },
+      "installed_acceptance": {
+        "passed": 3,
+        "failed": 0,
+        "seconds": 12.35,
+        "command": "cargo test --offline --locked --test external_move installed_ -- --ignored --nocapture",
+        "models": 0
       }
     }
   },
   "pty": {
     "startup": {
       "samples": 20,
-      "p50_ms": 5.2335120271891356,
-      "p95_ms": 5.433070939034224,
-      "max_ms": 5.433070939034224
+      "p50_ms": 5.920411087572575,
+      "p95_ms": 7.154111051931977,
+      "max_ms": 7.154111051931977
     },
     "input": {
       "samples": 238,
-      "p50_ms": 0.2652800176292658,
-      "p95_ms": 0.38033293094486,
-      "max_ms": 0.49738900270313025
+      "p50_ms": 0.5207330686971545,
+      "p95_ms": 0.8886120049282908,
+      "max_ms": 1.0496400063857436
     },
     "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
     "models": 0
@@ -156,20 +141,17 @@
   ],
   "deployment": {
     "herdr_config": "unchanged; 90% width / 65% height and prefix+shift+l retained",
-    "changed_process_identities": 0,
     "model_sessions_started": 0,
     "protected_backend_hashes": "original switcher and Agent DM pin unchanged",
     "data_root": "/mnt/user/appdata/codex-switcher",
-    "supervisor": "existing original sole owner; no restart or competing owner",
-    "tracked_codex_processes": 25,
-    "unchanged_codex_process_identities": 25,
-    "tracked_tmux_servers": 1,
-    "unchanged_tmux_process_identities": 1,
-    "tracked_herdr_processes": 2,
-    "unchanged_herdr_process_identities": 1,
-    "missing_herdr_process_identities": 1,
-    "process_signal_scope": "Only isolated test-owned processes received stop/signal operations; no production process was signalled",
-    "backend_client": "/mnt/user/live/packages/sessionsation/popup/7459e77d9f0292bf77303228dd3f8f3162d4c076/sessionsation"
+    "supervisor": "approved selected immutable sole owner; see deployment.json",
+    "owner_upgrade": {
+      "preserved_native_process_identities": 22,
+      "missing_native_process_identities": 0,
+      "initial_handoff": "Five previously observed processes exited during initial graceful owner shutdown (four codex-switcher, one codex). The final selected-owner update retained all 22 captured non-owner process identities. No agent stop API or direct process signal was invoked.",
+      "wait": "Registry lock release checked separately from socket disappearance"
+    },
+    "backend_client": "/mnt/user/live/packages/sessionsation/popup/5ae42ae483db99279c1623a16c01c39e620eee19/sessionsation"
   },
   "layout_regressions": [
     "Configuration labels and complete-fit optional directory previews",
@@ -180,7 +162,10 @@
     "connected capped line bars across all percentages/threshold positions, shared marker hue and visible-gray transitions",
     "centered capped account/bar module, aligned percent/period columns",
     "selected-only gray operation ID below centered range counter with explicit blank-line gaps",
-    "reference hint palette/fade shared by creation, management, dialogs and range counters"
+    "reference hint palette/fade shared by creation, management, dialogs and range counters",
+    "Manage Accounts aligned Enabled/Disabled column and selected usage one blank line below options/range",
+    "duplicate names invalidate confirmation; 12-character account/session input limits; only active multi-field editor has cursor",
+    "disabled/unconfigured/missing usage displays an explicit state instead of permanent loading"
   ],
   "management": {
     "passed": true,
@@ -203,6 +188,6 @@
     "HERDR outer border cannot follow animated status bar",
     "Dynamic/terminal HERDR themes use explicit configured-base approximation",
     "External CLI plugin invocation measured 282.44ms; configured keybind p95 was 183.61ms",
-    "Production deletion is gated until the separately approved live supervisor handoff; no owner replacement performed"
+    "Original startup configuration is preserved; an old owner started after reboot gates deletion until selected owner activation"
   ]
 }
