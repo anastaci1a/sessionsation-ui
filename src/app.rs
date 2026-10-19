@@ -970,6 +970,7 @@ impl App {
     pub fn paint(&mut self, field: &mut Field, now: u64, width: usize, height: usize) -> Canvas {
         field.resize(width, height);
         field.options_top = if self.is_form() { 5 } else { 3 };
+        field.background = Some(self.manager.palette.panel);
         let mut canvas = field.paint(now);
         let white = Cell {
             fg: [238; 3],

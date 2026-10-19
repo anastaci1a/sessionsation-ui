@@ -98,6 +98,9 @@ Fix pasted-newline activation, wide-text misalignment, tiny-window overlap, bloc
 reads and lost draft state. Staged mkdir, summary flow and full-height fixed stars
 are intentional adaptations. Current text masks include internal spaces: baseline
 stars and transient twinkles never appear inside labels, input text or controls.
+The star gradient, twinkle/replacement fades and shimmer blend from the explicitly
+painted HERDR panel background. Text inherits that background outside status bars
+and dialogs. Configured/fallback theme limitations remain as documented.
 Tests separate reference geometry from target geometry.
 
 ## Performance and verification

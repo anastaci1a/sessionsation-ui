@@ -28,6 +28,7 @@ pub struct Canvas {
     pub height: usize,
     pub cells: Vec<Cell>,
     pub theme: Option<Theme>,
+    background: Option<[u8; 3]>,
     transient: Vec<bool>,
     baseline_blocked: Vec<bool>,
     foreground: Vec<bool>,
@@ -39,6 +40,7 @@ impl Canvas {
             height: h,
             cells: vec![Cell::default(); w * h],
             theme: None,
+            background: None,
             transient: vec![false; w * h],
             baseline_blocked: vec![false; w * h],
             foreground: vec![false; w * h],
@@ -67,12 +69,14 @@ impl Canvas {
                 self.foreground[y * self.width + x] = true;
                 self.cells[y * self.width + x] = Cell {
                     glyph: glyph.into(),
+                    bg: style.bg.or(self.background),
                     ..style.clone()
                 };
                 for offset in 1..width {
                     self.foreground[y * self.width + x + offset] = true;
                     self.cells[y * self.width + x + offset] = Cell {
                         glyph: String::new(),
+                        bg: style.bg.or(self.background),
                         ..style.clone()
                     };
                 }
@@ -316,6 +320,7 @@ pub struct Field {
     baseline_blocked: Vec<bool>,
     foreground: Vec<bool>,
     pub options_top: usize,
+    pub background: Option<[u8; 3]>,
 }
 impl Field {
     pub fn new(w: usize, h: usize, seed: u64) -> Self {
@@ -338,6 +343,7 @@ impl Field {
             baseline_blocked: vec![false; w * h],
             foreground: vec![false; w * h],
             options_top: 3,
+            background: None,
         };
         let mut distance = 0;
         for p in 0..=1000 {
@@ -507,6 +513,12 @@ impl Field {
         let next = self.rotate(cycle);
         let phase = (now % 4000) as i64;
         let mut canvas = Canvas::new(self.w, self.h);
+        canvas.background = self.background;
+        if let Some(bg) = self.background {
+            for cell in &mut canvas.cells {
+                cell.bg = Some(bg);
+            }
+        }
         canvas.theme = Some(Theme {
             now,
             previous,
@@ -567,7 +579,8 @@ impl Field {
                 .birth
                 .map(|b| smooth(now.saturating_sub(b) as i64 * 1000 / 500))
                 .unwrap_or(1000);
-            let fg = dim(
+            let fg = mix(
+                self.background.unwrap_or([0; 3]),
                 mix(color, [255; 3], white_mix),
                 brightness * intensity / 1000 * replacement / 1000,
             );
@@ -585,6 +598,7 @@ impl Field {
             canvas.cells[index] = Cell {
                 glyph: glyph.to_string(),
                 fg,
+                bg: self.background,
                 bold: white >= 900,
                 ..Cell::default()
             };
@@ -653,6 +667,24 @@ mod tests {
         assert_eq!(c.cells[5].glyph, " ");
         assert!(c.foreground[5]);
         assert!(c.baseline_blocked[5]);
+    }
+    #[test]
+    fn star_gradient_and_all_fades_blend_from_the_painted_background() {
+        let mut f = Field::new(80, 24, 1967);
+        f.background = Some([26; 3]);
+        for now in (0..10000).step_by(20) {
+            let c = f.paint(now);
+            for cell in &c.cells {
+                assert_eq!(cell.bg, Some([26; 3]));
+                if matches!(cell.glyph.as_str(), "*" | "." | "+") {
+                    assert!(cell.fg.iter().all(|v| *v >= 26));
+                }
+            }
+        }
+        let mut c = f.paint(10001);
+        c.text(2, 3, "Login required", Cell::default(), false);
+        assert_eq!(c.cells[3 * 80 + 7].bg, Some([26; 3]));
+        assert_eq!(mix([26; 3], [150, 180, 200], 0), [26; 3]);
     }
     #[test]
     fn reference_curve_boundaries() {
