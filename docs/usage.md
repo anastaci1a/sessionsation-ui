@@ -119,7 +119,8 @@ unknown activity or discovery failure removes the spinner. Active session accoun
 hue otherwise. Inactive tags stay dim and show `[account] *`, with an
 asterisk separated by one space. The asterisk uses the same muted gray as
 `(inactive)` and disappears while that parenthetical is visible inline or below the
-list. Tags and asterisks are never bold. Inactive hover markers stay muted and unbolded. Timers use normal deselected gray.
+list. Account tags are bold on row selection, including inactive sessions; they return
+to normal weight on deselection or Back focus. Asterisks stay unbolded. Inactive hover markers stay muted and unbolded. Timers use normal deselected gray.
 
 Errors and status notices use a centered bottom line, separated from controls by
 one blank line. Menus reserve the status lane before calculating scroll capacity.

@@ -247,7 +247,7 @@ pub fn paint(
                     } else {
                         600
                     },
-                    bold: false,
+                    bold: options.selected == index && !options.back,
                     flash: false,
                     ..Accent::default()
                 },
@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(duration(90061), "1:01:01:01");
     }
     #[test]
-    fn account_tag_brightens_on_hover_but_stays_unbolded() {
+    fn account_tag_bolds_on_hover_including_inactive_without_changing_colors() {
         for availability in ["running", "saved"] {
             let sessions = vec![
                 json!({"name":"Session", "account_id":"codex:personal", "availability":availability}),
@@ -482,13 +482,13 @@ mod tests {
                     "[personal]",
                     Accent {
                         brightness,
-                        bold: false,
+                        bold: selected == 1 && !back,
                         flash: false,
                         ..Accent::default()
                     },
                 );
                 assert_eq!(c.cells[320 + x].fg, expected.cells[320 + x].fg);
-                assert!(!c.cells[320 + x].bold);
+                assert_eq!(c.cells[320 + x].bold, selected == 1 && !back);
                 if availability == "saved" && (selected != 1 || back) {
                     assert_eq!(c.cells[320 + x + 10].glyph, " ");
                     let marker = &c.cells[320 + x + 11];
@@ -569,7 +569,7 @@ mod tests {
                 .iter()
                 .find(|c| c.glyph == "[")
                 .unwrap();
-            assert!(!selected_account.bold);
+            assert!(selected_account.bold);
             assert_eq!(selected_account.fg, other_account.fg);
             assert!(!other_account.bold);
         }
