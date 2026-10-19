@@ -2,7 +2,7 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "0c3b3468e31d076d20f3f4facd46f443431ac120",
+    "ui": "5d30725f4726f33c00783bb09516577f2decbb58",
     "backend": "aea768160343b21e575e12394c5662f049d50433",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
@@ -189,7 +189,8 @@
     "Home status focus opens Enable/Login/Restore confirmations and preserves focus",
     "Ellipsis survives responsive title reclipping; sole Esc dialog hint hidden",
     "Home account focus dims other names/statuses and top bullets; Close/top-option focus dims all account accents/bars without darkening deselected gray-white labels",
-    "Input focus uses cursor only; single editor stays editable while buttons navigate; focused Home account status is bold"
+    "Input focus uses cursor only; single editor stays editable while buttons navigate; focused Home account status is bold",
+    "All usage bar glyphs stay bold in every focus state; 384 changed golden cells verified bold-only with identical glyphs/colors/layout"
   ],
   "management": {
     "passed": true,
