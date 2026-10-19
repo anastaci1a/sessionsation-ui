@@ -432,13 +432,24 @@ impl App {
                     })
                     .collect()
             }
-            Page::Spaces => std::iter::once(Row::yes("Create new Space"))
-                .chain(
-                    self.spaces
-                        .iter()
-                        .map(|s| Row::yes(format!("{} [{}]", s.label, s.workspace_id))),
-                )
-                .collect(),
+            Page::Spaces => {
+                use unicode_width::UnicodeWidthStr;
+                let column = 3 + self
+                    .spaces
+                    .iter()
+                    .map(|s| UnicodeWidthStr::width(s.label.as_str()))
+                    .max()
+                    .unwrap_or(0);
+                std::iter::once(Row::yes("Create new Space"))
+                    .chain(self.spaces.iter().map(|s| {
+                        let mut row = Row::yes(&s.label)
+                            .with_selected_preview(format!("[{}]", s.workspace_id))
+                            .preview_gap(1);
+                        row.preview_column = Some(column);
+                        row
+                    }))
+                    .collect()
+            }
             Page::Name => vec![Row::gate("Continue", self.name_valid(&self.input.value))],
             Page::SpaceName => vec![Row::gate(
                 "Use new Space",
@@ -1982,6 +1993,50 @@ mod tests {
         assert!(a.activate().is_empty());
         assert_eq!(a.page, Page::Config);
         assert!(a.rows()[0].label.starts_with("Default Dir:"));
+    }
+    #[test]
+    fn space_ids_use_shared_selected_preview_column_and_global_detached_fit() {
+        let mut a = app();
+        a.page = Page::Spaces;
+        a.spaces = vec![
+            Workspace {
+                workspace_id: "w1".into(),
+                label: "Short".into(),
+                focused: false,
+            },
+            Workspace {
+                workspace_id: "workspace-with-a-long-id".into(),
+                label: "Longer 界 Space".into(),
+                focused: false,
+            },
+        ];
+        let rows = a.rows();
+        let mut inline_x = None;
+        for selected in [1, 2] {
+            a.options.selected = selected;
+            let mut field = Field::new(100, 24, 1);
+            let c = a.paint(&mut field, 1000, 100, 24);
+            let index = c.cells.iter().position(|c| c.glyph == "[").unwrap();
+            assert_eq!(index / 100, 3 + selected);
+            assert_eq!(*inline_x.get_or_insert(index % 100), index % 100);
+            assert_eq!(c.cells[index].fg, crate::widgets::SECONDARY);
+            assert!(!c.cells[index].bold);
+            assert_eq!(c.cells.iter().filter(|c| c.glyph == "[").count(), 1);
+        }
+        assert!(Options::previews_detached(36, &rows));
+        a.options.selected = 1;
+        let mut field = Field::new(36, 24, 1);
+        let c = a.paint(&mut field, 1000, 36, 24);
+        let index = c.cells.iter().position(|c| c.glyph == "[").unwrap();
+        assert_eq!(index / 36, 7);
+        assert_eq!(index % 36, (36 - "[w1]".len()) / 2);
+        a.options.back = true;
+        let c = a.paint(&mut field, 1050, 36, 24);
+        assert!(c.cells.iter().all(|c| c.glyph != "["));
+        a.options.back = false;
+        a.options.selected = 0;
+        let c = a.paint(&mut field, 1100, 36, 24);
+        assert!(c.cells.iter().all(|c| c.glyph != "["));
     }
     #[test]
     fn space_defaults_to_exact_focused_id_and_never_to_the_first_space() {
