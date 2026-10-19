@@ -1202,8 +1202,9 @@ impl App {
             }
             return canvas;
         }
+        let management_title = self.manager.title();
         let title = match &self.page {
-            Page::Home | Page::Management => self.manager.title(),
+            Page::Home | Page::Management => management_title.as_str(),
             Page::Summary => {
                 if self.resume.is_some() {
                     "Resume Session"

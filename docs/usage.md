@@ -118,6 +118,8 @@ missing data shows Unknown. Shared account databases are excluded from that size
 not use a stale generation for reads or weaken generation checks on mutations.
 Renaming to the existing name remains valid; other sessions’ names remain excluded.
 
+Individual account and session menus show `Account: <name>` and `Session: <name>`
+in their title bar, using the normal display-name shortening.
 Manage Sessions selects an action menu, never implicitly attaches. Lifecycle
 actions carry the captured backend ID/generation. Stop, Restart, Switch, Disable
 and account deregistration/deletion require confirmation. New Session labels and values use aligned columns with space padding and the

@@ -277,18 +277,28 @@ impl Manager {
             field.excluded = excluded;
         }
     }
-    pub fn title(&self) -> &str {
-        match self.page {
+    pub fn title(&self) -> String {
+        match &self.page {
             Page::Home => "",
             Page::Accounts => "Manage Accounts",
-            Page::Account(_) => "Account",
+            Page::Account(key) => return format!("Account: {}", short_name(key)),
             Page::Sessions => "Manage Sessions",
             Page::Archives => "Archived Sessions",
-            Page::Session(_) => "Session",
+            Page::Session(key) => {
+                return format!(
+                    "Session: {}",
+                    crate::usage::display_name(
+                        self.session(key)
+                            .and_then(|s| s["name"].as_str())
+                            .unwrap_or("Unnamed")
+                    )
+                );
+            }
             Page::Operations => "Operations",
             Page::Launch(..) => "Launch progress",
             Page::Operation(_) => "Operation",
         }
+        .into()
     }
     fn go(&mut self, page: Page) {
         self.dialog = None;
