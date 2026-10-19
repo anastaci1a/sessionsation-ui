@@ -189,14 +189,46 @@ fn busy(session: &Value) -> bool {
 pub fn rows(sessions: &[Value], known: bool) -> Vec<Row> {
     rows_with_archives(sessions, known, false)
 }
+/// Display rows are shared by painting, activation and stable-focus restoration.
+/// None is the nonselectable separator between active and inactive sessions.
+pub fn session_layout(sessions: &[Value]) -> Vec<Option<usize>> {
+    let active: Vec<_> = sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s["availability"] == "running")
+        .map(|(i, _)| Some(i))
+        .collect();
+    let inactive: Vec<_> = sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s["availability"] != "running")
+        .map(|(i, _)| Some(i))
+        .collect();
+    let separate = !active.is_empty() && !inactive.is_empty();
+    active
+        .into_iter()
+        .chain(separate.then_some(None))
+        .chain(inactive)
+        .collect()
+}
+pub fn session_index(sessions: &[Value], row: usize) -> Option<usize> {
+    session_layout(sessions).get(row).copied().flatten()
+}
+pub fn session_row(sessions: &[Value], index: usize) -> usize {
+    session_layout(sessions)
+        .iter()
+        .position(|i| *i == Some(index))
+        .unwrap_or(0)
+}
 pub fn rows_with_archives(sessions: &[Value], known: bool, archives: bool) -> Vec<Row> {
     let mut rows = vec![];
     let _ = known;
-    rows.extend(
-        sessions
-            .iter()
-            .map(|s| Row::yes(display_name(s["name"].as_str().unwrap_or("Unnamed")))),
-    );
+    rows.extend(session_layout(sessions).into_iter().map(|i| match i {
+        Some(i) => Row::yes(display_name(
+            sessions[i]["name"].as_str().unwrap_or("Unnamed"),
+        )),
+        None => Row::separator(),
+    }));
     if !sessions.is_empty() {
         rows.push(Row::separator());
     }
@@ -260,9 +292,13 @@ pub fn paint_with_archives(
             canvas.width.saturating_sub(8)
         });
     let table_width = name_width + if show_accounts { account_width } else { 0 };
-    let prefix = 0;
-    for (i, session) in sessions.iter().enumerate() {
-        rows[prefix + i].label = ellipsize(
+    let layout = session_layout(sessions);
+    for (i, session) in layout
+        .iter()
+        .enumerate()
+        .filter_map(|(row, i)| i.map(|i| (row, &sessions[i])))
+    {
+        rows[i].label = ellipsize(
             &display_name(session["name"].as_str().unwrap_or("Unnamed")),
             name_width,
         );
@@ -278,7 +314,7 @@ pub fn paint_with_archives(
             String::new()
         };
         if !suffix.is_empty() {
-            rows[prefix + i] = rows[prefix + i]
+            rows[i] = rows[i]
                 .clone()
                 .with_selected_preview(suffix)
                 .preview_gap(1)
@@ -292,8 +328,10 @@ pub fn paint_with_archives(
     for (index, row) in rows.iter_mut().enumerate() {
         if !row.separator {
             let width = UnicodeWidthStr::width(row.label.as_str());
-            let table_width = if let Some(session) = index
-                .checked_sub(prefix)
+            let table_width = if let Some(session) = layout
+                .get(index)
+                .copied()
+                .flatten()
                 .and_then(|i| sessions.get(i))
                 .filter(|_| show_accounts)
             {
@@ -328,8 +366,11 @@ pub fn paint_with_archives(
         }
     }
     if show_accounts {
-        for (i, session) in sessions.iter().enumerate() {
-            let index = prefix + i;
+        for (index, session) in layout
+            .iter()
+            .enumerate()
+            .filter_map(|(row, i)| i.map(|i| (row, &sessions[i])))
+        {
             if index < options.scroll || index >= options.scroll + capacity {
                 continue;
             }
@@ -394,6 +435,34 @@ pub fn paint_with_archives(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn activity_groups_share_one_nonselectable_separator_and_mapping() {
+        let sessions = vec![
+            json!({"name":"Saved","availability":"saved"}),
+            json!({"name":"Idle","availability":"running"}),
+            json!({"name":"Busy","availability":"running"}),
+        ];
+        assert_eq!(
+            session_layout(&sessions),
+            vec![Some(1), Some(2), None, Some(0)]
+        );
+        let rows = rows(&sessions, true);
+        assert_eq!(rows[0].label, "Idle");
+        assert_eq!(rows[1].label, "Busy");
+        assert!(rows[2].separator);
+        assert_eq!(rows[3].label, "Saved");
+        assert!(rows[4].separator);
+        assert_eq!(rows[5].label, "Operations");
+        assert_eq!(session_index(&sessions, 2), None);
+        for index in 0..sessions.len() {
+            assert_eq!(
+                session_index(&sessions, session_row(&sessions, index)),
+                Some(index)
+            );
+        }
+        assert!(!session_layout(&sessions[..1]).contains(&None));
+        assert!(!session_layout(&sessions[1..]).contains(&None));
+    }
     #[test]
     fn unobserved_live_attachments_explain_the_host_gate() {
         let s = serde_json::json!({"availability":"unavailable","attachment":{"host":"herdr"},"resume_block_reason":"host_unavailable","capabilities":{}});
@@ -628,9 +697,9 @@ mod tests {
                 .iter()
                 .all(|c| !c.bold && c.fg == crate::widgets::SECONDARY)
         );
-        assert!(text(&c, 4).contains("[work]"));
-        assert!(!text(&c, 4).contains("[work]*"));
-        options.selected = 1;
+        assert!(text(&c, 5).contains("[work]"));
+        assert!(!text(&c, 5).contains("[work]*"));
+        options.selected = 2;
         let mut c = Canvas::new(38, 20);
         paint(&mut c, &mut options, &sessions, true, 16, 90062, 19);
         let y = (0..20)
@@ -764,7 +833,8 @@ mod tests {
                 62,
                 17,
             );
-            let lines: Vec<_> = (3..5)
+            let lines: Vec<_> = [3, 5]
+                .into_iter()
                 .map(|r| {
                     c.cells[r * width..(r + 1) * width]
                         .iter()
@@ -782,7 +852,7 @@ mod tests {
                 .iter()
                 .find(|c| c.glyph == "[")
                 .unwrap();
-            let other_account = c.cells[4 * width..5 * width]
+            let other_account = c.cells[5 * width..6 * width]
                 .iter()
                 .find(|c| c.glyph == "[")
                 .unwrap();

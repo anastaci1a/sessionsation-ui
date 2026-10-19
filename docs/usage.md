@@ -116,6 +116,9 @@ and starts one blank line below the list, or below
 the visible-range counter when scrolling.
 Growing the screen returns that list to Home; forms remain open and Back chooses
 the appropriate current layout without losing their account selection.
+Back/Esc returns to the actual previous screen and restores the option that opened
+the submenu, including its scroll position. Refreshed lists retain that focus by
+stable identity. Close on Home detaches the viewer without stopping agents.
 
 On Home, the name selector uses `▶`. While a name is selected, other account names
 use the darker bullet hue. Focus on any account name or usage/status also dims
@@ -143,7 +146,7 @@ line length (one cell less than the rendered width). Percentages precede period 
 observations show Disabled, Login required or Usage unavailable as appropriate;
 stale observations are marked. New/resume account pickers use standard bullets
 with white/gray names and an aligned `x% 5h / x% wk` block one space after the longest name, omitting the short period and
-slash for weekly-only accounts. The selected account’s status appears one blank line below the list or range counter, without repeating its name. Account names accept at most 24 ASCII characters;
+slash for weekly-only accounts. The selected account’s status appears one blank line below the list or range counter, without repeating its name. Ready uses the animated selected-bullet hue, unbolded; other statuses remain unbolded gray. Account names accept at most 24 ASCII characters;
 typing and paste stop at the limit.
 Duplicate names immediately invalidate the editor and disable confirmation.
 Session creation/resume/rename accepts at most 24 Unicode scalar values, also
@@ -245,7 +248,8 @@ Uncertain responses are not automatically retried. Focus tab selects an existing
 HERDR tab in this instance after rechecking its catalog identity.
 
 Manage Sessions sorts busy, idle, then inactive sessions, newest access first
-within each group. Refreshes retain selection by stable ID. It keeps busy activity visible with the reference ten-frame Braille
+within each group. A blank-line bullet separator divides active and inactive
+sessions only when both groups exist. Refreshes retain selection by stable ID. It keeps busy activity visible with the reference ten-frame Braille
 spinner, advancing every 100 ms after one space following the account. The timer
 follows after another space when it fits inline, otherwise uses the shared hover
 panel. Read-only state refreshes once per second, one request at a time; idle, exit,

@@ -50,7 +50,9 @@ Its reusable components are:
 - `dialog` / `host_theme`: shared paginated confirmations and forms, preserving
   input across resize and reading HERDR theme colors without changing host config.
 - `management`: stable-ID list focus, account action groups and lifecycle menus;
-  backend effects stay asynchronous and mutations are never automatically replayed.
+  navigation history restores opener identity and scroll position, and shared
+  session-row mapping keeps group separators outside the session identity space.
+  Backend effects stay asynchronous and mutations are never automatically replayed.
 - `directory`: read-only completion, canonical child resolution and staged paths.
   One picker serves session directories and Global/Per-Space configuration roots.
 - `draft` / `preferences`: creation intent and atomic UI-only preferences.

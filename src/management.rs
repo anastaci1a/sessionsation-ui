@@ -65,6 +65,19 @@ enum Form {
     Progress,
     Operation(String),
 }
+#[derive(Clone)]
+enum Focus {
+    Account(String),
+    Session(String),
+    Operation(String, String),
+    Label(String),
+}
+struct Location {
+    page: Page,
+    options: Options,
+    focus: Option<Focus>,
+    usage_focus: bool,
+}
 pub struct Manager {
     pub page: Page,
     pub options: Options,
@@ -93,6 +106,7 @@ pub struct Manager {
     details_open: bool,
     session_return: Option<String>,
     observe_after: Option<std::time::Instant>,
+    history: Vec<Location>,
 }
 impl Default for Manager {
     fn default() -> Self {
@@ -124,6 +138,7 @@ impl Default for Manager {
             details_open: false,
             session_return: None,
             observe_after: None,
+            history: vec![],
         }
     }
 }
@@ -290,7 +305,7 @@ impl Manager {
         let key = id(&operation).to_owned();
         self.operations.retain(|o| id(o) != key);
         self.operations.push(operation);
-        self.go(Page::Operation(key));
+        self.enter(Page::Operation(key));
         self.refresh()
     }
     pub fn inventory(&mut self, accounts: Vec<Account>) {
@@ -357,6 +372,9 @@ impl Manager {
         .into()
     }
     fn go(&mut self, page: Page) {
+        if page == Page::Home {
+            self.history.clear();
+        }
         self.dialog = None;
         self.form = Form::None;
         self.foreground = None;
@@ -366,6 +384,90 @@ impl Manager {
         self.options = Options::default();
         self.options.selected = self.rows().iter().position(|r| !r.separator).unwrap_or(0);
         self.note.clear();
+    }
+    fn focus(&self) -> Option<Focus> {
+        let index = self.options.selected;
+        match &self.page {
+            Page::Home | Page::Accounts if self.selected_account().is_some() => {
+                self.selected_account().map(Focus::Account)
+            }
+            Page::Sessions
+                if crate::session_list::session_index(&self.sessions, index).is_some() =>
+            {
+                Some(Focus::Session(
+                    id(&self.sessions
+                        [crate::session_list::session_index(&self.sessions, index).unwrap()])
+                    .into(),
+                ))
+            }
+            Page::Archives if index < self.archives.len() => {
+                Some(Focus::Session(id(&self.archives[index]).into()))
+            }
+            Page::Operations => self
+                .operation_keys()
+                .get(index)
+                .cloned()
+                .map(|(kind, key)| Focus::Operation(kind, key)),
+            _ => self
+                .rows()
+                .get(index)
+                .map(|r| Focus::Label(r.label.clone())),
+        }
+    }
+    fn enter(&mut self, page: Page) {
+        self.history.push(Location {
+            page: self.page.clone(),
+            options: self.options.clone(),
+            focus: self.focus(),
+            usage_focus: self.usage_focus,
+        });
+        self.go(page);
+    }
+    fn return_previous(&mut self) -> bool {
+        let Some(location) = self.history.pop() else {
+            return false;
+        };
+        self.go(location.page);
+        self.options = location.options;
+        self.options.back = false;
+        self.options.navigation = Default::default();
+        self.options.preview_visible = false;
+        let selected = match location.focus {
+            Some(Focus::Account(key)) => self
+                .accounts
+                .iter()
+                .position(|a| a.id == key)
+                .map(|i| i + if self.page == Page::Home { 5 } else { 1 }),
+            Some(Focus::Session(key)) => match self.page {
+                Page::Archives => self.archives.iter().position(|s| id(s) == key),
+                _ => self
+                    .sessions
+                    .iter()
+                    .position(|s| id(s) == key)
+                    .map(|i| crate::session_list::session_row(&self.sessions, i)),
+            },
+            Some(Focus::Operation(kind, key)) => self
+                .operation_keys()
+                .iter()
+                .position(|entry| entry == &(kind.clone(), key.clone())),
+            Some(Focus::Label(label)) => self.rows().iter().position(|r| r.label == label),
+            None => None,
+        };
+        let rows = self.rows();
+        self.options.selected = selected
+            .unwrap_or(self.options.selected)
+            .min(rows.len().saturating_sub(1));
+        if rows.get(self.options.selected).is_some_and(|r| r.separator) {
+            self.options.selected = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| !r.separator)
+                .min_by_key(|(index, _)| index.abs_diff(self.options.selected))
+                .map(|(index, _)| index)
+                .unwrap_or(0);
+        }
+        self.usage_focus = location.usage_focus && self.usage_selectable();
+        true
     }
     fn account_back(&mut self, key: &str) {
         let index = self.accounts.iter().position(|a| a.id == key);
@@ -852,9 +954,20 @@ impl Manager {
             && !self.details_open
         {
             if let Some(key) = self.session_return.take() {
+                if let Some(index) = self
+                    .history
+                    .iter()
+                    .rposition(|location| location.page == Page::Sessions)
+                {
+                    self.history.truncate(index);
+                }
                 self.go(Page::Sessions);
-                self.options.selected =
-                    self.sessions.iter().position(|s| id(s) == key).unwrap_or(0);
+                self.options.selected = self
+                    .sessions
+                    .iter()
+                    .position(|s| id(s) == key)
+                    .map(|i| crate::session_list::session_row(&self.sessions, i))
+                    .unwrap_or(0);
             } else {
                 self.go(Page::Home);
             }
@@ -934,6 +1047,12 @@ impl Manager {
         }
     }
     fn back(&mut self) -> Vec<Intent> {
+        if self.page == Page::Home {
+            return vec![Intent::Exit];
+        }
+        if self.return_previous() {
+            return self.refresh();
+        }
         match self.page.clone() {
             Page::Home => return vec![Intent::Exit],
             Page::Account(key) => self.account_back(&key),
@@ -945,7 +1064,12 @@ impl Manager {
                     return self.refresh();
                 }
                 self.go(Page::Sessions);
-                self.options.selected = self.sessions.iter().position(|s| id(s) == key).unwrap_or(0)
+                self.options.selected = self
+                    .sessions
+                    .iter()
+                    .position(|s| id(s) == key)
+                    .map(|i| crate::session_list::session_row(&self.sessions, i))
+                    .unwrap_or(0)
             }
             Page::Spaces(key) => self.go(Page::Session(key)),
             Page::Operation(_) | Page::Launch(..) => self.go(Page::Operations),
@@ -985,15 +1109,15 @@ impl Manager {
             Page::Home => match index {
                 0 => return vec![Intent::New],
                 1 => {
-                    self.go(Page::Sessions);
+                    self.enter(Page::Sessions);
                     return self.refresh();
                 }
                 2 if self.inline => self.add(),
-                2 => self.go(Page::Accounts),
+                2 => self.enter(Page::Accounts),
                 4 => return vec![Intent::Settings],
                 i if i >= 5 => {
                     if let Some(a) = self.accounts.get(i - 5) {
-                        self.go(Page::Account(a.id.clone()));
+                        self.enter(Page::Account(a.id.clone()));
                     }
                 }
                 _ => {}
@@ -1002,7 +1126,7 @@ impl Manager {
                 if index == 0 {
                     self.add()
                 } else if let Some(a) = self.accounts.get(index - 1) {
-                    self.go(Page::Account(a.id.clone()));
+                    self.enter(Page::Account(a.id.clone()));
                 }
             }
             Page::Account(key) => {
@@ -1059,19 +1183,21 @@ impl Manager {
             }
             Page::Sessions => {
                 if !self.archives.is_empty() && index == self.rows().len().saturating_sub(2) {
-                    self.go(Page::Archives);
+                    self.enter(Page::Archives);
                     return self.refresh();
                 }
-                if let Some(session) = self.sessions.get(index) {
-                    self.go(Page::Session(id(session).into()));
+                if let Some(session) = crate::session_list::session_index(&self.sessions, index)
+                    .and_then(|i| self.sessions.get(i))
+                {
+                    self.enter(Page::Session(id(session).into()));
                 } else {
-                    self.go(Page::Operations);
+                    self.enter(Page::Operations);
                 }
                 return self.refresh();
             }
             Page::Archives => {
                 if let Some(s) = self.archives.get(index) {
-                    self.go(Page::Session(id(s).to_owned()));
+                    self.enter(Page::Session(id(s).to_owned()));
                 }
             }
             Page::Spaces(_) => {
@@ -1200,9 +1326,9 @@ impl Manager {
             Page::Operations => {
                 if let Some((kind, key)) = self.operation_keys().get(index).cloned() {
                     if kind == "operation" {
-                        self.go(Page::Operation(key));
+                        self.enter(Page::Operation(key));
                     } else {
-                        self.go(Page::Launch(
+                        self.enter(Page::Launch(
                             if kind == "launch" {
                                 "launch"
                             } else {
@@ -1227,7 +1353,7 @@ impl Manager {
                     .and_then(|r| r["operation_id"].as_str())
                     .map(str::to_owned)
                 {
-                    self.go(Page::Operation(op));
+                    self.enter(Page::Operation(op));
                     return self.refresh();
                 }
             }
@@ -1476,8 +1602,8 @@ impl Manager {
                     && self.page == Page::Sessions
                     && self.options.selected == self.rows().len().saturating_sub(1);
                 let chosen = if self.page == Page::Sessions && self.sessions_known {
-                    self.sessions
-                        .get(self.options.selected)
+                    crate::session_list::session_index(&self.sessions, self.options.selected)
+                        .and_then(|i| self.sessions.get(i))
                         .map(|s| id(s).to_owned())
                 } else {
                     None
@@ -1506,8 +1632,12 @@ impl Manager {
                     self.options = Options::default();
                 }
                 if let Some(key) = chosen {
-                    self.options.selected =
-                        self.sessions.iter().position(|s| id(s) == key).unwrap_or(0);
+                    self.options.selected = self
+                        .sessions
+                        .iter()
+                        .position(|s| id(s) == key)
+                        .map(|i| crate::session_list::session_row(&self.sessions, i))
+                        .unwrap_or(0);
                 }
                 if archives_selected {
                     self.options.selected = self.rows().len().saturating_sub(2);
@@ -1603,7 +1733,7 @@ impl Manager {
                     }
                     self.space_choices = value;
                     self.space_session = session.clone();
-                    self.go(Page::Spaces(id(&session).into()));
+                    self.enter(Page::Spaces(id(&session).into()));
                 }
             }
             Purpose::Resume(key) => {
@@ -1907,6 +2037,121 @@ impl Manager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn grouped_sessions_keep_enter_and_back_bound_to_the_same_session() {
+        use super::*;
+        let mut m = setup();
+        m.sessions_known = true;
+        m.sessions = vec![
+            json!({"id":"active","name":"Active","availability":"running"}),
+            json!({"id":"saved","name":"Saved","availability":"saved"}),
+        ];
+        m.options.selected = 1;
+        m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(m.page, Page::Sessions);
+        assert!(m.rows()[1].separator);
+        m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(m.options.selected, 2);
+        m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(m.page, Page::Session("saved".into()));
+        m.sessions
+            .insert(0, json!({"id":"new","name":"New","availability":"running"}));
+        m.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(m.page, Page::Sessions);
+        assert_eq!(m.options.selected, 3);
+        assert_eq!(
+            crate::session_list::session_index(&m.sessions, m.options.selected),
+            Some(2)
+        );
+    }
+    #[test]
+    fn back_restores_actual_parent_and_stable_selection_after_reordering() {
+        use super::*;
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let mut m = setup();
+        m.options.selected = 2;
+        m.key(enter);
+        assert_eq!(m.page, Page::Accounts);
+        m.options.selected = 2;
+        m.options.scroll = 1;
+        m.key(enter);
+        assert_eq!(m.page, Page::Account("codex:account2".into()));
+        m.accounts.reverse();
+        m.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        m.key(enter);
+        assert_eq!(m.page, Page::Accounts);
+        assert_eq!(m.options.selected, 1);
+        assert_eq!(m.options.scroll, 1);
+        assert!(!m.options.back);
+        m.key(escape);
+        assert_eq!(m.page, Page::Home);
+        assert_eq!(m.options.selected, 2);
+
+        m.sessions = vec![json!({"id":"a","name":"A"}), json!({"id":"b","name":"B"})];
+        m.sessions_known = true;
+        m.options.selected = 1;
+        m.key(enter);
+        assert_eq!(m.page, Page::Sessions);
+        m.options.selected = 1;
+        m.key(enter);
+        assert_eq!(m.page, Page::Session("b".into()));
+        m.sessions.reverse();
+        m.key(escape);
+        assert_eq!(m.page, Page::Sessions);
+        assert_eq!(m.options.selected, 0);
+        m.operations = vec![
+            json!({"id":"o1","kind":"switch","created_at":1}),
+            json!({"id":"o2","kind":"restart","created_at":2}),
+        ];
+        m.options.selected = m.rows().len() - 1;
+        m.key(enter);
+        assert_eq!(m.page, Page::Operations);
+        m.options.selected = 1;
+        m.key(enter);
+        assert_eq!(m.page, Page::Operation("o1".into()));
+        m.operations
+            .push(json!({"id":"o3","kind":"switch","created_at":3}));
+        m.key(escape);
+        assert_eq!(m.page, Page::Operations);
+        assert_eq!(
+            m.operation_keys()[m.options.selected],
+            ("operation".into(), "o1".into())
+        );
+        m.key(escape);
+        assert_eq!(m.page, Page::Sessions);
+        assert_eq!(m.options.selected, m.rows().len() - 1);
+        m.key(escape);
+        assert_eq!(m.page, Page::Home);
+        assert_eq!(m.options.selected, 1);
+    }
+    #[test]
+    fn back_keeps_archive_and_nested_operation_origins() {
+        use super::*;
+        let mut m = setup();
+        m.sessions_known = true;
+        m.archives = vec![json!({"id":"a","name":"Archived"})];
+        m.enter(Page::Sessions);
+        m.options.selected = m.rows().len() - 2;
+        m.activate();
+        assert_eq!(m.page, Page::Archives);
+        m.activate();
+        assert_eq!(m.page, Page::Session("a".into()));
+        m.back();
+        assert_eq!(m.page, Page::Archives);
+        m.back();
+        assert_eq!(m.page, Page::Sessions);
+        assert_eq!(m.options.selected, m.rows().len() - 2);
+        m.go(Page::Operations);
+        m.enter(Page::Launch("launch", "request".into()));
+        m.options.selected = 1;
+        m.enter(Page::Operation("nested".into()));
+        m.back();
+        assert_eq!(m.page, Page::Launch("launch", "request".into()));
+        assert_eq!(m.options.selected, 1);
+        m.back();
+        assert_eq!(m.page, Page::Operations);
+    }
     #[test]
     fn space_picker_uses_bound_backend_choices_and_captured_generation() {
         use super::*;
@@ -2300,7 +2545,11 @@ mod tests {
                 "saved-old"
             ]
         );
-        assert_eq!(m.sessions[m.options.selected]["id"], "saved");
+        assert_eq!(
+            m.sessions
+                [crate::session_list::session_index(&m.sessions, m.options.selected).unwrap()]["id"],
+            "saved"
+        );
     }
     #[test]
     fn switching_confirms_latest_snapshot_and_progress_returns_to_sessions() {

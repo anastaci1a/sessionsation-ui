@@ -417,18 +417,30 @@ pub fn paint_hint(canvas: &mut Canvas, x: usize, y: usize, text: &str) {
 }
 /// Shared one-line status lane with one blank row before the actual controls.
 pub fn paint_status(canvas: &mut Canvas, controls_start: usize, text: &str) {
+    paint_status_colored(canvas, controls_start, text, false);
+}
+pub fn paint_status_colored(canvas: &mut Canvas, controls_start: usize, text: &str, accent: bool) {
     let text = clip(
         &crate::messages::describe(text),
         canvas.width.saturating_sub(2),
     );
     let width = UnicodeWidthStr::width(text.as_str());
-    canvas.text(
-        canvas.width.saturating_sub(width) / 2,
-        controls_start.saturating_sub(2),
-        &text,
-        Cell::default(),
-        false,
-    );
+    let x = canvas.width.saturating_sub(width) / 2;
+    let y = controls_start.saturating_sub(2);
+    if accent {
+        canvas.accent_text(
+            x,
+            y,
+            &text,
+            Accent {
+                brightness: 1000,
+                bold: false,
+                ..Accent::default()
+            },
+        );
+    } else {
+        canvas.text(x, y, &text, Cell::default(), false);
+    }
 }
 pub fn paint_hints(canvas: &mut Canvas, hints: &[String]) {
     let width = hints

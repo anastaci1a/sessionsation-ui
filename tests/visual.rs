@@ -108,11 +108,11 @@ fn management_geometry_usage_markers_and_picker_columns() {
             "sessions-wide" | "sessions-compact" => {
                 m.page = Page::Sessions;
                 m.sessions_known = true;
-                m.options.selected = 1;
                 m.sessions = vec![
                     serde_json::json!({"name":"A name longer than twelve","id":"a","account_id":"codex:personal","availability":"running","activity":"busy","active_since":1}),
                     serde_json::json!({"name":"Saved","id":"b","account_id":"codex:work","availability":"saved"}),
                 ];
+                m.options.selected = sessionsation_ui::session_list::session_row(&m.sessions, 1);
             }
             "operations-wide" | "operations-compact" | "operations-tiny" => {
                 m.page = Page::Operations;

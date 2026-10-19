@@ -99,20 +99,23 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 
 ## Verification record and limits
 
-A fresh public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **135 Rust tests** (133 unit and two visual tests covering
+A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
+passed formatting, Clippy, **141 Rust tests** (139 unit and two visual tests covering
 21 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
-The first build fetched locked public dependencies without the operator's cache;
-subsequent corrective runs reused only that newly built test tree. The isolated
+The original clean build fetched locked public dependencies without the operator's
+cache; the navigation/selection follow-up used cached dependencies with networking
+disabled. Regressions cover Back history, stable selection across refreshed lists,
+active/inactive grouping and unbolded Ready styling. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
 The current release built from these Rust sources, at
 `target-ui/release/sessionsation-ui`, has SHA-256
-`4d07a2b18d67ce169dfcb1ad366722865794ae56531932530f0c264814c29068`;
-the public-image and workspace builds matched. The three PTY scripts and owned
+`e53947ac86800ffad9e63c526712deb5fe51616c725501f9699a2d803aefd599`.
+The three PTY scripts and owned
 HERDR popup test passed against this artifact, including Space lookup cancellation,
 confirmation, one captured-generation mutation and return to the selected session.
-All selected live installations and downstream pins were retained.
+Installation promotion selects an immutable tested binary for future popups;
+already-running viewers and downstream pins are retained.
 Private deployment inventories and raw native traces are intentionally kept outside Git.
 
 The tested HERDR version is 0.9.5/protocol 22. The Rust package's declared minimum

@@ -106,7 +106,7 @@ enum StartConfirmation {
 #[derive(Clone)]
 struct Saved {
     page: Page,
-    selected: usize,
+    options: Options,
     text: String,
     listing: Listing,
 }
@@ -470,7 +470,7 @@ impl App {
     fn push(&mut self, page: Page, text: String) -> Vec<Effect> {
         self.stack.push(Saved {
             page: self.page.clone(),
-            selected: self.options.selected,
+            options: self.options.clone(),
             text: self.input.value.clone(),
             listing: self.listing.clone(),
         });
@@ -523,13 +523,14 @@ impl App {
         }
         if let Some(old) = self.stack.pop() {
             self.page = old.page;
-            self.options.selected = old.selected;
+            self.options = old.options;
+            self.options.navigation = Default::default();
+            self.options.preview_visible = false;
             self.input.value = old.text;
             self.input.cursor = self.input.value.len();
             self.input.max_chars = (self.page == Page::Name).then_some(24);
             self.listing = old.listing;
             self.options.back = false;
-            self.options.scroll = 0;
             self.error.clear();
             self.dirty = true;
             if save {
@@ -1092,6 +1093,7 @@ impl App {
                         .sessions
                         .iter()
                         .position(|s| s["id"] == session["id"])
+                        .map(|i| crate::session_list::session_row(&self.manager.sessions, i))
                         .unwrap_or(0);
                 }
                 self.stack.clear();
@@ -1435,7 +1437,7 @@ impl App {
         if self.page == Page::Accounts && self.error.is_empty() {
             let y = top + rows.len().min(capacity) + usize::from(rows.len() > capacity) + 1;
             if y + 1 < footer {
-                crate::widgets::paint_status(&mut canvas, y + 2, &note);
+                crate::widgets::paint_status_colored(&mut canvas, y + 2, &note, note == "Ready");
             }
         } else {
             crate::widgets::paint_status(&mut canvas, footer, &note);
@@ -1456,6 +1458,55 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn back_restores_launcher_options_and_picker_scroll() {
+        let mut a = app();
+        a.page = Page::Summary;
+        a.options.selected = 3;
+        a.activate();
+        assert_eq!(a.page, Page::Directory(Target::Draft));
+        a.options.selected = 1;
+        a.options.scroll = 7;
+        a.push(
+            Page::NewDirectory(Target::Draft, "/tmp".into()),
+            String::new(),
+        );
+        a.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(a.page, Page::Directory(Target::Draft));
+        assert_eq!(a.options.selected, 1);
+        assert_eq!(a.options.scroll, 7);
+        a.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        a.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(a.page, Page::Summary);
+        assert_eq!(a.options.selected, 3);
+    }
+    #[test]
+    fn chooser_ready_is_animated_accent_and_other_statuses_stay_gray() {
+        for switching in [false, true] {
+            let mut a = app();
+            a.page = Page::Accounts;
+            a.switch = switching.then(|| json!({"id":"session"}));
+            a.accounts=vec![serde_json::from_value(json!({"id":"codex:demo","selectable":true,"usage_fresh":true,"usage":{"observed_at":1,"short":{"duration_minutes":300,"used_percent":20},"weekly":{"duration_minutes":10080,"used_percent":10}}})).unwrap()];
+            let mut field = Field::new(80, 24, 1);
+            let c = a.paint(&mut field, 4200, 80, 24);
+            let row = &c.cells[5 * 80..6 * 80];
+            let x = row.iter().position(|c| c.glyph == "R").unwrap();
+            assert!(
+                row[x..x + 5]
+                    .iter()
+                    .all(|c| !c.bold && c.fg != Cell::default().fg)
+            );
+            a.accounts[0].details.insert("enabled".into(), json!(false));
+            let c = a.paint(&mut field, 4300, 80, 24);
+            let row = &c.cells[5 * 80..6 * 80];
+            let x = row.iter().position(|c| c.glyph == "D").unwrap();
+            assert!(
+                row[x..x + 8]
+                    .iter()
+                    .all(|c| !c.bold && c.fg == Cell::default().fg)
+            );
+        }
+    }
     #[test]
     fn repeated_arrows_stop_and_a_released_press_wraps() {
         use crossterm::event::KeyEventKind;
@@ -1741,13 +1792,19 @@ mod tests {
         a.stack = vec![
             Saved {
                 page: Page::Summary,
-                selected: 3,
+                options: Options {
+                    selected: 3,
+                    ..Default::default()
+                },
                 text: String::new(),
                 listing: Listing::default(),
             },
             Saved {
                 page: Page::Directory(Target::Draft),
-                selected: 1,
+                options: Options {
+                    selected: 1,
+                    ..Default::default()
+                },
                 text: "/tmp".into(),
                 listing: Listing::default(),
             },
