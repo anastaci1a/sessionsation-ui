@@ -2,13 +2,13 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "b7346ba276f0c2a899c67f944874eef29579d312",
+    "ui": "694940403344f7b7dd231abb96460e6d356cf7f5",
     "backend": "aea768160343b21e575e12394c5662f049d50433",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
   "checks": {
     "rust": {
-      "unit_passed": 101,
+      "unit_passed": 103,
       "visual_snapshot_test_passed": 2,
       "golden_frames": 21,
       "failed": 0,
@@ -98,13 +98,13 @@
   "herdr": {
     "keybind_startup": {
       "samples": 20,
-      "p50_ms": 176.50194000452757,
-      "p95_ms": 194.84711799304932,
-      "max_ms": 194.84711799304932
+      "p50_ms": 175.33917492255569,
+      "p95_ms": 180.3226500051096,
+      "max_ms": 180.3226500051096
     },
-    "first_press_ms": 32.43502206169069,
+    "first_press_ms": 8.060566964559257,
     "installed_herdr": "0.9.5",
-    "plugin_to_first_paint_ms": 415.8500100020319,
+    "plugin_to_first_paint_ms": 286.8414510739967,
     "popup_size": [
       117,
       28
@@ -116,6 +116,7 @@
       "first press moves before repeat/release",
       "Home/End jump to first/last option",
       "held arrows and release/press wrap through installed HERDR",
+      "mixed ordinary/enhanced repeats clamp both boundaries; unrelated release does not rearm",
       "real host resize preserves draft",
       "selected destination normal tab",
       "staged directory",
@@ -125,7 +126,12 @@
       "origin shell unchanged"
     ],
     "models": 0,
-    "source_ui": "1468c7d45f8fc91e1ce526e3ac9641fc8851e671"
+    "source_ui": "694940403344f7b7dd231abb96460e6d356cf7f5",
+    "mixed_event_regression": {
+      "previous_source": "b7346ba276f0c2a899c67f944874eef29579d312",
+      "previous_result": "Failed to stay at last account on ordinary arrow burst after enhanced events",
+      "current_result": "Pass: both boundaries clamp; matching release and fresh press wrap; unrelated release does not rearm"
+    }
   },
   "frames": [
     {
@@ -179,14 +185,14 @@
     "Home usage focus: white triangle after one space, selected colors retained, other bars darkened without desaturation",
     "Default Dir global/per-Space pickers offer leave unset; three action rows focus Back on Left",
     "Unavailable options can receive focus without activation; separators skipped",
-    "Active session account tags brighten on hover; inactive tags stay dim with one-space gray asterisk, neither bold",
+    "Active tags brighten on hover; inactive tags stay dim, with muted-gray asterisk only while parenthetical is not visible; neither bold",
     "Menu hints/ranges use reference soft accent; dialog hints readable gray",
     "Inherited popup background unchanged; nonblocking OSC 11 reply filters without typed-input corruption",
     "Shared list and dialog navigation: hold-origin wrapping, immediate first press, Home/End boundaries without footer hints",
     "Compact Manage Accounts uses normal circle bullets and white/gray names; usage text unbolded",
     "Home status focus opens Enable/Login/Restore confirmations and preserves focus",
     "Ellipsis survives responsive title reclipping; sole Esc dialog hint hidden",
-    "Home account focus dims other names/statuses and top bullets; Close dims all account accents/bars while deselected gray-white labels remain unchanged, verified across animation phases"
+    "Home account focus dims other names/statuses and top bullets; Close/top-option focus dims all account accents/bars without darkening deselected gray-white labels"
   ],
   "management": {
     "passed": true,
@@ -225,11 +231,11 @@
       "TTY restoration"
     ],
     "transition_ms": {
-      "idle": 980,
-      "busy": 989.5,
-      "saved": 1012.1,
-      "failure": 1009.46
+      "idle": 979.8,
+      "busy": 980.69,
+      "saved": 1000.21,
+      "failure": 987.7
     },
-    "source_ui": "1f30e96d6944373182efa196160eec9ff16c680a"
+    "source_ui": "694940403344f7b7dd231abb96460e6d356cf7f5"
   }
 }

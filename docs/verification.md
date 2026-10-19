@@ -2,7 +2,7 @@
 
 ## Rust popup
 
-The expanded popup passes **103 Rust tests** (101 unit tests and two tests covering
+The expanded popup passes **105 Rust tests** (103 unit tests and two tests covering
 21 complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
 regressions**. Syntax, manifest fields and documentation links pass. The goldens
 exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,
@@ -25,7 +25,9 @@ network-disabled container, with separate config/socket/state and a synthetic pu
 backend. It verifies the requested percentage popup geometry, origin context without a pane ID,
 selection of a different Space, normal-tab handoff, focus before exit, second-popup
 cancellation, held-arrow clamping/release-and-press wrapping through the actual
-HERDR pane encoder, Home/End list jumps, and unchanged origin shell. The Home/End release (`1468c7d`) moves on the first press alone in 32.44 ms, before any repeat or release. Twenty actual prefix+uppercase-L openings
+HERDR pane encoder, Home/End list jumps, and unchanged origin shell. The current release moves on the first press alone in 8.06 ms, before any repeat or release.
+Mixed ordinary/enhanced arrow streams clamp at both boundaries; only a matching
+release rearms the next press. The previous installed build fails that regression. Twenty actual prefix+uppercase-L openings
 passed. Separate backend fixtures cover exact account/UUID/socket handoff, normal exit,
 preserved-history resume after local account deletion and the pinned-original
 supervisor handoff. Their details and limits belong to the backend guidance.
