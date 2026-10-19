@@ -2,13 +2,13 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "b7c829087866e9cc059e821859f5927c8fe53148",
-    "backend": "51764d216830bb9623c877abb2ef325d1c2231fd",
+    "ui": "13c72d2f280036ed1f399d69d06379adecaff8f7",
+    "backend": "37d9393b0847a5e919956c2fa453f071f7f192a7",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
   "checks": {
     "rust": {
-      "unit_passed": 128,
+      "unit_passed": 130,
       "visual_snapshot_test_passed": 2,
       "golden_frames": 21,
       "failed": 0,
@@ -24,15 +24,15 @@
       "command": "npm run check"
     },
     "backend": {
-      "standard_tests_passed": 251,
+      "standard_tests_passed": 258,
       "installed_herdr_test_passed": 2,
       "failed": 0,
       "standard_command": "scripts/check.sh",
-      "standard_source": "51764d216830bb9623c877abb2ef325d1c2231fd",
+      "standard_source": "37d9393b0847a5e919956c2fa453f071f7f192a7",
       "tests": {
-        "unit": 135,
+        "unit": 140,
         "cli": 8,
-        "external_move": 62,
+        "external_move": 64,
         "external_move_ignored": 3,
         "messaging_cli": 8,
         "persistence": 6,
@@ -76,37 +76,45 @@
         "models": 0,
         "source": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
       },
-      "installed_herdr_source": "51764d216830bb9623c877abb2ef325d1c2231fd",
-      "scope": "Current source: 251 standard tests and two installed-HERDR fixtures; owner-handoff evidence separately versioned below"
+      "installed_herdr_source": "37d9393b0847a5e919956c2fa453f071f7f192a7",
+      "scope": "258 offline standard tests and two installed-HERDR fixtures; native disposable acceptance and earlier owner-handoff evidence are separately versioned",
+      "native_acceptance": {
+        "manifest": "https://github.com/anastaci1a/sessionsation/blob/main/docs/verification.json",
+        "final_source": "37d9393b0847a5e919956c2fa453f071f7f192a7",
+        "passed": true,
+        "model_turns": 0,
+        "existing_agents_targeted": 0,
+        "legacy_reader_gate": "Older Agent DM shared-root reader requires compatible pin adoption for custom HERDR namespaces; test-only socket alias removed"
+      }
     }
   },
   "pty": {
     "startup": {
       "samples": 20,
-      "p50_ms": 5.254492978565395,
-      "p95_ms": 6.020247004926205,
-      "max_ms": 6.020247004926205
+      "p50_ms": 5.42244897224009,
+      "p95_ms": 6.6079990938305855,
+      "max_ms": 6.6079990938305855
     },
     "input": {
       "samples": 238,
-      "p50_ms": 0.3499559825286269,
-      "p95_ms": 0.47479697968810797,
-      "max_ms": 0.589328003115952
+      "p50_ms": 0.2996430266648531,
+      "p95_ms": 0.5423020338639617,
+      "max_ms": 2.013950957916677
     },
-    "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
+    "checks": "delayed backend, summary, paste, staged directory, request identity, shared-directory warning/cancel/confirm, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
     "models": 0,
-    "source_ui": "f8358a79ca330e405b35afd0c65012cfcdba3ec8"
+    "source_ui": "13c72d2f280036ed1f399d69d06379adecaff8f7"
   },
   "herdr": {
     "keybind_startup": {
       "samples": 20,
-      "p50_ms": 175.75065803248435,
-      "p95_ms": 181.78663402795792,
-      "max_ms": 181.78663402795792
+      "p50_ms": 169.1197369946167,
+      "p95_ms": 190.7736819703132,
+      "max_ms": 190.7736819703132
     },
-    "first_press_ms": 12.004196061752737,
+    "first_press_ms": 7.531245006248355,
     "installed_herdr": "0.9.5",
-    "plugin_to_first_paint_ms": 318.64556192886084,
+    "plugin_to_first_paint_ms": 193.181479931809,
     "popup_size": [
       117,
       28
@@ -128,7 +136,7 @@
       "origin shell unchanged"
     ],
     "models": 0,
-    "source_ui": "f8358a79ca330e405b35afd0c65012cfcdba3ec8"
+    "source_ui": "13c72d2f280036ed1f399d69d06379adecaff8f7"
   },
   "frames": [
     {
@@ -164,7 +172,7 @@
       "initial_handoff": "The latest owner update retained 26/27 captured native process identities. One codex process exited during the interval; cause not established. No agent-stop API or direct signal was invoked.",
       "wait": "Registry lock release checked separately from socket disappearance"
     },
-    "backend_client": "/mnt/user/live/packages/sessionsation/popup/51764d216830bb9623c877abb2ef325d1c2231fd/sessionsation"
+    "backend_client": "/mnt/user/live/packages/sessionsation/popup/37d9393b0847a5e919956c2fa453f071f7f192a7/sessionsation"
   },
   "layout_regressions": [
     "Configuration labels and complete-fit optional directory previews",
@@ -195,38 +203,35 @@
   ],
   "management": {
     "passed": true,
-    "command": "python3 scripts/test-management.py --binary target-ui/release/sessionsation-ui",
+    "models": 0,
     "checks": [
       "compact bars and separators",
-      "mixed-window right-aligned picker",
+      "right-aligned mixed-window picker",
       "saved selection never attaches",
-      "resume captured identity and readonly directory",
+      "resume captures identity and selected directory",
       "background completion retains menu",
       "reopened receipt without resend",
-      "TTY restoration",
-      "fast deletion intent and one confirmed CLI admission; detach never cancels/resends"
+      "details close returns to submenu and stays closed",
+      "TTY restoration"
     ],
-    "models": 0,
-    "source_ui": "1468c7d45f8fc91e1ce526e3ac9641fc8851e671",
-    "directory_selection": {
-      "passed": true,
-      "source": "b7c829087866e9cc059e821859f5927c8fe53148",
-      "scope": "Synthetic public CLI and PTY; no native provider",
-      "checks": [
-        "normal bullet account picker and aligned adjacent usage block",
-        "resume existing-directory choice reaches public CLI exactly once",
-        "background returns to Manage Sessions",
-        "unfinished consent preserves edited destination"
-      ]
-    }
+    "command": "python3 scripts/test-management.py --binary target-ui/release/sessionsation-ui",
+    "source_ui": "13c72d2f280036ed1f399d69d06379adecaff8f7",
+    "scope": "Isolated synthetic public CLI and real PTYs; no provider credentials",
+    "additional_unit_coverage": [
+      "unfinished consent preserves edited destination",
+      "new/resume directory selection emits displayed target once",
+      "session lifecycle returns to Manage Sessions with affected ID selected",
+      "friendly stale/unconfirmed messages retain original request identity"
+    ]
   },
   "limitations": [
-    "No new live model acceptance; separately approved unauthenticated account deletion recovered to completion with conversations preserved",
     "Claude preparation only",
     "HERDR outer border cannot follow animated status bar",
     "Dynamic/terminal HERDR themes use explicit configured-base approximation",
     "Original startup configuration is preserved; an old owner started after reboot gates deletion until selected owner activation",
-    "Provider-login cancellation action pending"
+    "Provider-login cancellation action pending",
+    "Native disposable acceptance used no model turns; earlier substantive history evidence remains separately scoped",
+    "Shared-root legacy Agent DM pin adoption remains separate; no cutover or receipt mapping change"
   ],
   "activity": {
     "passed": true,
@@ -291,18 +296,6 @@
   },
   "directory_warning": {
     "source_ui": "5ae5ffafcd40082a349194665c839566732afe94",
-    "startup": {
-      "samples": 3,
-      "p50_ms": 5.367664038203657,
-      "p95_ms": 6.812872947193682,
-      "max_ms": 6.812872947193682
-    },
-    "input": {
-      "samples": 204,
-      "p50_ms": 0.38752600084990263,
-      "p95_ms": 0.8420250378549099,
-      "max_ms": 1.18056102655828
-    },
     "checks": "delayed backend, summary, paste, staged directory, request identity, shared-directory warning/cancel/confirm, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
     "models": 0,
     "unit_coverage": [
