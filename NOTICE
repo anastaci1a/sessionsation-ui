@@ -1,6 +1,7 @@
 sessionsation-ui is MIT licensed (see LICENSE).
 
-HERDR palette data: vendor/herdr/palettes.json is a reduced extraction from
+HERDR palette data: vendor/herdr/palettes.json and the demo's terminal palette
+in scripts/demo.py are reduced extractions from
 HERDR v0.9.5, https://github.com/herdrdev/herdr (Apache-2.0).
 The upstream license is retained in vendor/herdr/LICENSE; see vendor/herdr/README.md.
 HERDR remains a separately installed program; its renderer is not vendored here.

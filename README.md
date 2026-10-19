@@ -9,7 +9,7 @@ The CLI owns credentials and lifecycle. Closing the popup leaves agents running.
 Claude is preparation-only. Some lifecycle/experimental actions remain unavailable;
 [capabilities and limits](docs/usage.md#capabilities-and-limits) describe what actually works.
 
-![Real HERDR and sessionsation-ui with synthetic accounts, session management and new-session handoff](docs/assets/demo.gif)
+![Real HERDR in Rose Pine and sessionsation-ui with synthetic accounts, session management and new-session handoff](docs/assets/demo.gif)
 
 Synthetic personal/work accounts and an inert shell; no provider calls.
 [Regenerate and review the demo](docs/verification.md#animated-demo).

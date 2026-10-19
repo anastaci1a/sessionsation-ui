@@ -19,9 +19,17 @@ for tool in ['herdr', 'agg']:
 preload = pathlib.Path('/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1')
 if not preload.exists(): raise SystemExit('Install libfaketime; see docs/verification.md')
 width, height = 128, 40
-terminal_background = [40, 42, 54]
-terminal_foreground = [248, 248, 242]
 repo = pathlib.Path(__file__).resolve().parents[1]
+host_palette = json.loads((repo/'vendor/herdr/palettes.json').read_text())['rose-pine']
+terminal_background = host_palette['panel_bg']
+terminal_foreground = host_palette['text']
+# HERDR v0.9.5 src/app/state.rs Palette::rose_pine; same attributed palette
+# source as vendor/herdr. agg accepts background, foreground, then eight ANSI colors.
+renderer_theme = ','.join([
+    ''.join(f'{v:02x}' for v in terminal_background),
+    ''.join(f'{v:02x}' for v in terminal_foreground),
+    '26233a', 'eb6f92', '31748f', 'f6c177', '31748f', 'c4a7e7', '9ccfd8', 'e0def4',
+])
 with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
     root = pathlib.Path(tmp)
     home = root/'home'
@@ -33,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
     shell = root/'demo-shell'
     shell.write_text("#!/bin/sh\nexport PS1='demo $ '\nprintf '\\033[2J\\033[H  sessionsation demo\\n\\n  Synthetic workspace; no provider is running.\\n\\n'\nexec /bin/bash --noprofile --norc\n")
     shell.chmod(0o700)
-    config.write_text('onboarding=false\n[theme.custom]\npanel_bg="#282a36"\n[terminal]\ndefault_shell='+json.dumps(str(shell))+'\n[[keys.command]]\nkey="prefix+shift+l"\ntype="plugin_action"\ncommand="sessionsation.launcher"\ndescription="Sessionsation"\n')
+    config.write_text('onboarding=false\n[theme]\nname="rose-pine"\n[terminal]\ndefault_shell='+json.dumps(str(shell))+'\n[[keys.command]]\nkey="prefix+shift+l"\ntype="plugin_action"\ncommand="sessionsation.launcher"\ndescription="Sessionsation"\n')
     backend = root/'synthetic-cli'
     backend.write_bytes((repo/'scripts/demo-backend.py').read_bytes())
     backend.chmod(0o700)
@@ -155,7 +163,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
         cast = output/'demo.cast'
         header = {'version': 2, 'width': width, 'height': height, 'timestamp': 1767268800, 'env': {'TERM': 'xterm-256color', 'SHELL': '/bin/bash'}, 'title': 'Synthetic sessionsation-ui in HERDR'}
         cast.write_text('\n'.join(json.dumps(e) for e in [header, *events])+'\n')
-        subprocess.run(['agg', '--theme', 'dracula', '--text-font-family', 'DejaVu Sans Mono', '--font-size', '14', '--line-height', '1.25', '--fps-cap', '10', '--last-frame-duration', '1', str(cast), str(output/'demo.gif')], check=True)
+        subprocess.run(['agg', '--theme', renderer_theme, '--text-font-family', 'DejaVu Sans Mono', '--font-size', '14', '--line-height', '1.25', '--fps-cap', '10', '--last-frame-duration', '1', str(cast), str(output/'demo.gif')], check=True)
         from PIL import Image, ImageOps, ImageDraw
         gif = Image.open(output/'demo.gif')
         frames = []
@@ -178,7 +186,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
         assert sum(call[:2] == ['launch', 'start'] for call in calls) == 1
         assert not any(call[0] in ['send', 'switch', 'stop', 'restart'] for call in calls)
         evidence = {'synthetic_only': True, 'provider_calls': 0, 'models': 0, 'size': [width, height], 'markers': markers, 'gif_bytes': (output/'demo.gif').stat().st_size, 'gif_frames': gif.n_frames, 'gif_duration_ms': duration_ms, 'pacing': {'key_pause_ms': 450, 'typing_ms_per_character': 100, 'reading_pauses_seconds': '1.2–3'}, 'handoff_verified': True, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'tools': json.loads((repo/'scripts/demo-tools.json').read_text()), 'loop': 'Actual initial terminal stream repeated; no replacement UI drawn'}
-        evidence['terminal_colors'] = {'background': terminal_background, 'foreground': terminal_foreground, 'osc_replies': color_replies, 'renderer_theme': 'dracula', 'herdr_panel_bg': '#282a36'}
+        evidence['terminal_colors'] = {'background': terminal_background, 'foreground': terminal_foreground, 'osc_replies': color_replies, 'renderer_theme': renderer_theme, 'herdr_theme': 'rose-pine'}
         (output/'demo-evidence.json').write_text(json.dumps(evidence, indent=2)+'\n')
         print(json.dumps(evidence, indent=2))
     except Exception:
