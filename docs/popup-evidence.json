@@ -2,13 +2,13 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "5d30725f4726f33c00783bb09516577f2decbb58",
+    "ui": "6e9ea1e3a7bbbe163c9d3d7d67a5814cc82761bf",
     "backend": "aea768160343b21e575e12394c5662f049d50433",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
   "checks": {
     "rust": {
-      "unit_passed": 106,
+      "unit_passed": 107,
       "visual_snapshot_test_passed": 2,
       "golden_frames": 21,
       "failed": 0,
@@ -245,5 +245,16 @@
     "native_events": "Immediate first movement; edge-origin wrap consumed on crossing; release rearms",
     "legacy_fallback_ms": 150,
     "limitation": "Press-only byte streams cannot distinguish physical release from repeat-delay or transport pauses; fallback is estimated, not exact"
+  },
+  "dialog_regressions": {
+    "star_generation": "Identical covered/uncovered background across 12 seconds, repeated popup open/close and resize",
+    "deletion_confirmation": "40x18 popup dispatches valid typed confirmation through Enter before scrolling; delegates public CLI once",
+    "backend_recheck": {
+      "test": "account_delete_is_async_preserves_conversations_and_removes_only_disposable_credentials",
+      "passed": 1,
+      "failed": 0,
+      "source": "aea768160343b21e575e12394c5662f049d50433",
+      "isolation": "Disposable owner, account and fake provider; no production deletion"
+    }
   }
 }
