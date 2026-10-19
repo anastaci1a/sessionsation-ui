@@ -302,8 +302,8 @@ themes report an approximation because HERDR exposes no resolved-palette API.
 
 ## New session and directory flow
 
-The Space chooser uses a shared left-aligned `[id]` preview column. Only the
-highlighted Space's ID appears, unbolded gray; Back focus hides it. If any ID
+Only the highlighted Space's `[id]` appears, one space after its name, unbolded
+gray; Back focus hides it. If any ID
 cannot fit inline, the whole list uses the standard centered preview below the
 options or range counter, separated by one blank line.
 
