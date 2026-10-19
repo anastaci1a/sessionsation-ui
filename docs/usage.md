@@ -38,7 +38,7 @@ and bolds its line characters; other bars darken without adding
 another selector. A white `◀`, separated by one space, follows the first usage
 value when it has focus.
 Status-only accounts also accept Right. Their status and focused `◀` use the normal
-bullet hue, without bold. While a usage/status item is focused on the right, other
+bullet hue; the focused status text is bold, and the triangle stays regular weight. While a usage/status item is focused on the right, other
 text statuses use the darker bullet hue, like the other dimmed usage bars. Enter/Space opens Enable for Disabled, Login for Login
 required, Restore for Deregistered, or usage details otherwise. These dialogs retain
 the account and right-side focus when closed; mutations require confirmation.
@@ -54,7 +54,8 @@ typing and paste stop at the limit.
 Duplicate names immediately invalidate the editor and disable confirmation.
 Session creation/resume/rename accepts at most 24 Unicode scalar values, also
 enforced by the CLI.
-Only the focused input shows a cursor in multi-input dialogs; single-input dialogs
+Input focus is shown by the cursor alone, with no triangle. Only the focused input
+shows a cursor in multi-input dialogs; single-input dialogs
 stay editable while navigating buttons. Menu account names are ellipsized on cell 12, session titles on cell 16; full values remain
 editable and exact confirmation IDs remain intact. See the
 [rendering specification](cli-specification/architecture.md#account-and-session-management)

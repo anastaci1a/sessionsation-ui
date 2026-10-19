@@ -363,10 +363,6 @@ impl Dialog {
                         }
                     }
                 }
-                // Single editors stay active. Multi-field selection is still visible.
-                if self.fields.len() > 1 && self.selected == index {
-                    canvas.text(x + 3, row, "▶", field_style, false);
-                }
                 row += 3;
             }
             row += 1;
@@ -482,7 +478,31 @@ mod tests {
                 .filter(|c| c.bg == Some([238; 3]))
                 .count();
             assert_eq!(cursors, usize::from(selected < 2));
+            assert!(canvas.cells.iter().all(|c| c.glyph != "▶"));
         }
+    }
+    #[test]
+    fn single_editor_stays_live_while_arrows_select_only_buttons() {
+        let mut d = Dialog::new("Edit", vec![], &["Save", "Cancel"]);
+        d.fields.push(Field::new("Name", ""));
+        for (code, selected, letter) in [(KeyCode::Down, 1, 'a'), (KeyCode::Up, 0, 'b')] {
+            d.key(KeyEvent::new(code, KeyModifiers::NONE));
+            assert_eq!(d.selected, selected);
+            d.key(KeyEvent::new(KeyCode::Char(letter), KeyModifiers::NONE));
+            let mut canvas = Canvas::new(80, 32);
+            d.paint(&mut canvas, &Palette::default());
+            assert_eq!(
+                canvas
+                    .cells
+                    .iter()
+                    .filter(|c| c.bg == Some([238; 3]))
+                    .count(),
+                1
+            );
+            assert!(canvas.cells.iter().all(|c| c.glyph != "▶"));
+        }
+        assert_eq!(d.values(), vec!["ab"]);
+        assert!(matches!(d.key(enter()), Event::Choose(0, _)));
     }
     #[test]
     fn dialog_hints_stay_readable_gray_when_the_menu_theme_animates() {

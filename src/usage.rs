@@ -127,6 +127,16 @@ impl Usage {
         self.paint_selected(canvas, x, y, bar, digits, true);
         if self.status_only() {
             canvas.accent_text(
+                x,
+                y,
+                &self.status,
+                Accent {
+                    bold: true,
+                    flash: false,
+                    ..Accent::default()
+                },
+            );
+            canvas.accent_text(
                 x + self.width(bar, digits),
                 y,
                 " ◀",
@@ -487,8 +497,8 @@ mod tests {
                         for x in
                             layout.bars..layout.bars + usage.width(layout.bar_width, layout.digits)
                         {
+                            expected.cells[y * 100 + x].bold = active && usage_focus;
                             assert_eq!(c.cells[y * 100 + x], expected.cells[y * 100 + x]);
-                            assert!(!c.cells[y * 100 + x].bold);
                         }
                     }
                     if (back || selected.is_none()) && !usage.status_only() {
@@ -581,7 +591,7 @@ mod tests {
                 },
             );
             assert_eq!(expected.cells[120 + end + 1], c.cells[120 + end + 1]);
-            assert!(!c.cells[122].bold);
+            assert!(c.cells[122].bold);
         }
     }
     #[test]
