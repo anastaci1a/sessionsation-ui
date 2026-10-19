@@ -286,7 +286,7 @@ fn refresh_resume_request(request: &mut Value, snapshot: &Value, fresh: &Value) 
         fresh["id"] == request["session_id"] && fresh["availability"] == "saved",
         "SESSION_ALREADY_RUNNING_OR_UNAVAILABLE"
     );
-    for key in ["conversation_id", "account_id", "directory"] {
+    for key in ["conversation_id", "account_id", "directory", "name"] {
         ensure!(
             snapshot[key].is_string() && snapshot[key] == fresh[key],
             "SESSION_SOURCE_CHANGED: select the session again"
@@ -301,8 +301,8 @@ mod tests {
     use super::*;
     #[test]
     fn resume_refresh_preserves_destination_and_rejects_changed_source() {
-        let snapshot = json!({"id":"stable","conversation_id":"thread","account_id":"codex:original","directory":"/saved"});
-        let fresh = json!({"id":"stable","conversation_id":"thread","account_id":"codex:original","directory":"/saved","availability":"saved","generation":"new"});
+        let snapshot = json!({"id":"stable","conversation_id":"thread","account_id":"codex:original","directory":"/saved","name":"Original"});
+        let fresh = json!({"id":"stable","conversation_id":"thread","account_id":"codex:original","directory":"/saved","name":"Original","availability":"saved","generation":"new"});
         let mut request = json!({"session_id":"stable","expected_generation":"old","account_id":"codex:target","name":"Chosen","space":{"kind":"new","label":"Other"}});
         refresh_resume_request(&mut request, &snapshot, &fresh).unwrap();
         assert_eq!(request["expected_generation"], "new");
@@ -315,6 +315,7 @@ mod tests {
             "account_id",
             "directory",
             "availability",
+            "name",
         ] {
             let mut changed = fresh.clone();
             changed[key] = json!("changed");
