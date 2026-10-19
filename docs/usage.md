@@ -106,6 +106,8 @@ Home orders New Session, Manage Sessions, Add Account/Manage Accounts, a dot
 separator and Settings. If every account fits above the bottom controls, accounts
 appear inline without selector circles and Add Account is available. The account/bar
 block is centered, caps bar width at 24 cells and shrinks to fit narrower popups.
+While inventory loads, Home starts with Add Account; Manage Accounts appears only
+when the received account rows exceed the available space.
 Otherwise Manage Accounts provides a scrolling list with `[add account]` first,
 normal circle bullets and white/gray account-name text.
 Enabled/Disabled values share a left-aligned column. Enabled uses the selected or

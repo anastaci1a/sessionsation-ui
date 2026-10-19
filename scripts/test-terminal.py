@@ -8,6 +8,14 @@ probe=Screen();probe.feed(b'\x1b[38;2;4\x1b[2;2HConfiguration');assert probe.con
 starts=[];keys=[]
 with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  root=pathlib.Path(tmp);fixture(root)
+ # Pending inventory is not overflow: the large Home must not flash Manage Accounts.
+ t=Terminal(root,delay=1)
+ try:
+  t.wait('New Session');t.wait('Add Account')
+  assert not t.screen.contains('Manage Accounts')
+  t.wait('fixture');t.drain()
+  assert t.screen.contains('Add Account') and not t.screen.contains('Manage Accounts')
+ finally:t.close()
  for i in range(args.samples):
   t=Terminal(root,delay=2 if i==0 else 0)
   try:

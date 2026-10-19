@@ -1906,7 +1906,9 @@ impl Manager {
         };
         let layout = AccountsLayout::fit(&self.accounts, canvas.width, footer.saturating_sub(10));
         let was = self.inline;
-        self.inline = self.inventory_known && layout.is_some();
+        // Unknown inventory is not evidence of overflow. Render the empty inline
+        // layout immediately; switch to Manage Accounts only when rows won't fit.
+        self.inline = layout.is_some();
         if self.inline && !was && self.page == Page::Accounts && self.dialog.is_none() {
             let selected = self.selected_account();
             self.go(Page::Home);
@@ -3139,6 +3141,25 @@ mod tests {
             args.windows(2)
                 .any(|w| w == ["--confirm", "codex:account1"])
         );
+    }
+    #[test]
+    fn pending_inventory_keeps_add_account_until_actual_rows_overflow() {
+        let mut m = Manager::default();
+        assert!(!m.inventory_known);
+        m.paint(&mut Canvas::new(80, 30), 29);
+        assert_eq!(m.rows()[2].label, "Add Account");
+        m.options.selected = 2;
+        m.activate();
+        assert_eq!(m.dialog.as_ref().unwrap().title, "Add Account");
+        m.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        m.inventory(vec![account(1), account(2)]);
+        m.paint(&mut Canvas::new(80, 30), 29);
+        assert_eq!(m.rows()[2].label, "Add Account");
+        assert_eq!(m.options.selected, 2);
+        m.inventory((0..30).map(account).collect());
+        m.paint(&mut Canvas::new(80, 30), 29);
+        assert_eq!(m.rows()[2].label, "Manage Accounts");
+        assert_eq!(m.options.selected, 2);
     }
     #[test]
     fn inline_fit_compact_preview_and_resize_preserve_account_navigation() {

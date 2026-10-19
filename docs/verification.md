@@ -102,17 +102,18 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 ## Verification record and limits
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **141 Rust tests** (139 unit and two visual tests covering
+passed formatting, Clippy, **142 Rust tests** (140 unit and two visual tests covering
 21 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
 disabled. Regressions cover Back history, stable selection across refreshed lists,
-active/inactive grouping and unbolded Ready styling. The isolated
+active/inactive grouping, unbolded Ready styling and delayed inventory without
+an Add/Manage Account button flash. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
 The current release built from these Rust sources, at
 `target-ui/release/sessionsation-ui`, has SHA-256
-`e53947ac86800ffad9e63c526712deb5fe51616c725501f9699a2d803aefd599`.
+`8e510c16bbf6cce8ad4ef70271c45ed52c65c99985cf89be360a3fb298458fb4`.
 The three PTY scripts and owned
 HERDR popup test passed against this artifact, including Space lookup cancellation,
 confirmation, one captured-generation mutation and return to the selected session.
