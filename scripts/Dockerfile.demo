@@ -1,0 +1,16 @@
+# Build scripts/Dockerfile.check first; never assumes an operator's private image.
+ARG CHECK_IMAGE=sessionsation-ui-check
+FROM ${CHECK_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends libfaketime \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/demo-tools.json scripts/download-demo-tools.py /opt/demo-tools/
+RUN python3 /opt/demo-tools/download-demo-tools.py --output /opt/demo-bin
+ENV PATH=/opt/demo-bin:/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin
+WORKDIR /demo-source
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY src ./src
+COPY vendor ./vendor
+RUN CARGO_TARGET_DIR=/build cargo build --release --locked
+COPY scripts/demo.py scripts/demo-backend.py scripts/demo-tools.json scripts/terminal_fixture.py ./scripts/
+COPY herdr-plugin.toml ./
+ENTRYPOINT ["python3", "scripts/demo.py", "--binary", "/build/release/sessionsation-ui", "--output", "/output"]

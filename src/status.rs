@@ -92,13 +92,13 @@ mod tests {
     fn status_preserves_path_tail_and_fits_wide_glyphs() {
         let s = fit(
             "Thu Oct 15 12:30:00",
-            "Satellite",
+            "ExamplePC",
             "/long/long/long/界/leaf",
             50,
         );
         assert!(s.ends_with("界/leaf"));
         assert!(s.contains("..."));
         assert!(UnicodeWidthStr::width(s.as_str()) <= 50);
-        assert_eq!(fit("12:00", "Satellite", "/path", 12), " 12:00");
+        assert_eq!(fit("12:00", "ExamplePC", "/path", 12), " 12:00");
     }
 }

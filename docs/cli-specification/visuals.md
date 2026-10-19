@@ -29,7 +29,7 @@ The reference home uses `ez_menu_banner` and
 [font.bash](https://github.com/anastaci1a/cli-main-menu/blob/ae786af695791fdf858eacf5780e04b5138be49d/font.bash):
 five rows of `#` glyphs for uppercase A–Z, digits, space and hyphen, with one-column
 inter-letter gaps. Unknown characters fall back to the whole plain title. Control
-characters become spaces. Default `MAIN MENU`, local `SATELLITE`. Two blank
+characters become spaces. Default `MAIN MENU` (local overrides excluded). Two blank
 star-margin rows above/below, plus leading/trailing blank rows, surround centered
 lettering. Animated banner generation creates placeholders; final cells paint it
 without an original pink underlay. Width below title width+4 or insufficient
@@ -91,7 +91,7 @@ the star palette, not a continuous rainbow of every option label; see [motion](m
 min(last hint row+2, H-1), leaving the final terminal row unused to avoid scrolling.
 This explains why the existing reference image has unused space below its field.
 Titles reserve their width plus two columns each side; page indicator reserves
-its text span. Do not confuse that geometry with Ana's target below.
+its text span. Do not confuse that geometry with the target below.
 
 Foreground non-space glyphs win over stars. Ordinary label spaces are transparent
 to transient twinkles but **baseline stars are excluded** from those spaces and

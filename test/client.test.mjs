@@ -72,7 +72,7 @@ test('incorrect confirmation and active-account preview never submit removal',as
   }
 });
 test('New account menu uses account list without global session discovery',async t=>{
-  const f=await fixture(t,"const args=process.argv.slice(7);let result;if(args.join(' ')==='account list') result=[{id:'codex:gate1',selectable:true}];else if(args.join(' ')==='launcher new --account codex:gate1')result={action:'exec',credentials_in_client:false,argv:['/bin/echo','FAST_NEW_HANDOFF'],cwd:null};else{console.error('unexpected discovery '+args.join(' '));process.exit(9);}console.log(JSON.stringify({api_version:1,ok:true,result}));");
+  const f=await fixture(t,"const args=process.argv.slice(7);let result;if(args.join(' ')==='account list') result=[{id:'codex:example',selectable:true}];else if(args.join(' ')==='launcher new --account codex:example')result={action:'exec',credentials_in_client:false,argv:['/bin/echo','FAST_NEW_HANDOFF'],cwd:null};else{console.error('unexpected discovery '+args.join(' '));process.exit(9);}console.log(JSON.stringify({api_version:1,ok:true,result}));");
   const output=await new Promise((resolve,reject)=>{const child=execFile(process.execPath,['src/main.mjs','launcher'],{env:{...process.env,SESSIONSATION_BIN:f.binary,SESSIONSATION_DATA_DIR:join(f.dir,'data')}},(e,stdout)=>e?reject(e):resolve(stdout));child.stdin.end('1\n1\n');});
   assert.match(output,/FAST_NEW_HANDOFF/);
 });

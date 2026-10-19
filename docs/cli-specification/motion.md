@@ -58,7 +58,7 @@ The exclusive endpoint lies one row beyond the drawn field, so the last row is
 still greater than 5%. For the **sweep's white endpoint only**, peak is
 `clamp(10000*(B-row+1)/(7*(B-top+1)),4,1000)`: upper 30% can reach white, lower 70%
 approaches black without reaching it. Twinkle-only peaks still use ordinary fade.
-Rebuild uses terminal-height bounds per Ana, preserving these distinctions.
+Rebuild uses terminal-height bounds in the target, preserving these distinctions.
 
 ## Palette and hue changes
 

@@ -2,8 +2,7 @@
 
 All 47 tracked files at the pinned reference commit were inspected. This table is
 the single coverage inventory; behavior lives in the linked purpose documents.
-Every source link is immutable. Remote main differs only in the two generated
-media files, as recorded in [README](README.md).
+Every source link is pinned to the audited commit.
 
 | Source | Audited purpose | Specification |
 | --- | --- | --- |
@@ -55,12 +54,6 @@ media files, as recorded in [README](README.md).
 | [unraid/restore.sh](https://github.com/anastaci1a/cli-main-menu/blob/ae786af695791fdf858eacf5780e04b5138be49d/unraid/restore.sh) | Restore config symlink/profile and guarded shell blocks without pre-mount appdata creation. | [flows](flows.md) |
 | [unraid/start-switcher.sh](https://github.com/anastaci1a/cli-main-menu/blob/ae786af695791fdf858eacf5780e04b5138be49d/unraid/start-switcher.sh) | Array-ready bounded wait and original daemon startup; excluded from target. | [flows](flows.md) |
 
-The ignored two-line `config.bash` was checked only for effective visual overrides:
-local title `SATELLITE`. It is not redistributed. Dependency installations under
-`tools/node_modules`, Git internals, user shell files, credentials and account
-stores are not project source. Lockfile/package declarations were inspected;
-no dependency installation or provider invocation was needed for this audit.
-
-The reference tree has no LICENSE file. This specification records provenance
-without importing source/assets; attribution and license for a literal port are
-an explicit [architecture discussion](architecture.md) item.
+The reference tree has no LICENSE at this revision. See [NOTICE](../../NOTICE)
+for the unresolved permission/provenance gate. Private ignored configuration and
+dependency installations are not redistributed project source.

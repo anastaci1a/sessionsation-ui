@@ -1,0 +1,5 @@
+{
+  "platform": "linux-x86_64",
+  "herdr": {"version": "0.9.5", "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64", "sha256": "14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d"},
+  "agg": {"version": "1.9.0", "url": "https://github.com/asciinema/agg/releases/download/v1.9.0/agg-x86_64-unknown-linux-musl", "sha256": "ddcbf6ca044c8ac3a434dcb9ee89fb9e3be87209982b7c2adb55f782e8f0f390"}
+}

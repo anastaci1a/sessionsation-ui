@@ -165,4 +165,4 @@ then starts the existing Switcher daemon and logs status; failure logs guidance.
 **Do not run/import this installer or boot daemon starter for the rebuild.**
 sessionsation-ui already has its own verified source-backed HERDR launcher,
 configuration receipts and single backend-root owner. Those authoritative setup
-details stay in [usage](../usage.md) and [deployment manifest](../deployment.json).
+details stay in [usage](../usage.md) and [architecture](../architecture.md).

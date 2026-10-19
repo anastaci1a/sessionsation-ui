@@ -7,3 +7,5 @@ coverage/
 
 __pycache__/
 /.runtime/
+
+/.demo/

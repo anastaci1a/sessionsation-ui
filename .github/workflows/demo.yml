@@ -1,0 +1,26 @@
+name: Review UI demo
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build declared public toolchain and pinned demo
+        run: |
+          docker build -f scripts/Dockerfile.check -t sessionsation-ui-check .
+          docker build -f scripts/Dockerfile.demo -t sessionsation-ui-demo .
+      - name: Capture only synthetic data, without network or host configuration
+        run: |
+          mkdir -p .demo/output
+          docker run --rm --network none --hostname demo-linux \
+            -v "$PWD/.demo/output:/output" sessionsation-ui-demo
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sessionsation-ui-demo-review
+          path: .demo/output/
+          retention-days: 7
+          if-no-files-found: error

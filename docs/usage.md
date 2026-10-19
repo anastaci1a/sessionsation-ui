@@ -1,14 +1,81 @@
-# Usage
+# Usage and configuration
 
-Set `SESSIONSATION_BIN` to the verified absolute backend executable and
-`SESSIONSATION_DATA_DIR` to the operator-selected root. Existing Ana accounts use
-`/mnt/user/appdata/codex-switcher` with its existing credential owner. The independent
-backend default is not an automatic import. See the backend ownership guidance.
+## Install and configure
 
-The Rust popup creates sessions and presents account/session management through
-public backend commands. Its [approved design](cli-specification/architecture.md)
-describes the interaction and ownership boundaries. See the deployment record for
-what is installed.
+Build the binary and link the plugin as shown in the [README](../README.md).
+For a provider-free preview, use the [isolated demo](verification.md#animated-demo).
+Real account setup belongs to the [backend](https://github.com/anastaci1a/sessionsation/blob/main/docs/cli.md).
+Obtain HERDR from its [upstream installation/release instructions](https://herdr.dev/docs/install/);
+0.9.5/protocol 22 is the tested combination, not a guarantee for every newer binary.
+
+The configuration installer needs Node.js 22.18+ and an existing HERDR config.
+In the following example, replace every `/path/to/...` and `YOUR-SERVER` with
+your own values. The backend binary and data-root paths must be absolute. Select
+the same root as your existing sole supervisor; do not start another owner or copy
+credentials. Use a private backup directory outside the checkout.
+
+```sh
+node scripts/configure.mjs popup \
+  --config /path/to/herdr/config.toml \
+  --client-config "$PWD/.runtime/config.json" \
+  --binary /path/to/sessionsation \
+  --data-dir /path/to/data-root \
+  --backup-dir /path/to/private/backups \
+  --key prefix+shift+l
+herdr --session YOUR-SERVER server reload-config
+./bin/sessionsation-popup open
+```
+
+The example binding is prefix + uppercase L; choose your own and retain your
+HERDR prefix. The installer preserves unrelated bindings, rejects conflicts, and
+prints a private rollback receipt. It changes only the selected files, not running
+agents, shell startup files or other HERDR servers. Optional `--shell /bin/bash`
+sets the shell of future tabs when replacing a previous menu wrapper.
+
+The Rust wrapper uses `.runtime/sessionsation-ui` and `.runtime/config.json`;
+override them with `SESSIONSATION_UI_BIN` and `SESSIONSATION_UI_CONFIG`.
+Config contains `binary` and `dataDir`. `SESSIONSATION_BIN` and
+`SESSIONSATION_DATA_DIR` override stored backend settings. Preferences are
+`preferences.json` beside the resolved client-config target. If using a config
+symlink, its writable sidecar stays beside the real target. No account credentials
+are stored in UI preferences. Defaults used by direct invocation are
+`$HOME/.config/sessionsation-ui/config.json`, or the product-specific
+`/mnt/user/appdata/sessionsation-ui/config.json` when that Unraid directory exists;
+the explicit popup config above avoids platform-dependent selection.
+
+To roll back the installer change, use the receipt it printed, then reload only
+the intended host:
+
+```sh
+node scripts/configure.mjs rollback /path/to/private/backups/launcher-RECEIPT.json
+herdr --session YOUR-SERVER server reload-config
+```
+
+Rollback restores original config bytes/modes/ownership and refuses conflicting
+later edits. Keep receipts and binaries outside public Git; a client update is
+not a supervisor upgrade or data-root migration.
+
+## Capabilities and limits
+
+- The popup uses public backend API v1 only: accounts/usage/limits, new/resume,
+  session details/rename, supported switch/restart/stop, archive/restore/delete,
+  and operation progress. Final checks and destructive confirmations belong to CLI.
+- Codex is implemented; Claude enrollment, usage, messaging and lifecycle are not.
+  Cross-provider conversion is outside this version.
+- Active folder relocation, working-directory changes and experimental automation
+  are inherited backend capabilities without this popup's public-API integration.
+  Their unavailable menu entries do not imply working actions. Saved-session
+  Resume can select another directory when the backend advertises that capability.
+- Idle Pause is hidden; busy Pause remains unavailable pending public integration.
+  Provider-login cancellation is also unfinished: closing the login viewer does
+  not cancel a provider-owned login.
+- HERDR's outer popup border cannot follow the animated status bar in 0.9.5.
+  Built-in fixed themes/RGB overrides are supported; dynamic/terminal themes use
+  an explicit approximation because no resolved runtime palette API is available.
+- Clearing a viewer or moving focus never stops an agent. Closing a host server
+  is different. Existing tmux sessions are retained; they are not automatically
+  converted to HERDR tabs. Cross-instance discovery requires compatible backend
+  readers; keep all consumers of one root on reviewed versions.
 
 ## Account and session menus
 
@@ -202,27 +269,7 @@ Dialogs use read-only HERDR theme configuration and bundled attributed palette
 tokens. Configured built-ins and RGB overrides are supported; dynamic/terminal
 themes report an approximation because HERDR exposes no resolved-palette API.
 
-## Popup setup
-
-Build/copy the Rust executable into `.runtime/sessionsation-ui` as shown in the
-[README](../README.md), or point that path to a verified immutable artifact.
-Register the repository with `herdr plugin link /absolute/path/to/sessionsation-ui --enabled`.
-Then configure an explicit, separate popup client file and your chosen binding:
-
-```sh
-node scripts/configure.mjs popup --config /absolute/herdr/config.toml --client-config /absolute/path/to/sessionsation-ui/.runtime/config.json --binary /absolute/pinned/sessionsation --data-dir /explicit/backend/root --backup-dir /private/backups --key prefix+shift+l
-herdr --session YOUR-SERVER server reload-config
-```
-
-The installer preserves the prefix and unrelated bindings, refuses a conflicting
-key, and prints a private rollback receipt. `--shell /bin/bash` optionally restores
-plain future tabs when replacing the previous default-menu setup; it does not
-restart terminals. The wrapper reads only its runtime artifact/client paths; all
-rendering, interaction and backend communication is Rust.
-
-Preferences live in `preferences.json` beside the resolved client configuration.
-A symlink from `.runtime/config.json` therefore keeps writable settings beside the
-real config, rather than attempting to replace a symlink or writing into the checkout.
+## New session and directory flow
 
 Open **New Session**, edit Account, Space, Name and Directory in any order, then
 select Start Session directly below the fields and separator. The top bar shows the
@@ -269,97 +316,29 @@ focuses its new normal tab. Esc while starting detaches the viewer; inspect the
 printed UUID with `sessionsation api launch status --request-id UUID`. It does not
 stop or cancel an admitted launch. No credentials are stored in UI preferences.
 
-Rollback uses `node scripts/configure.mjs rollback /private/backups/launcher-RECEIPT.json`,
-then reload the intended HERDR server. It restores both configuration files exactly
-and refuses conflicting later edits. Versioned binaries can remain for recovery.
+## Compatibility entrypoints
 
-## Preserved legacy entrypoints
-
-Run `./bin/sessionsation-ui launcher` in an ordinary terminal for new, resume or
-plain shell. New reads the account list directly; it does not scan conversation
-histories or terminal attachments just to show accounts. Resume still discovers
-current sessions and the backend revalidates the selected generation at execution. Run `./bin/sessionsation-ui manage` for account and selected-session
-management. Exiting management only closes the viewer. Stop is a separate explicit
-backend operation. Capability hints determine available choices.
-
-No existing shell startup files or restored agents are modified.
-
-### Management plugin
+The older Node viewer and numbered launcher remain available:
 
 ```sh
-herdr plugin link /absolute/path/to/sessionsation-ui --enabled
-herdr --session YOUR-SERVER plugin pane open --plugin sessionsation --entrypoint manage --placement overlay
+./bin/sessionsation-ui manage
+./bin/sessionsation-ui launcher
 ```
 
-The overlay targets that server's active pane. Choose sessions by their unique
-backend names; account switching uses the selected session's captured generation.
-Returned operations are admissions, not completion. Inspect Operations for progress
-or an explicit confirmation. Exiting the viewer never sends Stop. Usage displays
-only backend-reported data. Account confirmations use the friendly label shown
-above the always-editable input; only the buttons take navigation focus.
+They are separate from the Rust popup. The numbered launcher supports new/resume
+or plain shell; the viewer delegates management to public CLI v1. Closing either
+viewer is not Stop. New uses account discovery directly; Resume discovers saved
+sessions and revalidates the selected generation at execution.
 
-### Legacy future-terminal launcher
+The optional legacy installer uses `node scripts/configure.mjs apply` with the
+same absolute `--config`, `--binary`, `--data-dir`, `--client-config` and
+`--backup-dir` arguments documented above. It changes the default shell of future
+tabs to the retained-shell wrapper, not existing terminals. Use `popup` for the
+recommended popup-only setup. Keep the checkout and binary paths available.
 
-First verify the backend artifact and choose its root explicitly. Then:
-
-```sh
-node scripts/configure.mjs apply --config /absolute/herdr/config.toml --binary /absolute/sessionsation --data-dir /explicit/backend/root --backup-dir /private/config-backups
-```
-
-This prints the private rollback receipt path. It saves backend settings in
-`/mnt/user/appdata/sessionsation-ui/config.json` on Unraid, otherwise
-`~/.config/sessionsation-ui/config.json` (override with `--client-config`; clients
-then need `SESSIONSATION_UI_CONFIG`). Environment variables override stored settings.
-The configuration change sets HERDR's `terminal.default_shell` to this checkout's
-retained-shell wrapper. Keep the checkout and verified backend executable available.
-It changes neither user startup files nor running terminals. Reload configuration
-only on the intended HERDR server:
-
-```sh
-herdr --session YOUR-SERVER server reload-config
-node scripts/configure.mjs rollback /private/config-backups/launcher-RECEIPT.json
-herdr --session YOUR-SERVER server reload-config
-```
-
-Rollback restores exact original bytes, modes and ownership, and refuses to
-clobber edits made after apply. The receipt contains configuration backups and
-must stay outside Git. A plain shell and backend-created panes set
-`SESSIONSATION_LAUNCHER_BYPASS=1`; the wrapper also guards against recursive menus.
-The retained Bash parent permits agent restart/resume after the foreground agent
-exits. HERDR 0.9.5 omits `HERDR_SESSION` on its default server. The wrapper sets
-`SESSIONSATION_HERDR_SESSION=default` only when the inherited Unix socket resolves
-to the actual default socket under `${XDG_CONFIG_HOME:-$HOME/.config}/herdr`.
-Named/explicit session context is preserved; missing or ambiguous context is
-rejected before invoking the backend. The variable is exported before the retained
-shell starts, so later relaunches inherit it as well. User `.bashrc` is sourced while retaining HERDR's requested working directory.
-
-## Ana's configured host
-
-Satellite's default HERDR server uses **prefix + uppercase L** to open the Rust
-popup. The global projects root starts at `/mnt/user/live/projects`; changing it
-in Configuration creates no directories. Choose an account on the first launch;
-only a successful handoff records it for eligible future prefill. Future plain
-HERDR tabs use Bash. Existing shells/agents are unchanged.
-
-[deployment.json](deployment.json) is authoritative for both immutable artifact
-paths/hashes, source commits, UI settings, the shared account-data root, binding
-and private rollback receipt. The old numbered launcher/client settings, original
-Switcher and Agent DM pin remain intact. The existing supervisor retains credential
-ownership. This popup deployment is not an Agent DM adapter cutover.
-
-To roll back, run the record's rollback command, then reload its intended HERDR
-server. Exact original config/client bytes are restored; the numbered launcher
-becomes the future-tab default again. Artifacts and UI preferences remain available
-for recovery. Current artifact hashes and process-identity checks are recorded in the deployment
-evidence. Other running HERDR servers are not automatically reloaded.
-
-Account deregistration previews open immediately while data loads. The confirmation
-shows the friendly provider-name label (for example `codex-personal`), which the UI
-maps to the backend ID only after an exact match. Signed-in accounts omit Login; it
-appears only when authentication is required. Session action ordering/groups follow
-Codex Switcher, with Focus Session (Start Session for saved history), Session Details
-and Rename Session first. Inactive sessions hide running-session/experimental
-controls. Active tmux-only attachments show an unbolded gray `(tmux)` after Focus.
-Unsupported public capabilities remain disabled. Session account columns appear
-for the complete list together; selected live sessions show the reference elapsed
-time format when the backend reports verified `active_since`.
+The Bash parent retains the host prompt after an agent exits. A recursion bypass
+prevents menus in backend-created panes. Named/explicit HERDR context is retained;
+missing or ambiguous context is rejected. Default-session inference is limited to
+a socket positively matching that host's default path. The wrapper sources the
+user's .bashrc while preserving the requested working directory. These details
+support compatibility and do not authorize migration of live agents.

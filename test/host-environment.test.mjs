@@ -38,12 +38,12 @@ test('unknown socket and missing pane fail before any backend invocation',async 
 test('outside HERDR has no invented host context',async t=>{
   const f=await fixture(t);assert.equal((await normalized({...f.env,HERDR_ENV:''})).stdout,'|');
 });
-test('default retained shell new -> gate1 passes exact host context through plan exec',async t=>{
+test('default retained shell new -> example passes exact host context through plan exec',async t=>{
   const f=await fixture(t);const marker=join(f.dir,'launched.json'), backend=join(f.dir,'backend'), agent=join(f.dir,'fixture-agent');
   await writeFile(join(f.home,'.bashrc'),'');
   await writeFile(agent,`#!${process.execPath}\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({args:process.argv.slice(2),session:process.env.SESSIONSATION_HERDR_SESSION,pane:process.env.HERDR_PANE_ID}));`);await chmod(agent,0o700);
-  await writeFile(backend,`#!${process.execPath}\nconst args=process.argv.slice(2);let result;if(args.slice(-2).join(' ')==='account list')result=[{id:'codex:gate1',selectable:true}];else{if(JSON.stringify(args.slice(-4))!==JSON.stringify(['launcher','new','--account','codex:gate1']))process.exit(9);result={action:'exec',credentials_in_client:false,argv:[${JSON.stringify(agent)},'--account','codex:gate1'],cwd:null};}console.log(JSON.stringify({api_version:1,ok:true,result}));`);await chmod(backend,0o700);
+  await writeFile(backend,`#!${process.execPath}\nconst args=process.argv.slice(2);let result;if(args.slice(-2).join(' ')==='account list')result=[{id:'codex:example',selectable:true}];else{if(JSON.stringify(args.slice(-4))!==JSON.stringify(['launcher','new','--account','codex:example']))process.exit(9);result={action:'exec',credentials_in_client:false,argv:[${JSON.stringify(agent)},'--account','codex:example'],cwd:null};}console.log(JSON.stringify({api_version:1,ok:true,result}));`);await chmod(backend,0o700);
   const output=await new Promise((resolve,reject)=>{const child=execFile(resolvePath('bin/sessionsation-shell'),[],{env:{...f.env,SESSIONSATION_BIN:backend,SESSIONSATION_DATA_DIR:join(f.dir,'state')}},(e,stdout,stderr)=>e?reject(new Error(stderr)):resolve(stdout));child.stdin.end('1\n1\nexit\n');});
-  assert.match(output,/codex:gate1/);assert.deepEqual(JSON.parse(await readFile(marker)),{args:['--account','codex:gate1'],session:'default',pane:'w7:p4'});
+  assert.match(output,/codex:example/);assert.deepEqual(JSON.parse(await readFile(marker)),{args:['--account','codex:example'],session:'default',pane:'w7:p4'});
 });
 function resolvePath(path){return resolve(path);}

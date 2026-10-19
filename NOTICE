@@ -1,0 +1,19 @@
+sessionsation-ui is MIT licensed (see LICENSE).
+
+HERDR palette data: vendor/herdr/palettes.json is a reduced extraction from
+HERDR v0.9.5, https://github.com/herdrdev/herdr (Apache-2.0).
+The upstream license is retained in vendor/herdr/LICENSE; see vendor/herdr/README.md.
+HERDR remains a separately installed program; its renderer is not vendored here.
+
+Visual and interaction reference: cli-main-menu by anastaci1a,
+https://github.com/anastaci1a/cli-main-menu
+revision ae786af695791fdf858eacf5780e04b5138be49d.
+The reference has no LICENSE at that revision. Reference images/source files are
+not redistributed as implementation files; the Rust UI follows its visual and
+interaction behavior. Permission/provenance for translated algorithms and any
+copyrightable visual material requires owner review before public distribution.
+Do not infer a license grant from repository visibility or matching authorship.
+
+Generated demo imagery captures HERDR and this UI with synthetic data. Capture
+and rendering tools are development-only dependencies, not linked into the UI.
+Their notices and regeneration procedure are documented in docs/verification.md.
