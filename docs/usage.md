@@ -37,6 +37,8 @@ same account and bar focus. Only usage focus selects its percentages. The focuse
 and bolds its line characters; other bars darken without adding
 another selector. A white `◀`, separated by one space, follows the first usage
 value when it has focus.
+Bar glyphs are always bold, including their gray remainder and threshold marker;
+focus still changes their colors without changing label or percentage styling.
 Status-only accounts also accept Right. Their status and focused `◀` use the normal
 bullet hue; the focused status text is bold, and the triangle stays regular weight. While a usage/status item is focused on the right, other
 text statuses use the darker bullet hue, like the other dimmed usage bars. Enter/Space opens Enable for Disabled, Login for Login

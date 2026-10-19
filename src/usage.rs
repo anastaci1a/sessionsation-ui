@@ -148,15 +148,6 @@ impl Usage {
             );
             return;
         }
-        for row in 0..self.windows.len() {
-            for col in x..(x + bar).min(canvas.width) {
-                if y + row >= canvas.height {
-                    break;
-                }
-                let cell = &mut canvas.cells[(y + row) * canvas.width + col];
-                cell.bold = true;
-            }
-        }
         if let Some(row) = self.windows.iter().position(|w| w.remaining.is_some()) {
             canvas.text(
                 x + self.width(bar, digits),
@@ -196,7 +187,6 @@ impl Usage {
                 }
                 let cell = &mut canvas.cells[(y + row) * canvas.width + col];
                 cell.fg = cell.fg.map(|v| (u16::from(v) * 65 / 100) as u8);
-                cell.bold = false;
             }
         }
     }
@@ -276,6 +266,7 @@ impl Usage {
                         glyph,
                         Cell {
                             fg: [144; 3],
+                            bold: true,
                             ..Cell::default()
                         },
                         false,
@@ -287,6 +278,7 @@ impl Usage {
                         glyph,
                         Accent {
                             brightness: if self.stale { 300 } else { 1000 },
+                            bold: true,
                             flash: false,
                             ..Accent::default()
                         },
@@ -552,7 +544,9 @@ mod tests {
             let before = &plain.cells[40 + x];
             let after = &focus.cells[40 + x];
             assert_eq!(before.glyph, after.glyph);
+            assert!(before.bold);
             assert!(after.bold);
+            assert!(dim.cells[40 + x].bold);
             assert_eq!(before.fg, after.fg);
             assert_eq!(
                 dim.cells[40 + x].fg,
