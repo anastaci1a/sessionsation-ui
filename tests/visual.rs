@@ -61,7 +61,6 @@ fn management_geometry_usage_markers_and_picker_columns() {
         client::Account,
         dialog::Dialog,
         management::{Manager, Page},
-        usage::picker_labels,
     };
     let accounts:Vec<Account>=(0..3).map(|n|serde_json::from_value(serde_json::json!({"id":format!("codex:fixture{n}"),"selectable":true,"usage_fresh":true,"enabled":true,"usage":{"observed_at":100,"short":if n==2{serde_json::Value::Null}else{serde_json::json!({"duration_minutes":300,"used_percent":if n==0{95}else{0}})},"weekly":{"duration_minutes":10080,"used_percent":20}},"switch_thresholds":{"customized":true,"short_percent":80,"weekly_percent":90}})).unwrap()).collect();
     for (name, width, height) in [
@@ -185,18 +184,17 @@ fn management_geometry_usage_markers_and_picker_columns() {
             c = app.paint(&mut f, 4060, width, height);
             c.cells[..width].fill(sessionsation_ui::render::Cell::default());
         } else if name == "picker" {
-            let rows: Vec<_> = accounts
-                .iter()
-                .zip(picker_labels(&accounts))
-                .map(|(a, label)| {
-                    Row::yes(sessionsation_ui::usage::short_name(&a.id))
-                        .with_right_preview(label)
-                        .account()
-                })
-                .collect();
-            let mut options = Options::default();
-            let (left, _) = options.paint(&mut c, &rows, 3, height - 3);
-            options.paint_back(&mut c, left, 3, "Back");
+            let mut app = sessionsation_ui::app::App::new(
+                sessionsation_ui::preferences::Preferences::default(),
+                "/tmp".into(),
+                "fixture".into(),
+                serde_json::json!({}),
+                None,
+            );
+            app.page = sessionsation_ui::app::Page::Accounts;
+            app.accounts = accounts.clone();
+            c = app.paint(&mut f, 4060, width, height);
+            c.cells[..width].fill(sessionsation_ui::render::Cell::default());
         } else {
             m.paint_at(&mut c, height - 1, 90062);
         }

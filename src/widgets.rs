@@ -527,7 +527,12 @@ impl Options {
     pub fn left(width: usize, rows: &[Row]) -> usize {
         let longest = rows
             .iter()
-            .map(|r| UnicodeWidthStr::width(r.label.as_str()))
+            .map(|r| {
+                r.preview_column.zip(r.preview.as_deref()).map_or(
+                    UnicodeWidthStr::width(r.label.as_str()),
+                    |(col, preview)| col.saturating_sub(2) + UnicodeWidthStr::width(preview),
+                )
+            })
             .max()
             .unwrap_or(0)
             .min(width.saturating_sub(8));

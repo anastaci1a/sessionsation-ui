@@ -397,15 +397,33 @@ impl App {
                     ))
                 })
                 .collect(),
-            Page::Accounts => self
-                .accounts
-                .iter()
-                .zip(crate::usage::picker_labels(&self.accounts))
-                .map(|(a, usage)| {
-                    Row::gate(crate::usage::short_name(&a.id), a.selectable)
-                        .with_right_preview(usage)
-                })
-                .collect(),
+            Page::Accounts => {
+                use unicode_width::UnicodeWidthStr;
+                let labels = crate::usage::picker_labels(&self.accounts);
+                let preview_width = labels
+                    .iter()
+                    .map(|s| UnicodeWidthStr::width(s.as_str()))
+                    .max()
+                    .unwrap_or(0);
+                let name_width = self
+                    .accounts
+                    .iter()
+                    .map(|a| UnicodeWidthStr::width(crate::usage::short_name(&a.id).as_str()))
+                    .max()
+                    .unwrap_or(0);
+                self.accounts
+                    .iter()
+                    .zip(labels)
+                    .map(|(a, usage)| {
+                        let column = 2 + name_width + 1 + preview_width
+                            - UnicodeWidthStr::width(usage.as_str());
+                        Row::gate(crate::usage::short_name(&a.id), a.selectable)
+                            .with_column_preview(usage, column, false)
+                            .preview_gap(1)
+                            .preview_color(crate::widgets::SECONDARY)
+                    })
+                    .collect()
+            }
             Page::Spaces => std::iter::once(Row::yes("Create new Space"))
                 .chain(
                     self.spaces
@@ -1338,13 +1356,7 @@ impl App {
             self.accounts
                 .get(self.options.selected)
                 .filter(|_| !self.options.back)
-                .map(|a| {
-                    format!(
-                        "{} — {}",
-                        crate::usage::short_name(&a.id),
-                        crate::usage::Usage::account(a).status
-                    )
-                })
+                .map(|a| crate::usage::Usage::account(a).status)
                 .unwrap_or_default()
         } else if self.page == Page::Summary
             && self.resume.is_none()
@@ -1366,7 +1378,14 @@ impl App {
         } else {
             String::new()
         };
-        crate::widgets::paint_status(&mut canvas, footer, &note);
+        if self.page == Page::Accounts && self.error.is_empty() {
+            let y = top + rows.len().min(capacity) + usize::from(rows.len() > capacity) + 1;
+            if y + 1 < footer {
+                crate::widgets::paint_status(&mut canvas, y + 2, &note);
+            }
+        } else {
+            crate::widgets::paint_status(&mut canvas, footer, &note);
+        }
         crate::widgets::paint_hints(&mut canvas, &hints);
         if let Some((dialog, _)) = &mut self.shared_directory_dialog {
             dialog.paint(&mut canvas, &self.manager.palette);
@@ -1555,6 +1574,56 @@ mod tests {
         );
         a.resume = Some(json!({"id":"old"}));
         assert!(!a.shared_directory());
+    }
+    #[test]
+    fn picker_columns_are_adjacent_and_status_is_below_list_or_range() {
+        let mut a = app();
+        a.page = Page::Accounts;
+        let account = |name: &str, short: bool| {
+            serde_json::from_value(json!({"id":format!("codex:{name}"),"selectable":true,"usage_fresh":true,"usage":{"observed_at":1,"short":if short{json!({"duration_minutes":300,"used_percent":20})}else{Value::Null},"weekly":{"duration_minutes":10080,"used_percent":10}}})).unwrap()
+        };
+        a.accounts = vec![account("longest", true), account("tiny", false)];
+        let rows = a.rows();
+        for width in [60, 120] {
+            let c = a.paint(&mut Field::new(width, 24, 1), 0, width, 24);
+            let line = |y: usize| {
+                c.cells[y * width..(y + 1) * width]
+                    .iter()
+                    .map(|c| c.glyph.as_str())
+                    .collect::<String>()
+            };
+            assert!(line(6).contains("Ready"));
+            assert!(!line(5).chars().any(char::is_alphanumeric));
+            let left = Options::left(width, &rows);
+            assert_eq!(rows[0].preview_position(width, left).unwrap(), left + 10);
+            assert_eq!(
+                rows[0].preview_position(width, left).unwrap()
+                    + rows[0].preview.as_ref().unwrap().len(),
+                rows[1].preview_position(width, left).unwrap()
+                    + rows[1].preview.as_ref().unwrap().len()
+            );
+        }
+        a.accounts = (0..30)
+            .map(|i| account(&format!("acct{i}"), true))
+            .collect();
+        let c = a.paint(&mut Field::new(60, 18, 1), 0, 60, 18);
+        let lines: Vec<_> = c
+            .cells
+            .chunks(60)
+            .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
+            .collect();
+        let range = lines.iter().position(|l| l.contains(" of 30")).unwrap();
+        assert!(!lines[range + 1].chars().any(char::is_alphanumeric));
+        assert!(lines[range + 2].contains("Ready"));
+        a.options.back = true;
+        let c = a.paint(&mut Field::new(60, 18, 1), 0, 60, 18);
+        assert!(
+            !c.cells
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+                .contains("Ready")
+        );
     }
     #[test]
     fn pending_receipt_freshness_uses_plain_language() {

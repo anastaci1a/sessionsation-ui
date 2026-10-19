@@ -20,6 +20,23 @@ pub enum Action {
     Restore,
     Unavailable,
 }
+fn archive_row(s: &Value) -> Row {
+    let row = Row::gate("Archive Session", s["capabilities"]["archive"] == true);
+    if row.enabled {
+        return row;
+    }
+    let reason = if s["pending_operation_id"].is_string() {
+        "operation active"
+    } else if s["availability"] == "archived" {
+        "already archived"
+    } else if s["availability"] == "running" {
+        "end session first"
+    } else {
+        "unavailable"
+    };
+    row.with_selected_preview(format!("({reason})"))
+        .preview_gap(1)
+}
 pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     let c = &s["capabilities"];
     if s["availability"] == "archived" {
@@ -30,6 +47,7 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
             ),
             (Row::yes("Session Details"), Action::Details),
             (Row::separator(), Action::Unavailable),
+            (archive_row(s), Action::Archive),
             (
                 Row::gate("Delete Session", c["delete"] == true),
                 Action::Delete,
@@ -73,10 +91,7 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     if inactive {
         rows.extend([
             (Row::separator(), Action::Unavailable),
-            (
-                Row::gate("Archive Session", c["archive"] == true),
-                Action::Archive,
-            ),
+            (archive_row(s), Action::Archive),
             (
                 Row::gate("Delete Session", c["delete"] == true),
                 Action::Delete,
@@ -97,14 +112,25 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
             Action::Unavailable,
         ),
         (Row::separator(), Action::Unavailable),
-        (Row::gate("Pause work", false), Action::Unavailable),
+        (
+            Row::gate("Pause work", false)
+                .with_selected_preview("(not integrated)")
+                .preview_gap(1),
+            Action::Unavailable,
+        ),
         (
             Row::gate("Restart Codex", c["restart"] == true),
             Action::Restart,
         ),
         (Row::gate("End session", c["stop"] == true), Action::Stop),
         (Row::separator(), Action::Unavailable),
-        (Row::gate("Delete conversation", false), Action::Unavailable),
+        (archive_row(s), Action::Archive),
+        (
+            Row::gate("Delete Session", c["delete"] == true)
+                .with_selected_preview("(end session first)")
+                .preview_gap(1),
+            Action::Delete,
+        ),
         (Row::separator(), Action::Unavailable),
         (
             Row::gate("Experimental auto-start after reset", false),
@@ -115,6 +141,9 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
             Action::Unavailable,
         ),
     ]);
+    if s["activity"] == "idle" {
+        rows.retain(|(row, _)| row.label != "Pause work");
+    }
     rows
 }
 fn resume_reason(s: &Value, supported: bool) -> &'static str {
@@ -406,6 +435,34 @@ mod tests {
         );
         assert_eq!(rows[0].0.preview.as_deref(), Some("(tmux)"));
         assert_eq!(rows[0].0.preview_fg, crate::widgets::SECONDARY);
+    }
+    #[test]
+    fn archive_always_precedes_delete_and_idle_hides_pause() {
+        for availability in ["running", "saved", "archived"] {
+            let mut session = json!({"availability":availability,"activity":"idle","capabilities":{"archive":availability=="saved","delete":availability!="running"}});
+            let rows = actions(&session, true);
+            let archive = rows
+                .iter()
+                .position(|(_, a)| *a == Action::Archive)
+                .unwrap();
+            assert_eq!(
+                archive + 1,
+                rows.iter().position(|(_, a)| *a == Action::Delete).unwrap()
+            );
+            assert!(!rows.iter().any(|(r, _)| r.label == "Pause work"));
+            assert_eq!(rows[archive].0.enabled, availability == "saved");
+            if availability != "saved" {
+                assert!(rows[archive].0.preview_selected_only);
+            }
+            session["activity"] = json!("busy");
+            if availability == "running" {
+                assert!(
+                    actions(&session, true)
+                        .iter()
+                        .any(|(r, _)| r.label == "Pause work" && !r.enabled)
+                );
+            }
+        }
     }
     #[test]
     fn action_reasons_are_short_selected_only_and_hide_on_back() {

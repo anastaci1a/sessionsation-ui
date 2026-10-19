@@ -52,8 +52,8 @@ matching the adjacent stroke weight. Percentages span the actual center-to-cente
 line length (one cell less than the rendered width). Percentages precede period labels in aligned columns. Missing
 observations show Disabled, Login required or Usage unavailable as appropriate;
 stale observations are marked. New/resume account pickers use standard bullets
-with white/gray names and a separate right-aligned `x% 5h / x% wk` column, omitting the short period and
-slash for weekly-only accounts. Account names accept at most 24 ASCII characters;
+with white/gray names and an aligned `x% 5h / x% wk` block one space after the longest name, omitting the short period and
+slash for weekly-only accounts. The selected account’s status appears one blank line below the list or range counter, without repeating its name. Account names accept at most 24 ASCII characters;
 typing and paste stop at the limit.
 Duplicate names immediately invalidate the editor and disable confirmation.
 Session creation/resume/rename accepts at most 24 Unicode scalar values, also
@@ -119,7 +119,8 @@ not use a stale generation for reads or weaken generation checks on mutations.
 Renaming to the existing name remains valid; other sessions’ names remain excluded.
 
 Individual account and session menus show `Account: <name>` and `Session: <name>`
-in their title bar, using the normal display-name shortening.
+in their title bar, retaining the full name up to the terminal width; list labels remain shortened.
+Archive stays above Delete and explains its disabled state on hover. Pause work is hidden for idle sessions; its busy-session entry remains unavailable pending public CLI integration. Delete account uses a scan-free CLI preview to distinguish active sessions from an owner update requirement, with the reason shown only on hover.
 Manage Sessions selects an action menu, never implicitly attaches. Lifecycle
 actions carry the captured backend ID/generation. Stop, Restart, Switch, Disable
 and account deregistration/deletion require confirmation. New Session labels and values use aligned columns with space padding and the

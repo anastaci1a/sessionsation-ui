@@ -41,6 +41,7 @@ enum Purpose {
     Launch(&'static str, String),
     Remove(String),
     Delete(String),
+    DeleteAvailability(String),
     Limits(String),
     Mutation,
     Observe(String),
@@ -82,6 +83,7 @@ pub struct Manager {
     sequence: u64,
     pending: BTreeMap<u64, Purpose>,
     readiness: BTreeMap<String, Value>,
+    deletion_previews: BTreeMap<String, Value>,
     pub active_operation: Option<String>,
     foreground: Option<u64>,
     details_open: bool,
@@ -109,6 +111,7 @@ impl Default for Manager {
             sequence: 0,
             pending: BTreeMap::new(),
             readiness: BTreeMap::new(),
+            deletion_previews: BTreeMap::new(),
             active_operation: None,
             foreground: None,
             details_open: false,
@@ -156,6 +159,35 @@ impl Manager {
         self.capabilities["providers"]
             .as_array()
             .is_some_and(|ps| ps.iter().any(|p| p["id"] == "codex" && p[key] == true))
+    }
+    fn delete_account_row(&self, key: &str) -> Row {
+        let preview = self.deletion_previews.get(key);
+        let reason = if !self.provider_cap("account_deletion") {
+            Some("unsupported")
+        } else if preview.is_some_and(|p| p["owner_upgrade_required"] == true) {
+            Some("owner update needed")
+        } else if preview.is_some_and(|p| p["can_delete"] == false) {
+            Some(
+                if preview.is_some_and(|p| {
+                    p["affected_sessions"]
+                        .as_array()
+                        .is_some_and(|ss| ss.iter().any(|s| s["running"] == true))
+                }) {
+                    "active sessions"
+                } else {
+                    "unavailable"
+                },
+            )
+        } else {
+            None
+        };
+        let row = Row::gate("Delete account", reason.is_none());
+        if let Some(reason) = reason {
+            row.with_selected_preview(format!("({reason})"))
+                .preview_gap(1)
+        } else {
+            row
+        }
     }
     fn selected_account(&self) -> Option<String> {
         match &self.page {
@@ -281,17 +313,20 @@ impl Manager {
         match &self.page {
             Page::Home => "",
             Page::Accounts => "Manage Accounts",
-            Page::Account(key) => return format!("Account: {}", short_name(key)),
+            Page::Account(key) => {
+                return format!(
+                    "Account: {}",
+                    key.split_once(':').map_or(key.as_str(), |(_, name)| name)
+                );
+            }
             Page::Sessions => "Manage Sessions",
             Page::Archives => "Archived Sessions",
             Page::Session(key) => {
                 return format!(
                     "Session: {}",
-                    crate::usage::display_name(
-                        self.session(key)
-                            .and_then(|s| s["name"].as_str())
-                            .unwrap_or("Unnamed")
-                    )
+                    self.session(key)
+                        .and_then(|s| s["name"].as_str())
+                        .unwrap_or("Unnamed")
                 );
             }
             Page::Operations => "Operations",
@@ -407,7 +442,7 @@ impl Manager {
                     } else {
                         "Deregister account"
                     }),
-                    Row::gate("Delete account", self.provider_cap("account_deletion")),
+                    self.delete_account_row(key),
                 ];
                 if !a.is_some_and(|a| a.details.get("auth_required").is_some_and(|v| v == true)) {
                     rows.remove(3);
@@ -584,6 +619,18 @@ impl Manager {
     }
     pub fn refresh(&mut self) -> Vec<Intent> {
         let mut out = vec![];
+        if let Page::Account(key) = self.page.clone()
+            && self.provider_cap("account_deletion")
+            && !self
+                .pending
+                .values()
+                .any(|p| matches!(p, Purpose::DeleteAvailability(_)))
+        {
+            out.extend(self.request(
+                strings(&["account", "delete", &key]),
+                Purpose::DeleteAvailability(key),
+            ));
+        }
         if (matches!(self.page, Page::Archives | Page::Sessions)
             || matches!(&self.page, Page::Session(key) if self.archives.iter().any(|s|id(s)==key)))
             && !self
@@ -1307,6 +1354,9 @@ impl Manager {
             }
         };
         match purpose {
+            Purpose::DeleteAvailability(key) => {
+                self.deletion_previews.insert(key, value);
+            }
             Purpose::Archives => {
                 self.archives = value.as_array().cloned().unwrap_or_default();
                 self.options.selected = self
@@ -2076,6 +2126,38 @@ mod tests {
         m.mutate(strings(&["account", "enable", "codex:account1"]));
         m.submit(0, vec![]);
         assert_eq!(m.page, Page::Home);
+    }
+    #[test]
+    fn delete_availability_is_read_only_and_reasons_follow_backend() {
+        let mut m = setup();
+        m.page = Page::Account("codex:account1".into());
+        assert_eq!(
+            m.delete_account_row("codex:account1").preview.as_deref(),
+            Some("(unsupported)")
+        );
+        m.capabilities["providers"][0]["account_deletion"] = json!(true);
+        for (preview, reason) in [
+            (
+                json!({"can_delete":false,"owner_upgrade_required":true}),
+                Some("(owner update needed)"),
+            ),
+            (
+                json!({"can_delete":false,"affected_sessions":[{"running":true}]}),
+                Some("(active sessions)"),
+            ),
+            (json!({"can_delete":true}), None),
+        ] {
+            let requests = m.refresh();
+            let Intent::Api(token, args) = &requests[0] else {
+                panic!("preview")
+            };
+            assert_eq!(args, &strings(&["account", "delete", "codex:account1"]));
+            m.response(*token, Ok(preview));
+            let row = m.delete_account_row("codex:account1");
+            assert_eq!(row.enabled, reason.is_none());
+            assert_eq!(row.preview.as_deref(), reason);
+            assert!(m.dialog.is_none());
+        }
     }
     #[test]
     fn initial_session_load_selects_top_then_preserves_operations_on_refresh() {
