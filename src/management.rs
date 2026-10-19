@@ -4,7 +4,7 @@ use crate::{
     dialog::{self, Dialog, Field, Palette, Rule},
     render::{Canvas, Cell},
     usage::{AccountsLayout, Usage, short_name},
-    widgets::{Options, Row, hint_lines},
+    widgets::{NAME_MAX_CHARS, Options, Row, hint_lines},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
@@ -1082,7 +1082,9 @@ impl Manager {
     fn add(&mut self) {
         self.show(
             "Add Account",
-            vec!["Codex account name: 1–24 letters, digits, hyphens or underscores.".into()],
+            vec![format!(
+                "Codex account name: 1–{NAME_MAX_CHARS} letters, digits, hyphens or underscores."
+            )],
             &["Add account", "Cancel"],
             Form::Add,
         );
@@ -1447,13 +1449,14 @@ impl Manager {
             Form::Add => {
                 let name = value(0);
                 if name.is_empty()
-                    || name.len() > 24
+                    || name.len() > NAME_MAX_CHARS
                     || !name
                         .bytes()
                         .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
                 {
-                    self.dialog.as_mut().unwrap().body =
-                        vec!["Use 1–24 letters, digits, hyphens or underscores.".into()];
+                    self.dialog.as_mut().unwrap().body = vec![format!(
+                        "Use 1–{NAME_MAX_CHARS} letters, digits, hyphens or underscores."
+                    )];
                     return vec![];
                 }
                 strings(&["account", "add", &format!("codex:{name}")])
@@ -2910,6 +2913,19 @@ mod tests {
                 matches!(&sent[..], [Intent::Api(_, args)] if args == &strings(&["account", command, "codex:account1"]))
             );
         }
+    }
+    #[test]
+    fn add_account_accepts_thirty_and_rejects_thirty_one_without_dispatch() {
+        let mut m = setup();
+        m.add();
+        assert!(m.submit(0, vec!["a".repeat(31)]).is_empty());
+        assert!(m.dialog.as_ref().unwrap().body[0].contains("1–30"));
+        let sent = m.submit(0, vec!["a".repeat(30)]);
+        let Intent::Api(_, args) = &sent[0] else {
+            panic!()
+        };
+        assert_eq!(&args[..2], ["account", "add"]);
+        assert_eq!(args[2], format!("codex:{}", "a".repeat(30)));
     }
     #[test]
     fn duplicate_account_validation_refreshes_without_io() {
