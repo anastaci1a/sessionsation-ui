@@ -592,9 +592,7 @@ impl App {
             if session["confirm_unfinished"] == true {
                 request["confirm_unfinished"] = json!(true);
             }
-            if self.manager.capabilities["resume"]["directory_selection"] == true
-                && (session["directory"].as_str() != path.to_str() || !create.is_empty())
-            {
+            if self.manager.capabilities["resume"]["directory_selection"] == true {
                 request["directory"] =
                     json!({"path":path,"create":create,"confirmed_existing":confirmed});
             }
@@ -2138,6 +2136,11 @@ mod resume_tests {
         assert_eq!(a.draft.directory.path(), Some(Path::new("/saved/path")));
         a.manager.capabilities["resume"]["directory_selection"] = json!(true);
         assert!(a.rows()[3].enabled);
+        assert_eq!(
+            a.creation_request().unwrap()["directory"],
+            json!({"path":"/saved/path","create":[],"confirmed_existing":true}),
+            "the displayed directory must remain explicit even if the saved location changes without an attachment generation change"
+        );
         let tmp = tempfile::tempdir().unwrap();
         let destination = tmp.path().join("chosen");
         a.draft.directory = Directory::Create {
