@@ -91,7 +91,7 @@ enum Message {
     Theme(Result<(sessionsation_ui::dialog::Palette, Option<String>), String>),
     Directory(u64, Result<Listing, String>),
     Validation(u64, Result<(), String>),
-    Receipt(Result<Value, String>),
+    Receipt(String, Result<Value, String>),
     Focused(Result<(), String>),
     Saved(Result<(), String>),
 }
@@ -162,11 +162,22 @@ impl Effects {
                 }
                 Effect::Start(request) => {
                     tokio::spawn(async move {
-                        let result = client
-                            .launch("start", request)
-                            .await
-                            .map_err(|e| e.to_string());
-                        let _ = tx.send(Message::Receipt(result)).await;
+                        let id = request["request_id"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
+                        // A failed read-only preflight is definitely not admitted.
+                        // Once Start is sent, errors remain uncertain and reconcile.
+                        let result = match client.launch("validate", request.clone()).await {
+                            Ok(_) => client
+                                .launch("start", request)
+                                .await
+                                .map_err(|e| e.to_string()),
+                            Err(e) => {
+                                Ok(serde_json::json!({"phase":"failed","detail":e.to_string()}))
+                            }
+                        };
+                        let _ = tx.send(Message::Receipt(id, result)).await;
                     });
                 }
                 Effect::Save => {
@@ -222,7 +233,7 @@ impl Effects {
                 )
                 .await
                 .map_err(|e| e.to_string());
-            let _ = tx.send(Message::Receipt(result)).await;
+            let _ = tx.send(Message::Receipt(id, result)).await;
         });
     }
     fn focus(&self, tab: String) {
@@ -435,10 +446,10 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           Message::Theme(result)=>{match result{Ok((palette,note))=>{app.manager.palette=palette;if let Some(note)=note{app.manager.note=note;}},Err(e)=>app.manager.note=e}app.dirty=true;},
           Message::Directory(revision,result)=>app.listing(revision,result),
           Message::Validation(revision,result)=>app.validation(revision,result),
-          Message::Receipt(result)=>{receipt_pending=false;match result {
+          Message::Receipt(id,result)=>{if app.request.as_ref().and_then(|r|r["request_id"].as_str()) != Some(id.as_str()) { continue; } receipt_pending=false;match result {
            Ok(r)=>match r["phase"].as_str().unwrap_or("uncertain") {
             "running" if !app.success=>{app.success=true;if app.launch_background {app.manager.note="Session is running; open Operations or Focus tab when ready.".into();app.prefs.last_account=app.request.as_ref().and_then(|r|r["account_id"].as_str().map(str::to_owned));next.push(Effect::Save);}else if let Some(tab)=r["tab_id"].as_str(){effects.focus(tab.into());}else{app.error="Session running; receipt has no tab identity. Esc closes.".into();}},
-            "failed"=>{app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",r["detail"].as_str().unwrap_or("inspect launch status"));},
+            "failed"=>{app.request=None;app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",r["detail"].as_str().unwrap_or("inspect launch status"));},
             phase=>{app.error=format!("{phase}: {}",r["detail"].as_str().unwrap_or("waiting for confirmed handoff"));},
            },Err(e)=>{app.error=format!("{e}; reconciling original request");}
           }if app.launch_dialog&&let Some(d)=&mut app.manager.dialog{d.body=vec![app.error.clone()];if app.success || app.error.starts_with("Launch failed:"){d.finish();}}app.dirty=true;},

@@ -122,6 +122,31 @@ impl Client {
     }
     pub async fn launch(&self, operation: &str, mut request: Value) -> Result<Value> {
         if request["session_id"].is_string() {
+            let snapshot = request.as_object_mut().unwrap().remove("source_snapshot");
+            if let Some(snapshot) = snapshot {
+                let state = self.api(&["state"], None).await?;
+                let source = state["sessions"]
+                    .as_array()
+                    .and_then(|ss| ss.iter().find(|s| s["id"] == request["session_id"]))
+                    .context("SESSION_NOT_FOUND")?;
+                if source["generation"] != request["expected_generation"] {
+                    let fresh = self
+                        .api(
+                            &[
+                                "session",
+                                "--session",
+                                source["id"].as_str().context("INVALID_SESSION_ID")?,
+                                "--expected-generation",
+                                source["generation"]
+                                    .as_str()
+                                    .context("INVALID_GENERATION")?,
+                            ],
+                            None,
+                        )
+                        .await?;
+                    refresh_resume_request(&mut request, &snapshot, &fresh)?;
+                }
+            }
             return self.api(&["resume-launch", operation], Some(request)).await;
         }
         let paths: Vec<PathBuf> = serde_json::from_value(request["directory"]["create"].clone())?;
@@ -254,9 +279,51 @@ impl Client {
     }
 }
 
+/// Refresh only the same inactive source. Destination choices are never overwritten,
+/// and a different account/history/location requires a new explicit selection.
+fn refresh_resume_request(request: &mut Value, snapshot: &Value, fresh: &Value) -> Result<()> {
+    ensure!(
+        fresh["id"] == request["session_id"] && fresh["availability"] == "saved",
+        "SESSION_ALREADY_RUNNING_OR_UNAVAILABLE"
+    );
+    for key in ["conversation_id", "account_id", "directory"] {
+        ensure!(
+            snapshot[key].is_string() && snapshot[key] == fresh[key],
+            "SESSION_SOURCE_CHANGED: select the session again"
+        );
+    }
+    request["expected_generation"] = fresh["generation"].clone();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resume_refresh_preserves_destination_and_rejects_changed_source() {
+        let snapshot = json!({"id":"stable","conversation_id":"thread","account_id":"codex:original","directory":"/saved"});
+        let fresh = json!({"id":"stable","conversation_id":"thread","account_id":"codex:original","directory":"/saved","availability":"saved","generation":"new"});
+        let mut request = json!({"session_id":"stable","expected_generation":"old","account_id":"codex:target","name":"Chosen","space":{"kind":"new","label":"Other"}});
+        refresh_resume_request(&mut request, &snapshot, &fresh).unwrap();
+        assert_eq!(request["expected_generation"], "new");
+        assert_eq!(request["space"]["label"], "Other");
+        assert_eq!(request["account_id"], "codex:target");
+        assert_eq!(request["name"], "Chosen");
+        for key in [
+            "id",
+            "conversation_id",
+            "account_id",
+            "directory",
+            "availability",
+        ] {
+            let mut changed = fresh.clone();
+            changed[key] = json!("changed");
+            assert!(
+                refresh_resume_request(&mut request, &snapshot, &changed).is_err(),
+                "{key}"
+            );
+        }
+    }
     #[test]
     fn deployment_pointer_keeps_preferences_beside_real_config() {
         let root = tempfile::tempdir().unwrap();

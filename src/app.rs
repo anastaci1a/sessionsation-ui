@@ -19,6 +19,48 @@ pub enum Target {
     Global,
     Space(String),
 }
+
+fn resume_invalid(error: &str) -> bool {
+    [
+        "INVALID_",
+        "SESSION_ALREADY_RUNNING",
+        "SESSION_SOURCE_CHANGED",
+        "SESSION_NOT_FOUND",
+        "SAVED_DIRECTORY_UNAVAILABLE",
+        "SESSION_NAME_EXISTS",
+        "ACCOUNT_UNAVAILABLE",
+        "WORKSPACE_NOT_FOUND",
+        "WORKSPACE_NAME_EXISTS",
+        "UNFINISHED_HISTORY_CONFIRMATION_REQUIRED",
+    ]
+    .iter()
+    .any(|code| error.starts_with(code))
+}
+fn resume_explanation(error: &str) -> String {
+    let reason =
+        if error.starts_with("SESSION_STATE_UNVERIFIED") || error.starts_with("STALE_TARGET") {
+            "recheck needed"
+        } else if error.starts_with("SESSION_SOURCE_CHANGED") {
+            "source changed"
+        } else if error.starts_with("SESSION_ALREADY_RUNNING") {
+            "already running"
+        } else if error.starts_with("SESSION_NAME_EXISTS") {
+            "name taken"
+        } else if error.starts_with("ACCOUNT_UNAVAILABLE") {
+            "account unavailable"
+        } else if error.starts_with("SAVED_DIRECTORY_UNAVAILABLE") {
+            "missing directory"
+        } else if error.starts_with("WORKSPACE_") {
+            "invalid Space"
+        } else if error.starts_with("UNFINISHED_HISTORY_") {
+            "confirmation needed"
+        } else if error.starts_with("SESSION_NOT_FOUND") {
+            "not found"
+        } else {
+            "verification needed"
+        };
+    format!("({reason})")
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Page {
     Home,
@@ -76,6 +118,7 @@ pub struct App {
     pub launch_background: bool,
     pub launch_dialog: bool,
     pub resume: Option<Value>,
+    resume_validation: Option<String>,
     switch: Option<Value>,
     new_draft: Option<(Draft, bool, bool)>,
     stack: Vec<Saved>,
@@ -126,6 +169,7 @@ impl App {
             launch_background: false,
             launch_dialog: false,
             resume: None,
+            resume_validation: None,
             switch: None,
             new_draft: None,
             stack: vec![],
@@ -246,8 +290,14 @@ impl App {
         self.draft.account.is_some()
             && self.draft.space.is_some()
             && self.name_valid(&self.draft.name)
-            && self.draft.name_valid
-            && self.draft.directory_valid
+            && if self.resume.is_some() {
+                !self
+                    .resume_validation
+                    .as_deref()
+                    .is_some_and(resume_invalid)
+            } else {
+                self.draft.name_valid && self.draft.directory_valid
+            }
             && self.draft.directory.path().is_some()
     }
     fn launch_supported(&self) -> bool {
@@ -454,6 +504,7 @@ impl App {
         }
     }
     pub fn revalidate(&mut self) -> Vec<Effect> {
+        self.resume_validation = None;
         self.draft.changed();
         self.draft
             .derive(self.prefs.root(&self.instance, self.draft.space.as_ref()));
@@ -481,6 +532,7 @@ impl App {
         };
         if let Some(session) = &self.resume {
             let mut request = json!({"version":1,"request_id":uuid::Uuid::new_v4().to_string(),"session_id":session["id"],"expected_generation":session["generation"],"account_id":self.draft.account.as_ref()?,"name":self.draft.name,"host":self.host,"space":space});
+            request["source_snapshot"] = session.clone();
             if session["confirm_unfinished"] == true {
                 request["confirm_unfinished"] = json!(true);
             }
@@ -513,6 +565,10 @@ impl App {
         self.draft.name_valid = result.is_ok();
         self.draft.directory_valid = result.is_ok();
         self.error = result.err().unwrap_or_default();
+        if self.resume.is_some() {
+            self.resume_validation = (!self.error.is_empty()).then(|| self.error.clone());
+            self.error.clear();
+        }
         self.dirty = true;
     }
     pub fn inventory(
@@ -688,7 +744,7 @@ impl App {
         if self.page == Page::Summary && self.options.selected == 4 {
             if self.ready()
                 && self.launch_supported()
-                && !self.pending
+                && (!self.pending || self.resume.is_some())
                 && self.request.is_none()
                 && let Some(request) = self.creation_request()
             {
@@ -1159,8 +1215,10 @@ impl App {
             self.input.paint(&mut canvas, 2, 3, width - 4, valid);
         }
         if self.page == Page::Summary {
-            let enabled =
-                self.ready() && self.launch_supported() && !self.pending && self.request.is_none();
+            let enabled = self.ready()
+                && self.launch_supported()
+                && (!self.pending || self.resume.is_some())
+                && self.request.is_none();
             canvas.accent_text(
                 left,
                 top + rows.len().min(capacity),
@@ -1179,6 +1237,13 @@ impl App {
                 },
                 enabled,
             )
+            .with_preview(
+                self.resume_validation
+                    .as_deref()
+                    .map(resume_explanation)
+                    .unwrap_or_default(),
+            )
+            .preview_gap(1)
             .paint(
                 &mut canvas,
                 left,
@@ -1612,6 +1677,39 @@ mod tests {
 mod resume_tests {
     use super::*;
     use crate::management::Intent;
+    #[test]
+    fn resume_pending_or_stale_checks_do_not_trap_valid_choices() {
+        let mut a = App::new(
+            Preferences::default(),
+            "/projects".into(),
+            "host".into(),
+            json!({}),
+            None,
+        );
+        a.manager.capabilities = json!({"resume":{"version":1}});
+        a.management(vec![Intent::Resume(json!({"id":"stable","generation":"old","name":"Saved","account_id":"codex:a","directory":"/saved"}))]);
+        a.draft.space = Some(Space::New {
+            label: "Chosen Space".into(),
+        });
+        a.revalidate();
+        assert!(a.pending);
+        assert!(a.ready());
+        let revision = a.draft.revision;
+        a.validation(revision, Err("SESSION_STATE_UNVERIFIED".into()));
+        assert!(a.ready());
+        assert!(a.error.is_empty());
+        assert_eq!(
+            resume_explanation(a.resume_validation.as_deref().unwrap()),
+            "(recheck needed)"
+        );
+        a.validation(revision, Err("ACCOUNT_UNAVAILABLE".into()));
+        assert!(!a.ready());
+        a.revalidate();
+        a.validation(revision, Err("ACCOUNT_UNAVAILABLE".into()));
+        assert!(a.ready(), "old validation cannot invalidate edited choices");
+        a.options.selected = 4;
+        assert!(matches!(a.activate().as_slice(), [Effect::Start(_)]));
+    }
     #[test]
     fn resume_uses_verified_space_readonly_directory_and_preserves_new_draft() {
         let mut a = App::new(

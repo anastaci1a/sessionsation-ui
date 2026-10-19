@@ -276,7 +276,9 @@ pub fn paint(
             );
             let end = x + 2 + UnicodeWidthStr::width(account.as_str());
             if session["availability"] != "running"
-                && !(options.selected == index && options.preview_visible)
+                && !(options.selected == index
+                    && options.preview_visible
+                    && !Options::previews_detached(canvas.width, &rows))
             {
                 canvas.text(
                     end,
@@ -584,7 +586,11 @@ mod tests {
                     parenthetical,
                     "{width}: {text}"
                 );
-                assert_eq!(text.contains('*'), !parenthetical);
+                let row = c.cells[4 * width..5 * width]
+                    .iter()
+                    .map(|c| c.glyph.as_str())
+                    .collect::<String>();
+                assert_eq!(text.contains('*'), !row.contains("(inactive)"));
                 for cell in c.cells.iter().filter(|c| c.glyph == "*") {
                     assert_eq!(cell.fg, crate::widgets::MUTED);
                     assert!(!cell.bold);

@@ -157,14 +157,17 @@ pub struct Row {
     pub account: bool,
     pub preview_gap: usize,
     pub separator: bool,
+    field_padding: Option<std::ops::Range<usize>>,
 }
 impl Row {
     pub fn field(label: &str, value: impl std::fmt::Display, label_width: usize) -> Self {
-        Self::yes(format!(
+        let mut row = Self::yes(format!(
             "{:<width$} {value}",
             format!("{label}:"),
             width = label_width + 1
-        ))
+        ));
+        row.field_padding = Some(label.len() + 1..label_width + 2);
+        row
     }
     pub fn yes(label: impl Into<String>) -> Self {
         Self::gate(label, true)
@@ -182,6 +185,7 @@ impl Row {
             account: false,
             preview_gap: 2,
             separator: false,
+            field_padding: None,
         }
     }
     pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
@@ -251,6 +255,7 @@ impl Row {
             account: false,
             preview_gap: 2,
             separator: true,
+            field_padding: None,
         }
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, selected: bool, back: bool) {
@@ -326,6 +331,22 @@ impl Row {
                 },
                 self.enabled,
             );
+        }
+        if !self.enabled && y < canvas.height {
+            // Layout gaps are not part of either struck-through text segment.
+            // A single space inside a multi-word label remains styled with it.
+            let chars: Vec<_> = self.label.chars().collect();
+            let mut col = 0;
+            for (i, ch) in chars.iter().enumerate() {
+                let padding = *ch == ' '
+                    && (self.field_padding.as_ref().is_some_and(|r| r.contains(&i))
+                        || i > 0 && chars[i - 1] == ' '
+                        || chars.get(i + 1) == Some(&' '));
+                if padding && x + 2 + col < canvas.width {
+                    canvas.cells[y * canvas.width + x + 2 + col].strike = false;
+                }
+                col += unicode_width::UnicodeWidthChar::width(*ch).unwrap_or(0);
+            }
         }
         if let Some(preview) = &self.preview
             && show_preview
@@ -856,6 +877,22 @@ mod tests {
         assert!(!c.cells[2].strike);
         assert!(c.cells[4].strike);
         assert!(!c.cells[4].bold);
+    }
+    #[test]
+    fn unavailable_fields_strike_segments_without_striking_alignment_gaps() {
+        let mut c = Canvas::new(50, 3);
+        let mut row = Row::field("Dir", "my saved directory", 8);
+        row.enabled = false;
+        row.paint(&mut c, 0, 0, true, false);
+        assert!(c.cells[2..6].iter().all(|c| c.strike));
+        assert!(c.cells[6..12].iter().all(|c| !c.strike));
+        assert!(c.cells[12..30].iter().all(|c| c.strike));
+        Row::gate("Two words   next segment", false).paint(&mut c, 0, 1, false, false);
+        assert!(
+            c.cells[55].strike,
+            "intra-label space retains strikethrough"
+        );
+        assert!(c.cells[61..64].iter().all(|c| !c.strike));
     }
     #[test]
     fn global_preview_fit_includes_offscreen_rows_and_back_hides_details() {

@@ -62,6 +62,15 @@ require scrolling explanatory text to the bottom.
 Menus initially focus the first non-separator option, even if unavailable.
 Session action hints such as `(tmux)` or `(missing directory)` appear only on
 hover and hide on Back; resume reasons come from the public CLI state.
+The inactive asterisk remains on its session row when the parenthetical moves
+to the centered preview below the list. Unavailable field segments are struck
+through separately; alignment padding is never struck through.
+Resume forms retain their chosen destination through stale or pending checks.
+Only confirmed invalid choices disable Resume; selected-only parentheticals explain
+validation state. Activation verifies again before admission. A generation refresh
+must still identify the same inactive conversation, source account and directory.
+Definitively failed launch receipts release the form; uncertain requests remain
+pending for reconciliation and are never automatically replayed.
 An unfinished conversation offers Start Session with an explicit warning first.
 Confirming acknowledges only unfinished history, not active writers or conflicting copies.
 Input focus is shown by the cursor alone, with no triangle. Only the focused input
