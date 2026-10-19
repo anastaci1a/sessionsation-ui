@@ -363,11 +363,11 @@ impl App {
             )],
             Page::Directory(_) => {
                 std::iter::once(Row::gate("[use this dir]", self.listing.existing))
+                    .chain((self.directory_action_count() == 3).then(|| Row::yes("[leave unset]")))
                     .chain(std::iter::once(Row::gate(
                         "[create dir]",
                         self.listing.existing || self.listing.creatable,
                     )))
-                    .chain((self.directory_action_count() == 3).then(|| Row::yes("[leave unset]")))
                     .chain(self.listing.children.iter().map(|p| {
                         Row::yes(format!(
                             "{}/",
@@ -800,10 +800,10 @@ impl App {
                 self.revalidate()
             }
             Page::Directory(target) => {
-                if self.directory_action_count() == 3 && self.options.selected == 2 {
+                if self.directory_action_count() == 3 && self.options.selected == 1 {
                     return self.choose_directory(target, Directory::Unset);
                 }
-                if self.options.selected == 1 {
+                if self.options.selected == self.directory_action_count() - 1 {
                     let path = self.listing.path.clone().unwrap();
                     let (parent, name) = if self.listing.existing {
                         (path, String::new())
@@ -1469,7 +1469,9 @@ mod tests {
                 children: vec!["/tmp/child".into()],
                 ..Listing::default()
             };
-            assert_eq!(a.rows()[2].label, "[leave unset]");
+            assert_eq!(a.rows()[0].label, "[use this dir]");
+            assert_eq!(a.rows()[1].label, "[leave unset]");
+            assert_eq!(a.rows()[2].label, "[create dir]");
             for row in 0..3 {
                 a.options.selected = row;
                 a.options.back = false;
@@ -1482,7 +1484,7 @@ mod tests {
                 assert!(a.options.back);
             }
             a.options.back = false;
-            a.options.selected = 2;
+            a.options.selected = 1;
             a.activate();
             match target {
                 Target::Global => {
