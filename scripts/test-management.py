@@ -6,7 +6,7 @@ BACKEND='''#!/usr/bin/env python3
 import json,os,pathlib,sys,time
 root=pathlib.Path(os.environ['FIXTURE_ROOT']);args=sys.argv;api=args[args.index('api')+1:];api=api[2:] if api[:1]==['--api-version'] else api
 with (root/'calls.jsonl').open('a') as log:log.write(json.dumps(api)+'\\n')
-caps={'launch':{'version':1,'list':True},'resume':{'version':1,'list':True},'providers':[{'id':'codex','account_limits':True,'enrollment':True,'account_deletion':True}]}
+caps={'launch':{'version':1,'list':True},'resume':{'version':1,'list':True,'directory_selection':True},'providers':[{'id':'codex','account_limits':True,'enrollment':True,'account_deletion':True}]}
 accounts=[{'id':'codex:fixture'+str(i),'selectable':True,'enabled':True,'usage_fresh':True,'prefill':{'eligible':True,'valid_until':int(time.time())+60},'usage':{'observed_at':int(time.time()),'short':({'duration_minutes':300,'used_percent':95 if i==0 else 1} if i!=2 else None),'weekly':{'duration_minutes':10080,'used_percent':20 if i==0 else 94}},'switch_thresholds':{'customized':True,'short_percent':80,'weekly_percent':90}} for i in range(6)]
 session={'id':'11111111-1111-4111-8111-111111111111','generation':'captured','name':'Savedfixture','account_id':'codex:fixture0','account':'fixture0','availability':'saved','directory':str(root/'projects'),'capabilities':{'rename':True,'resume':True,'switch_account':False,'restart':False,'stop':False},'original_host':None}
 receipt=None
@@ -63,19 +63,19 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
   weekly=next(row for row in rows if 'fixture2' in row);assert '/' not in weekly and 'wk' in weekly
   t.send(b'\x1b');t.wait('Account:');t.send(b'\x1b');t.wait('Manage Sessions')
   # Select a saved session, then Resume (selection itself never attaches).
-  t.send(b'\x1b[B\r');t.wait('Savedfixture');t.send(b'\x1b[B\r');t.wait('Start Session');t.send(b'\r');t.wait('Resume Session');t.wait('Dir:');time.sleep(.2);t.drain()
-  t.send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r');t.wait('Continue in background');t.send(b'\x1b');t.wait('Manage Sessions')
+  t.send(b'\x1b[B\r');t.wait('Savedfixture');t.send(b'\r');t.wait('Start Session');t.send(b'\r');t.wait('Resume Session');t.wait('Dir:');time.sleep(.2);t.drain()
+  t.send(b'\x1b[B\x1b[B\x1b[B\r');t.wait('Start directory');t.send(b'\x7f'*len(str(root/'projects'))+str(root).encode());time.sleep(.2);t.drain();t.send(b'\r');t.wait('Resume Session');t.send(b'\x1b[B\r');t.wait('Continue in background');t.send(b'\x1b');t.wait('Manage Sessions')
   deadline=time.monotonic()+3
   while not (root/'start.json').exists() and time.monotonic()<deadline:t.drain();time.sleep(.01)
   request=json.loads((root/'start.json').read_text())
-  assert request['session_id']=='11111111-1111-4111-8111-111111111111';assert request['expected_generation']=='captured';assert 'directory' not in request
+  assert request['session_id']=='11111111-1111-4111-8111-111111111111';assert request['expected_generation']=='captured';assert request['directory']=={'path':str(root),'create':[],'confirmed_existing':True}
   (root/'hold').unlink();time.sleep(1.5);t.drain();assert t.process.poll() is None,'background completion must not exit/focus'
   assert t.screen.contains('Manage Sessions')
  finally:t.close()
  # Reopen and inspect the original receipt without another mutation.
  t=f.Terminal(root)
  try:
-  t.wait('Manage Sessions');t.send(b'\x1b[B\r');t.wait('[new session]');time.sleep(.2);t.drain();t.send(b'\x1b[A');t.wait('Operations',selected=True);t.send(b'\r');t.wait('Resume');t.wait('complete')
+  t.wait('Manage Sessions');t.send(b'\x1b[B\r');t.wait('Savedfixture');time.sleep(.2);t.drain();t.send(b'\x1b[A');t.wait('Operations',selected=True);t.send(b'\r');t.wait('Resume');t.wait('complete')
   t.drain()
   if not t.screen.contains('Resume',selected=True): t.send(b'\x1b[B')
   t.wait('Resume',selected=True);t.send(b'\r');t.wait('Details',selected=True);t.send(b'\r');t.wait('Close',selected=True)
@@ -88,4 +88,4 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
  assert not any(c[:1]==['cancel-operation'] for c in calls)
  assert not any(c[0] in ['stop','restart','switch','send','submit','queue'] for c in calls)
  assert list((root/'projects').iterdir())==[]
-print(json.dumps({'passed':True,'models':0,'checks':['compact bars and separators','right-aligned mixed-window picker','saved selection never attaches','resume captures identity and fixes directory','background completion retains menu','reopened receipt without resend','details close returns to submenu and stays closed','TTY restoration']},indent=2))
+print(json.dumps({'passed':True,'models':0,'checks':['compact bars and separators','right-aligned mixed-window picker','saved selection never attaches','resume captures identity and selected directory','background completion retains menu','reopened receipt without resend','details close returns to submenu and stays closed','TTY restoration']},indent=2))

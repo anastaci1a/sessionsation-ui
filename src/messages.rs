@@ -14,7 +14,7 @@ pub fn describe(text: &str) -> String {
             "The session's current state is still being checked. No new action has been confirmed."
         }
         "RESUME_NOT_FOUND" | "LAUNCH_NOT_FOUND" => {
-            "Waiting for the backend to record this launch. Checking the original request; it will not be sent again."
+            "The backend has not returned this launch record yet. Its outcome is unconfirmed; it will not be sent again."
         }
         "SESSION_NOT_FOUND" => {
             "This session is no longer in the current list. Return to Manage Sessions to refresh it."
@@ -60,7 +60,51 @@ pub fn describe(text: &str) -> String {
         "SESSION_ACTIVE" => {
             "This conversation is still active or has a pending action. End it and wait for Operations to finish first."
         }
-        _ => return text.to_owned(),
+        "PERMISSION_DENIED" => {
+            "Local data could not be accessed with the current permissions. Check the selected directory or data-root permissions."
+        }
+        "DIRECTORY_ALREADY_EXISTS" => {
+            "The planned directory now exists. Select it as an existing directory before starting."
+        }
+        "DIRECTORY_CONFIRMATION_REQUIRED" | "DIRECTORY_CHANGED" | "DIRECTORY_PARENT_CHANGED" => {
+            "The selected directory changed or is unavailable. Choose it again before starting."
+        }
+        "PAGINATED_HISTORY_SERVER_REQUIRED" | "HISTORY_SERVER_REQUIRED" => {
+            "Codex's history server is needed to preserve this conversation completely. Open the original home’s server before trying again."
+        }
+        "admitted" => "Launch accepted; preparing its terminal.",
+        "preparing" => "Checking the session and preparing its destination.",
+        "creating_terminal" => "Creating the new terminal tab.",
+        "dispatching" | "starting_provider" => {
+            "Starting the agent with the selected account and conversation."
+        }
+        "attached" => "The agent is attached; checking its process identity.",
+        "transferring" => "Transferring conversation history to the selected account.",
+        "checking_history" | "verifying_history" => "Verifying conversation history.",
+        "compressing_history" => "Compressing conversation history into Archived Sessions.",
+        "moving_history" => "Preserving archived history and clearing its original local copies.",
+        "waiting_for_idle" => "Waiting for the agent to finish its current work safely.",
+        "complete" => "Complete.",
+        "uncertain" => {
+            "The action's outcome is not confirmed. Check the original operation before repeating it."
+        }
+        "failed" => "The action could not finish. Review the details below.",
+        _ => {
+            if !code.is_empty()
+                && code.contains('_')
+                && code
+                    .bytes()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
+            {
+                if let Some((_, detail)) = text.split_once(": ")
+                    && detail != code
+                {
+                    return describe(detail);
+                }
+                return "The backend could not complete this action. Review Operations for details before trying again.".into();
+            }
+            return text.to_owned();
+        }
     };
     message.into()
 }
@@ -73,6 +117,11 @@ mod tests {
         assert!(describe("STALE_TARGET").contains("choose the action again"));
         assert!(describe("Launch failed: ACCOUNT_UNAVAILABLE").contains("enabled and signed in"));
         assert_eq!(describe("History retained."), "History retained.");
+        assert!(!describe("UNRECOGNIZED_FAILURE").contains("UNRECOGNIZED_FAILURE"));
+        assert_eq!(
+            describe("OPERATION_FAILED: retained explanatory detail"),
+            "retained explanatory detail"
+        );
         assert!(describe("RECEIPT_NOT_FOUND").contains("not confirmed"));
     }
 }

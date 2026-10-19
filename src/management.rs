@@ -772,7 +772,7 @@ impl Manager {
         self.session_return = args.windows(2).find(|w| w[0] == "--session").map(|w| {
             if matches!(
                 args.first().map(String::as_str),
-                Some("archive-session" | "delete-session")
+                Some("archive" | "delete-session")
             ) {
                 String::new()
             } else {
@@ -2113,7 +2113,7 @@ mod tests {
         m.submit(0, vec![]);
         assert_eq!(m.page, Page::Sessions);
         assert_eq!(m.options.selected, 1);
-        for command in ["archive-session", "delete-session"] {
+        for command in ["archive", "delete-session"] {
             m.mutate(strings(&[command, "--session", "two"]));
             m.submit(0, vec![]);
             assert_eq!(m.page, Page::Sessions);

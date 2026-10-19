@@ -370,7 +370,9 @@ impl App {
                     .enumerate()
                     .map(|(i, (label, value))| {
                         let mut row = Row::field(label, value, width);
-                        row.enabled = i != 3 || self.resume.is_none();
+                        row.enabled = i != 3
+                            || self.resume.is_none()
+                            || self.manager.capabilities["resume"]["directory_selection"] == true;
                         row
                     })
                     .collect()
@@ -566,14 +568,6 @@ impl App {
             Space::Existing { id, .. } => json!({"kind":"existing","id":id}),
             Space::New { label } => json!({"kind":"new","label":label}),
         };
-        if let Some(session) = &self.resume {
-            let mut request = json!({"version":1,"request_id":uuid::Uuid::new_v4().to_string(),"session_id":session["id"],"expected_generation":session["generation"],"account_id":self.draft.account.as_ref()?,"name":self.draft.name,"host":self.host,"space":space});
-            request["source_snapshot"] = session.clone();
-            if session["confirm_unfinished"] == true {
-                request["confirm_unfinished"] = json!(true);
-            }
-            return Some(request);
-        }
         let (path, create, confirmed) = match &self.draft.directory {
             Directory::Unset => return None,
             Directory::Existing(p) => (p, vec![], true),
@@ -589,6 +583,20 @@ impl App {
             }
             Directory::Create { path, planned } => (path, planned.clone(), false),
         };
+        if let Some(session) = &self.resume {
+            let mut request = json!({"version":1,"request_id":uuid::Uuid::new_v4().to_string(),"session_id":session["id"],"expected_generation":session["generation"],"account_id":self.draft.account.as_ref()?,"name":self.draft.name,"host":self.host,"space":space});
+            request["source_snapshot"] = session.clone();
+            if session["confirm_unfinished"] == true {
+                request["confirm_unfinished"] = json!(true);
+            }
+            if self.manager.capabilities["resume"]["directory_selection"] == true
+                && (session["directory"].as_str() != path.to_str() || !create.is_empty())
+            {
+                request["directory"] =
+                    json!({"path":path,"create":create,"confirmed_existing":confirmed});
+            }
+            return Some(request);
+        }
         Some(
             json!({"version":1,"request_id":uuid::Uuid::new_v4().to_string(),"account_id":self.draft.account.as_ref()?,"name":self.draft.name,"host":self.host,"space":space,"directory":{"path":path,"create":create,"confirmed_existing":confirmed}}),
         )
@@ -1040,9 +1048,25 @@ impl App {
                 self.manager.dialog = None;
                 self.launch_dialog = false;
                 self.launch_background = true;
-                self.page = Page::Home;
-                self.manager.page = crate::management::Page::Home;
+                self.page = if self.resume.is_some() {
+                    Page::Management
+                } else {
+                    Page::Home
+                };
+                self.manager.page = if self.resume.is_some() {
+                    crate::management::Page::Sessions
+                } else {
+                    crate::management::Page::Home
+                };
                 self.manager.options = Options::default();
+                if let Some(session) = &self.resume {
+                    self.manager.options.selected = self
+                        .manager
+                        .sessions
+                        .iter()
+                        .position(|s| s["id"] == session["id"])
+                        .unwrap_or(0);
+                }
                 self.stack.clear();
             }
             return vec![];
@@ -1629,6 +1653,20 @@ mod tests {
         );
     }
     #[test]
+    fn background_resume_returns_to_selected_session_without_replaying() {
+        let mut a = app();
+        a.manager.sessions = vec![json!({"id":"one"}), json!({"id":"two"})];
+        a.resume = Some(json!({"id":"two"}));
+        a.launch_dialog = true;
+        a.manager.dialog = Some(crate::dialog::Dialog::progress("Starting session"));
+        let effects = a.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(effects.is_empty());
+        assert_eq!(a.page, Page::Management);
+        assert_eq!(a.manager.page, crate::management::Page::Sessions);
+        assert_eq!(a.manager.options.selected, 1);
+        assert!(a.launch_background);
+    }
+    #[test]
     fn pending_receipt_freshness_uses_plain_language() {
         assert_eq!(
             reconciliation_message("SESSION_STATE_UNVERIFIED"),
@@ -1638,7 +1676,7 @@ mod tests {
             reconciliation_message("STALE_TARGET: changed"),
             "Checking session state…"
         );
-        assert!(reconciliation_message("PERMISSION_DENIED").contains("PERMISSION_DENIED"));
+        assert!(reconciliation_message("PERMISSION_DENIED").contains("permissions"));
     }
     #[test]
     fn creation_and_resume_account_pickers_use_standard_bullets() {
@@ -1993,7 +2031,7 @@ mod resume_tests {
         assert!(matches!(a.activate().as_slice(), [Effect::Start(_)]));
     }
     #[test]
-    fn resume_uses_verified_space_readonly_directory_and_preserves_new_draft() {
+    fn resume_preserves_draft_and_gates_directory_selection_on_backend_support() {
         let mut a = App::new(
             Preferences::default(),
             "/projects".into(),
@@ -2030,6 +2068,22 @@ mod resume_tests {
         a.resume.as_mut().unwrap()["confirm_unfinished"] = json!(true);
         assert_eq!(a.creation_request().unwrap()["confirm_unfinished"], true);
         assert_eq!(a.draft.directory.path(), Some(Path::new("/saved/path")));
+        a.manager.capabilities["resume"]["directory_selection"] = json!(true);
+        assert!(a.rows()[3].enabled);
+        let tmp = tempfile::tempdir().unwrap();
+        let destination = tmp.path().join("chosen");
+        a.draft.directory = Directory::Create {
+            path: destination.clone(),
+            planned: vec![destination.clone()],
+        };
+        let request = a.creation_request().unwrap();
+        assert_eq!(request["directory"]["path"], json!(destination));
+        assert_eq!(request["directory"]["create"], json!([destination]));
+        assert_eq!(request["directory"]["confirmed_existing"], false);
+        assert!(
+            !destination.exists(),
+            "planning a resume must not create its directory"
+        );
         let revision = a.draft.revision;
         a.pop();
         assert_eq!(a.draft.name, "New draft");
