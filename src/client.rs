@@ -75,12 +75,32 @@ pub fn preferences_path(config: &Path) -> PathBuf {
         .with_file_name("preferences.json")
 }
 impl Client {
-    pub async fn focus_session(&self, selected: &Value) -> Result<()> {
+    async fn focus_snapshot(&self, selected: &Value, direct: bool) -> Result<Value> {
+        if direct {
+            return self
+                .api(
+                    &[
+                        "attachment",
+                        "--session",
+                        selected["id"].as_str().context("INVALID_SESSION_ID")?,
+                        "--expected-generation",
+                        selected["generation"]
+                            .as_str()
+                            .context("INVALID_GENERATION")?,
+                    ],
+                    None,
+                )
+                .await;
+        }
         let state = self.api(&["state"], None).await?;
-        let session = state["sessions"]
+        state["sessions"]
             .as_array()
             .and_then(|s| s.iter().find(|s| s["id"] == selected["id"]))
-            .context("SESSION_NOT_FOUND")?;
+            .cloned()
+            .context("SESSION_NOT_FOUND")
+    }
+    pub async fn focus_session(&self, selected: &Value, direct: bool) -> Result<()> {
+        let session = self.focus_snapshot(selected, direct).await?;
         ensure!(
             session["generation"] == selected["generation"],
             "STALE_TARGET"
@@ -110,11 +130,9 @@ impl Client {
             .context("HERDR returned no tab for the selected pane")?;
         // Recheck after host discovery so a replaced catalog attachment cannot be
         // deliberately followed using its old identity.
-        let fresh = self.api(&["state"], None).await?;
+        let fresh = self.focus_snapshot(selected, direct).await?;
         ensure!(
-            fresh["sessions"].as_array().is_some_and(|ss| ss
-                .iter()
-                .any(|s| s["id"] == selected["id"] && s["generation"] == selected["generation"])),
+            fresh["id"] == selected["id"] && fresh["generation"] == selected["generation"],
             "STALE_TARGET"
         );
         self.host(&["tab", "focus", tab]).await?;
@@ -299,6 +317,93 @@ fn refresh_resume_request(request: &mut Value, snapshot: &Value, fresh: &Value) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn focus_uses_direct_epoch_checks_and_refuses_replaced_attachments() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let selected = json!({"id":"stable","generation":"epoch","availability":"running","attachment":{"host":"herdr","target":"herdr/named/pane","pid":42}});
+        std::fs::write(
+            tmp.path().join("session.json"),
+            serde_json::to_vec(&selected).unwrap(),
+        )
+        .unwrap();
+        let cli = tmp.path().join("backend");
+        std::fs::write(&cli, r#"#!/usr/bin/env python3
+import json, pathlib, sys, time
+r=pathlib.Path(__file__).parent
+command='attachment' if 'attachment' in sys.argv else 'state'
+with (r/'calls').open('a') as f:f.write(command+'\n')
+if command=='state':time.sleep(.5)
+session=json.loads((r/'session.json').read_text())
+if (r/'replaced').exists():
+ print(json.dumps({'api_version':1,'ok':False,'error':{'code':'STALE_TARGET','message':'Refresh the selected session'}}),file=sys.stderr);sys.exit(1)
+print(json.dumps({'api_version':1,'ok':True,'result':session if command=='attachment' else {'sessions':[session]}}))
+"#).unwrap();
+        let host = tmp.path().join("herdr");
+        std::fs::write(
+            &host,
+            r#"#!/usr/bin/env python3
+import json,pathlib,sys
+r=pathlib.Path(__file__).parent
+args=sys.argv[1:]
+if args[:2]==['pane','process-info']:result={'process_info':{'foreground_processes':[{'pid':42}]}}
+elif args[:2]==['pane','get']:
+ result={'pane':{'tab_id':'tab'}}
+ if (r/'replace-on-get').exists():(r/'replaced').touch()
+elif args[:2]==['tab','focus']:
+ with (r/'calls').open('a') as f:f.write('focus\n')
+ result={}
+else:sys.exit(2)
+print(json.dumps({'result':result}))
+"#,
+        )
+        .unwrap();
+        for file in [&cli, &host] {
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let client = Client {
+            binary: cli,
+            root: tmp.path().into(),
+            herdr: host,
+            socket: "/chosen.sock".into(),
+            session: "named".into(),
+        };
+        let mut timings = vec![];
+        for direct in [false, true] {
+            std::fs::write(tmp.path().join("calls"), "").unwrap();
+            let start = std::time::Instant::now();
+            client.focus_session(&selected, direct).await.unwrap();
+            timings.push(start.elapsed().as_millis());
+            let calls = std::fs::read_to_string(tmp.path().join("calls")).unwrap();
+            assert_eq!(
+                calls,
+                if direct {
+                    "attachment\nattachment\nfocus\n"
+                } else {
+                    "state\nstate\nfocus\n"
+                }
+            );
+        }
+        println!(
+            "Synthetic Focus ms: legacy={} direct={}",
+            timings[0], timings[1]
+        );
+        std::fs::write(tmp.path().join("calls"), "").unwrap();
+        std::fs::write(tmp.path().join("replace-on-get"), "").unwrap();
+        assert!(
+            client
+                .focus_session(&selected, true)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("STALE_TARGET")
+        );
+        assert!(
+            !std::fs::read_to_string(tmp.path().join("calls"))
+                .unwrap()
+                .contains("focus")
+        );
+    }
     #[tokio::test]
     async fn explicit_host_socket_is_not_overridden_by_a_session_selector() {
         use std::os::unix::fs::PermissionsExt;

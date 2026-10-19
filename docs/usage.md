@@ -252,6 +252,11 @@ It prefers a verified original Space, then current focus, otherwise unset. Chang
 account uses the backend safe transfer, preserving conversation history and ID.
 Uncertain responses are not automatically retried. Focus tab selects an existing
 HERDR tab in this instance after rechecking its catalog identity.
+Focus Session uses the backend's `attachment_lookup.version:1` capability to
+check the selected catalog generation and process epoch without full discovery.
+It still checks membership in the intended HERDR pane/socket and rechecks the
+generation before focusing. Older backends retain the discovery-based check;
+neither path launches or submits input to an agent.
 
 Manage Sessions sorts busy, idle, then inactive sessions, newest access first
 within each group. A blank-line bullet separator divides active and inactive

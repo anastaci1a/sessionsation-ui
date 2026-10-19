@@ -97,7 +97,7 @@ pub enum Effect {
     Save,
     Exit,
     Api(u64, Vec<String>),
-    FocusSession(Value),
+    FocusSession(Value, bool),
 }
 enum StartConfirmation {
     SharedDirectory(PathBuf),
@@ -217,7 +217,10 @@ impl App {
                     }
                 }
                 Intent::Settings => effects.extend(self.push(Page::Config, String::new())),
-                Intent::Focus(session) => effects.push(Effect::FocusSession(session)),
+                Intent::Focus(session) => effects.push(Effect::FocusSession(
+                    session,
+                    self.manager.capabilities["attachment_lookup"]["version"] == 1,
+                )),
                 Intent::Exit => {
                     self.exit = true;
                     effects.push(Effect::Exit);

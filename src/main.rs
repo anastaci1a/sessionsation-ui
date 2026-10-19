@@ -118,10 +118,10 @@ impl Effects {
                         let _ = tx.send(Message::Managed(token, result)).await;
                     });
                 }
-                Effect::FocusSession(session) => {
+                Effect::FocusSession(session, direct) => {
                     tokio::spawn(async move {
                         let result = client
-                            .focus_session(&session)
+                            .focus_session(&session, direct)
                             .await
                             .map_err(|e| e.to_string());
                         let _ = tx.send(Message::SessionFocused(result)).await;
