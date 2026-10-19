@@ -316,7 +316,7 @@ impl Row {
             x,
             y,
             if self.account {
-                if selected && !back { "▸" } else { " " }
+                if selected && !back { "▶" } else { " " }
             } else if selected {
                 "●"
             } else {
@@ -403,11 +403,56 @@ impl Row {
     }
 }
 
+/// A held direction may wrap only when its gesture began at that edge.
+#[derive(Clone, Debug, Default)]
+pub struct SelectionNavigation {
+    direction: Option<bool>,
+    edge: bool,
+}
+impl SelectionNavigation {
+    pub fn step(
+        &mut self,
+        selected: usize,
+        count: usize,
+        previous: bool,
+        fresh: bool,
+        focusable: impl Fn(usize) -> bool,
+    ) -> usize {
+        if count == 0 {
+            return selected;
+        }
+        let selected = selected.min(count - 1);
+        let first = (0..count).find(|i| focusable(*i));
+        let last = (0..count).rfind(|i| focusable(*i));
+        if fresh {
+            self.direction = Some(previous);
+            self.edge = Some(selected) == if previous { first } else { last };
+        }
+        let wrap = self.direction == Some(previous) && self.edge;
+        let mut probe = selected;
+        for _ in 0..count {
+            if !wrap && (previous && probe == 0 || !previous && probe + 1 == count) {
+                return selected;
+            }
+            probe = if previous {
+                (probe + count - 1) % count
+            } else {
+                (probe + 1) % count
+            };
+            if focusable(probe) {
+                return probe;
+            }
+        }
+        selected
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Options {
     pub selected: usize,
     pub back: bool,
     pub scroll: usize,
+    pub navigation: SelectionNavigation,
 }
 
 /// Shared bottom hints: token wrapping never changes the star-field geometry.
@@ -477,6 +522,17 @@ pub fn hint_lines(tokens: &[&str], width: usize) -> Vec<String> {
     }
     lines
 }
+/// Preserve a visible truncation marker even when a layout narrows an already
+/// shortened title. Width is terminal cells, never UTF-8 bytes.
+pub fn ellipsize(text: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_owned();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    format!("{}…", clip(text, width - 1))
+}
 pub fn clip(text: &str, width: usize) -> String {
     let mut used = 0;
     text.graphemes(true)
@@ -508,22 +564,11 @@ impl Options {
             return;
         }
         self.back = false;
-        self.selected %= count;
-        let mut probe = self.selected;
-        for _ in 0..count {
-            if !wrap && (previous && probe == 0 || !previous && probe + 1 == count) {
-                return;
-            }
-            probe = if previous {
-                (probe + count - 1) % count
-            } else {
-                (probe + 1) % count
-            };
-            if probe == rows.len() || !rows[probe].separator {
-                self.selected = probe;
-                break;
-            }
-        }
+        self.selected = self
+            .navigation
+            .step(self.selected, count, previous, wrap, |index| {
+                index == rows.len() || !rows[index].separator
+            });
     }
     pub fn left(width: usize, rows: &[Row]) -> usize {
         let longest = rows
@@ -586,7 +631,7 @@ impl Options {
             if y + 1 < controls_start && canvas.width > 3 {
                 let max = canvas.width - 2;
                 let text = if UnicodeWidthStr::width(preview) > max {
-                    format!("{}…", clip(preview, max - 1))
+                    ellipsize(preview, max)
                 } else {
                     preview.to_owned()
                 };
@@ -733,6 +778,49 @@ mod tests {
         assert!(!legacy.key_at(down, start + Duration::from_millis(500)));
         assert!(!legacy.key_at(down, start + Duration::from_millis(530)));
         assert!(legacy.key_at(down, start + Duration::from_millis(1300)));
+    }
+    #[test]
+    fn ellipsis_survives_reclipping_and_respects_terminal_cells() {
+        assert_eq!(
+            ellipsize("abcdefghijklmnopqrstuvwx", 16),
+            "abcdefghijklmno…"
+        );
+        assert_eq!(ellipsize("abcdefghijklmno…", 10), "abcdefghi…");
+        assert_eq!(ellipsize("界界界", 4), "界…");
+        assert_eq!(ellipsize("long", 1), "…");
+        assert_eq!(ellipsize("long", 0), "");
+        assert_eq!(ellipsize("fits", 4), "fits");
+    }
+    #[test]
+    fn held_wrap_uses_starting_row_in_both_directions() {
+        let rows = vec![Row::yes("First"), Row::yes("Middle"), Row::yes("Last")];
+        for previous in [false, true] {
+            for origin in 0..3 {
+                let mut options = Options {
+                    selected: origin,
+                    ..Options::default()
+                };
+                let edge = if previous { 0 } else { 2 };
+                for step in 0..10 {
+                    options.step_with_wrap(&rows, false, previous, step == 0);
+                    let expected = if origin == edge {
+                        if previous {
+                            (origin + 30 - step - 1) % 3
+                        } else {
+                            (origin + step + 1) % 3
+                        }
+                    } else if previous {
+                        origin.saturating_sub(step + 1)
+                    } else {
+                        (origin + step + 1).min(2)
+                    };
+                    assert_eq!(
+                        options.selected, expected,
+                        "origin={origin}, previous={previous}, step={step}"
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn eighteen_options_fit_twenty_two_body_rows_before_scrolling() {

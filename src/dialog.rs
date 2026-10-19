@@ -98,6 +98,7 @@ pub struct Dialog {
     pub busy: bool,
     pub compact: bool,
     pub status: Option<String>,
+    navigation: crate::widgets::SelectionNavigation,
 }
 pub enum Event {
     None,
@@ -118,6 +119,7 @@ impl Dialog {
             busy: false,
             compact: false,
             status: None,
+            navigation: crate::widgets::SelectionNavigation::default(),
         }
     }
     pub fn progress(title: &str) -> Self {
@@ -180,15 +182,17 @@ impl Dialog {
             KeyCode::PageUp if self.wrapped > self.visible => {
                 self.offset = self.offset.saturating_sub(self.visible.max(1))
             }
-            KeyCode::Up if count > 0 => {
-                if self.selected > 0 || wrap {
-                    self.selected = (self.selected + count - 1) % count;
-                }
+            KeyCode::Up | KeyCode::Down if count > 0 => {
+                self.selected = self.navigation.step(
+                    self.selected,
+                    count,
+                    key.code == KeyCode::Up,
+                    wrap,
+                    |_| true,
+                );
             }
-            KeyCode::Down | KeyCode::Tab if count > 0 => {
-                if self.selected + 1 < count || wrap || key.code == KeyCode::Tab {
-                    self.selected = (self.selected + 1) % count;
-                }
+            KeyCode::Tab if count > 0 => {
+                self.selected = (self.selected + 1) % count;
             }
             KeyCode::Enter if self.selected >= slots => {
                 let button = self.selected - slots;
@@ -238,12 +242,13 @@ impl Dialog {
             normalized.pop();
         }
         let lines = normalized;
-        let compact_scroll = self.compact && lines.len() > max_height.saturating_sub(2);
-        let reserved = if self.compact {
-            if compact_scroll { 4 } else { 2 }
+        let base_reserved = if self.compact {
+            2
         } else {
-            self.fields.len() * 3 + self.buttons.len() + if self.fields.is_empty() { 5 } else { 6 }
+            self.fields.len() * 3 + self.buttons.len() + if self.fields.is_empty() { 3 } else { 4 }
         };
+        let scroll_hint = lines.len() > max_height.saturating_sub(base_reserved);
+        let reserved = base_reserved + if scroll_hint { 2 } else { 0 };
         if width < 20 || max_height < reserved + 1 {
             self.visible = 0;
             self.wrapped = 1;
@@ -377,7 +382,7 @@ impl Dialog {
         } else {
             "Esc: Back"
         };
-        if !self.compact || compact_scroll {
+        if scroll_hint {
             canvas.text(
                 x + 2,
                 y + height - 2,
@@ -397,7 +402,9 @@ impl Dialog {
                 }
                 if matches!(cell.glyph.as_str(), "○" | "●") {
                     cell.fg = palette.accent;
-                } else if cell.fg == [238; 3] || cell.fg == [188; 3] && row != y + height - 2 {
+                } else if cell.fg == [238; 3]
+                    || cell.fg == [188; 3] && (!scroll_hint || row != y + height - 2)
+                {
                     cell.fg = palette.text;
                 }
             }
@@ -473,7 +480,7 @@ mod tests {
     fn dialog_hints_stay_readable_gray_when_the_menu_theme_animates() {
         let mut d = Dialog::new(
             "Confirm",
-            vec!["Keep history.".into()],
+            (0..50).map(|i| format!("History row {i}")).collect(),
             &["Confirm", "Cancel"],
         );
         let mut field = crate::render::Field::new(80, 24, 1967);
@@ -531,6 +538,7 @@ mod tests {
         assert!(c.cells.iter().any(|c| c.fg == INVALID));
         let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
         assert!(!text.contains("PgUp"));
+        assert!(!text.contains("Esc:"));
         d.paste("codex-personal");
         assert!(d.fields[0].valid());
     }

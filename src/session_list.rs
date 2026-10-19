@@ -2,7 +2,7 @@
 use crate::{
     render::{Accent, Canvas},
     usage::{display_name, short_name},
-    widgets::{Options, Row, clip},
+    widgets::{Options, Row, ellipsize},
 };
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
@@ -158,7 +158,7 @@ pub fn paint(
     let table_width = name_width + if show_accounts { account_width + 1 } else { 0 };
     let prefix = 1;
     for (i, session) in sessions.iter().enumerate() {
-        rows[prefix + i].label = clip(
+        rows[prefix + i].label = ellipsize(
             &display_name(session["name"].as_str().unwrap_or("Unnamed")),
             name_width,
         );
@@ -239,14 +239,34 @@ pub fn paint(
                 y,
                 &account,
                 Accent {
-                    brightness: 600,
+                    brightness: if options.selected == index
+                        && !options.back
+                        && session["availability"] == "running"
+                    {
+                        1000
+                    } else {
+                        600
+                    },
                     bold: false,
                     flash: false,
                     ..Accent::default()
                 },
             );
+            let end = x + 2 + UnicodeWidthStr::width(account.as_str());
+            if session["availability"] != "running" {
+                canvas.text(
+                    end,
+                    y,
+                    " *",
+                    crate::render::Cell {
+                        fg: crate::widgets::SECONDARY,
+                        bold: false,
+                        ..crate::render::Cell::default()
+                    },
+                    false,
+                );
+            }
             if busy(session) {
-                let end = x + 2 + UnicodeWidthStr::width(account.as_str());
                 let now_ms = canvas.theme.as_ref().map_or(0, |t| t.now);
                 let mut style = canvas.cells[y * canvas.width + end - 1].clone();
                 style.bold = true;
@@ -343,6 +363,30 @@ mod tests {
         }
     }
     #[test]
+    fn session_titles_keep_ellipsis_at_wide_and_narrow_widths() {
+        let sessions = vec![
+            json!({"name":"abcdefghijklmnopqrstuvwx", "account_id":"codex:personal", "availability":"saved"}),
+        ];
+        for width in [26, 38, 80] {
+            let mut c = Canvas::new(width, 20);
+            paint(
+                &mut c,
+                &mut Options::default(),
+                &sessions,
+                true,
+                16,
+                100,
+                19,
+            );
+            let row = c.cells[4 * width..5 * width]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>();
+            assert!(row.contains('…'), "{width}: {row}");
+            assert!(!row.contains("abcdefghijklmnop"));
+        }
+    }
+    #[test]
     fn timers_and_inactive_markers_share_hover_fallback_without_bold() {
         let sessions = vec![
             json!({"name":"abcdefghijklmnopqrstuvwx", "account_id":"codex:personal", "availability":"running", "active_since":1}),
@@ -394,6 +438,64 @@ mod tests {
         assert_eq!(duration(61), "1:01");
         assert_eq!(duration(3661), "1:01:01");
         assert_eq!(duration(90061), "1:01:01:01");
+    }
+    #[test]
+    fn account_tag_brightens_on_hover_but_stays_unbolded() {
+        for availability in ["running", "saved"] {
+            let sessions = vec![
+                json!({"name":"Session", "account_id":"codex:personal", "availability":availability}),
+            ];
+            let mut field = crate::render::Field::new(80, 20, 1967);
+            let base = field.paint(4200);
+            for (selected, back, active_brightness) in
+                [(0, false, 600), (1, false, 1000), (1, true, 600)]
+            {
+                let brightness = if availability == "running" {
+                    active_brightness
+                } else {
+                    600
+                };
+                let mut c = base.clone();
+                paint(
+                    &mut c,
+                    &mut Options {
+                        selected,
+                        back,
+                        ..Options::default()
+                    },
+                    &sessions,
+                    true,
+                    16,
+                    100,
+                    19,
+                );
+                let x = c.cells[320..400]
+                    .iter()
+                    .position(|c| c.glyph == "[")
+                    .unwrap();
+                let mut expected = base.clone();
+                expected.accent_text(
+                    x,
+                    4,
+                    "[personal]",
+                    Accent {
+                        brightness,
+                        bold: false,
+                        flash: false,
+                        ..Accent::default()
+                    },
+                );
+                assert_eq!(c.cells[320 + x].fg, expected.cells[320 + x].fg);
+                assert!(!c.cells[320 + x].bold);
+                if availability == "saved" {
+                    assert_eq!(c.cells[320 + x + 10].glyph, " ");
+                    let marker = &c.cells[320 + x + 11];
+                    assert_eq!(marker.glyph, "*");
+                    assert_eq!(marker.fg, crate::widgets::SECONDARY);
+                    assert!(!marker.bold);
+                }
+            }
+        }
     }
     #[test]
     fn account_columns_align_and_never_disappear_per_item() {

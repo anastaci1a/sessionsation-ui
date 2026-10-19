@@ -228,9 +228,11 @@ status poll.
 A cold Sessions menu contains only [new session], the dot separator and Operations;
 Loading… is a centered non-option below it. Options consume available height down
 to one blank line before controls; reserve counter/detail rows only when needed.
-Held arrows stop at boundaries. Kitty repeat/release reporting rearms wrapping on
-a fresh press. Legacy arrow bytes lack releases, so a 750 ms quiet gap separates
-gestures. Only unavailable labels are struck; bullets stay intact and unavailable
+The first arrow press moves immediately. Shared selection navigation allows a held
+direction to wrap only if its gesture began at that boundary; holds begun elsewhere
+stop there. Kitty repeat/release reporting identifies fresh presses. Legacy arrow
+bytes lack releases, so a 750 ms quiet gap separates gestures; this only classifies
+wrapping and never delays ordinary movement. Only unavailable labels are struck; bullets stay intact and unavailable
 labels never become bold.
 
 Uncertain outcomes are inspected, never replayed. Cancellation/recovery are separate backend actions.

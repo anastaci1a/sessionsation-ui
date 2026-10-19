@@ -16,22 +16,27 @@ Home orders New Session, Manage Sessions, Add Account/Manage Accounts, a dot
 separator and Settings. If every account fits above the bottom controls, accounts
 appear inline without selector circles and Add Account is available. The account/bar
 block is centered, caps bar width at 24 cells and shrinks to fit narrower popups.
-Otherwise Manage Accounts provides a scrolling list with `[add account]` first.
+Otherwise Manage Accounts provides a scrolling list with `[add account]` first,
+normal circle bullets and white/gray account-name text.
 Enabled/Disabled values share a left-aligned column. Enabled uses the selected or
 dimmed accent; Enabled* needs attention. Disabled is muted gray and has no hover
 usage panel.
-Its highlighted enabled account's usage uses the selected Home style and starts one blank line below the list, or below
+Its highlighted enabled account's usage uses white, unbolded percentage/period text
+and starts one blank line below the list, or below
 the visible-range counter when scrolling.
 Growing the screen returns that list to Home; forms remain open and Back chooses
 the appropriate current layout without losing their account selection.
 
-On Home, Right from an account with available usage selects its bars; Enter/Space
+On Home, the name selector uses `▶`. Right from an account with available usage selects its bars; Enter/Space
 opens Limits directly. Left returns to the name. Cancel, close and save retain the
 same account and bar focus. Only usage focus selects its percentages. The focused bar keeps its normal colors
 and bolds its line characters; other bars darken without adding
 another selector. A white `◀`, separated by one space, follows the first usage
 value when it has focus.
-Disabled, signed-out and unavailable-usage accounts do not offer this shortcut.
+Status-only accounts also accept Right. Their status and focused `◀` use the normal
+bullet hue, without bold. Enter/Space opens Enable for Disabled, Login for Login
+required, Restore for Deregistered, or usage details otherwise. These dialogs retain
+the account and right-side focus when closed; mutations require confirmation.
 
 Bars show remaining allowance for the periods the backend reports: 5h/weekly or
 weekly only. Capped accent lines deplete into visible gray; custom limits appear
@@ -105,8 +110,9 @@ within each group. Refreshes retain selection by stable ID. It keeps busy activi
 spinner, advancing every 100 ms after one space following the account. The timer
 follows after another space when it fits inline, otherwise uses the shared hover
 panel. Read-only state refreshes once per second, one request at a time; idle, exit,
-unknown activity or discovery failure removes the spinner. All session account tags stay at the dimmer hueshift brightness, never bold or
-marked with an asterisk. Inactive hover markers stay muted and unbolded. Timers use normal deselected gray.
+unknown activity or discovery failure removes the spinner. Active session account tags use the normal bullet hue on row hover and the dimmer
+hue otherwise. Inactive tags stay dim and show `[account] *`, with a deselected-gray
+asterisk separated by one space. Tags and asterisks are never bold. Inactive hover markers stay muted and unbolded. Timers use normal deselected gray.
 
 Errors and status notices use a centered bottom line, separated from controls by
 one blank line. Menus reserve the status lane before calculating scroll capacity.
@@ -114,8 +120,13 @@ A failed preview/mutation closes its waiting dialog and shows the error there,
 without an automatic retry.
 
 Menu bottom controls and pagination share the reference soft accent and sweep
-(55% brightness, regular weight). Dialog hints stay readable gray. Held arrows stop at menu ends; release and press again to wrap. Terminals
-without repeat/release events use a 750 ms quiet gap to distinguish gestures.
+(55% brightness, regular weight). Dialog hints stay readable gray. Held arrows wrap only if that hold began at the corresponding edge (Up at the
+top, Down at the bottom). Holds begun elsewhere stop at the edge; release and
+press again there to wrap. Home, management menus, directory pickers and dialog
+buttons share this selection-navigation implementation. Terminals
+without repeat/release events use a 750 ms quiet gap to distinguish gestures for
+wrapping. The first press always moves immediately; repeat timing comes from the
+terminal, with no UI hold-delay timer.
 Centering with Back/Close rounds
 right; six spare columns use four on the left to keep the arrow one cell from the
 edge. Options scroll only when they cannot fit with one blank line before controls;
@@ -123,7 +134,7 @@ range/detail rows reserve space only when required. Unavailable options accept
 hover/keyboard focus but cannot be activated; separators are skipped. They strike
 only their text, never the bullet, and their text never becomes bold.
 
-Informational dialogs hide their sole Esc/Close hint and shrink to their content;
+Dialogs hide their sole Esc/Close hint and shrink to their content; action buttons remain.
 scrolling dialogs retain scroll hints. Dialog items have at most one blank line
 between them. Stars never appear within text or its spaces. Fades and the vertical
 gradient blend from the terminal’s OSC 11 background reply without changing that

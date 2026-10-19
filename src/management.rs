@@ -165,20 +165,62 @@ impl Manager {
     fn usage_selectable(&self) -> bool {
         self.page == Page::Home
             && self.inline
-            && self.provider_cap("account_limits")
             && self
                 .selected_account()
                 .as_deref()
                 .and_then(|id| self.account(id))
-                .is_some_and(|a| {
-                    let u = Usage::account(a);
-                    a.id.starts_with("codex:")
-                        && !matches!(
-                            u.status.as_str(),
-                            "Disabled" | "Deregistered" | "Login required"
-                        )
-                        && u.windows.iter().any(|w| w.remaining.is_some())
-                })
+                .is_some()
+    }
+    fn show_usage(&mut self, a: &Account) {
+        let mut body = vec![a.id.clone(), Usage::account(a).status];
+        for (window, label) in [("short", "Short window"), ("weekly", "Weekly")] {
+            if !a.usage[window].is_null() {
+                body.push(format!(
+                    "{label} ({} minutes): {}% used; resets at {} (Unix seconds)",
+                    a.usage[window]["duration_minutes"],
+                    a.usage[window]["used_percent"],
+                    a.usage[window]["resets_at"]
+                ));
+            }
+        }
+        self.show("Usage details", body, &["Close"], Form::None);
+    }
+    fn show_login(&mut self, key: &str) {
+        self.show(
+            "Log in",
+            vec![format!("Start provider login for {key}?")],
+            &["Log in", "Cancel"],
+            Form::Login(key.into()),
+        );
+    }
+    fn activate_usage(&mut self) -> Vec<Intent> {
+        let key = self.selected_account().unwrap();
+        let a = self.account(&key).unwrap().clone();
+        let usage = Usage::account(&a);
+        match usage.status.as_str() {
+            "Disabled" => self.show(
+                "Enable account",
+                vec![format!("Enable {key} for session selection?")],
+                &["Enable", "Cancel"],
+                Form::Confirm(strings(&["account", "enable", &key])),
+            ),
+            "Login required" if self.provider_cap("enrollment") => self.show_login(&key),
+            "Deregistered" => self.show(
+                "Restore account",
+                vec![format!("Restore {key} to account selection?")],
+                &["Restore", "Cancel"],
+                Form::Confirm(strings(&["account", "restore", &key])),
+            ),
+            _ if !usage.status_only() && self.provider_cap("account_limits") => {
+                return self.preview(
+                    "Account limits",
+                    strings(&["account", "limits", &key]),
+                    Purpose::Limits(key),
+                );
+            }
+            _ => self.show_usage(&a),
+        }
+        vec![]
     }
     pub fn inventory(&mut self, accounts: Vec<Account>) {
         let selected = self.selected_account();
@@ -285,7 +327,7 @@ impl Manager {
                     .chain(self.accounts.iter().map(|a| {
                         let enabled =
                             a.details.get("enabled").and_then(Value::as_bool) == Some(true);
-                        Row::yes(short_name(&a.id)).account().with_column_preview(
+                        Row::yes(short_name(&a.id)).with_column_preview(
                             if enabled {
                                 if Usage::account(a).status != "Ready"
                                     || a.details
@@ -720,12 +762,7 @@ impl Manager {
             return vec![];
         }
         if self.usage_focus && self.usage_selectable() {
-            let key = self.selected_account().unwrap();
-            return self.preview(
-                "Account limits",
-                strings(&["account", "limits", &key]),
-                Purpose::Limits(key),
-            );
+            return self.activate_usage();
         }
         let index = self.options.selected;
         match self.page.clone() {
@@ -764,20 +801,7 @@ impl Manager {
                         index + 1
                     };
                 match index {
-                    0 => {
-                        let mut body = vec![a.id.clone(), Usage::account(&a).status];
-                        for (window, label) in [("short", "Short window"), ("weekly", "Weekly")] {
-                            if !a.usage[window].is_null() {
-                                body.push(format!(
-                                    "{label} ({} minutes): {}% used; resets at {} (Unix seconds)",
-                                    a.usage[window]["duration_minutes"],
-                                    a.usage[window]["used_percent"],
-                                    a.usage[window]["resets_at"]
-                                ));
-                            }
-                        }
-                        self.show("Usage details", body, &["Close"], Form::None);
-                    }
+                    0 => self.show_usage(&a),
                     1 => {
                         return self.preview(
                             "Account limits",
@@ -785,14 +809,7 @@ impl Manager {
                             Purpose::Limits(key),
                         );
                     }
-                    3 => {
-                        self.show(
-                            "Log in",
-                            vec![format!("Start provider login for {key}?")],
-                            &["Log in", "Cancel"],
-                            Form::Login(key),
-                        );
-                    }
+                    3 => self.show_login(&key),
                     4 => {
                         if a.details.get("enabled").is_some_and(|v| v == false) {
                             return self.mutate(strings(&["account", "enable", &key]));
@@ -1512,7 +1529,7 @@ impl Manager {
                     );
                 }
                 if bar >= 12 {
-                    u.paint_selected(
+                    u.paint_preview(
                         canvas,
                         canvas.width.saturating_sub(u.width(bar, u.digits())) / 2,
                         if rows.len() > capacity {
@@ -1522,7 +1539,6 @@ impl Manager {
                         },
                         bar,
                         u.digits(),
-                        true,
                     );
                 }
             }
@@ -1907,7 +1923,55 @@ mod tests {
         assert!(!m.options.back);
         m.accounts[0].details.insert("enabled".into(), json!(false));
         m.key(key(KeyCode::Right));
-        assert!(!m.usage_focus);
+        assert!(m.usage_focus);
+    }
+    #[test]
+    fn home_status_shortcuts_open_dialogs_and_preserve_focus_on_cancel() {
+        for (status, field, value, title, command) in [
+            (
+                "Disabled",
+                "enabled",
+                json!(false),
+                "Enable account",
+                "enable",
+            ),
+            (
+                "Login required",
+                "auth_required",
+                json!(true),
+                "Log in",
+                "login",
+            ),
+            (
+                "Deregistered",
+                "membership",
+                json!("removed"),
+                "Restore account",
+                "restore",
+            ),
+        ] {
+            let mut m = setup();
+            m.inline = true;
+            m.options.selected = 5;
+            m.accounts[0].details.insert(field.into(), value);
+            assert_eq!(Usage::account(&m.accounts[0]).status, status);
+            m.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+            assert!(m.usage_focus);
+            assert!(
+                m.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+                    .is_empty()
+            );
+            assert_eq!(m.dialog.as_ref().unwrap().title, title);
+            m.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            assert_eq!(m.page, Page::Home);
+            assert_eq!(m.options.selected, 5);
+            assert!(m.usage_focus);
+            m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            let sent = m.submit(0, vec![]);
+            assert!(
+                matches!(&sent[..], [Intent::Api(_, args)] if args == &strings(&["account", command, "codex:account1"]))
+            );
+        }
     }
     #[test]
     fn duplicate_account_validation_refreshes_without_io() {
@@ -2159,6 +2223,16 @@ mod tests {
         assert!(row(6).trim().is_empty());
         assert!(row(7).contains("5h"));
         assert!(row(8).contains("wk"));
+        assert!(m.rows().iter().all(|r| !r.account));
+        assert!(row(5).contains("●"));
+        assert!(!row(5).contains("▶"));
+        let name_x = row(5).find("account2").unwrap();
+        assert_eq!(canvas.cells[5 * 60 + name_x].fg, [238; 3]);
+        for y in [7, 8] {
+            let percent = row(y).chars().position(|c| c == '%').unwrap();
+            assert!(!canvas.cells[y * 60 + percent].bold);
+            assert_eq!(canvas.cells[y * 60 + percent].fg, crate::widgets::SELECTED);
+        }
         assert!(!row(13).contains('━'));
         m.paint(&mut Canvas::new(100, 40), 39);
         assert_eq!(m.page, Page::Home);

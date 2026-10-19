@@ -3,7 +3,6 @@ use crate::{
     client::Account,
     render::{Accent, Canvas, Cell},
 };
-use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 pub fn short_name(id: &str) -> String {
@@ -15,18 +14,7 @@ pub fn display_name(name: &str) -> String {
 }
 fn clipped_name(name: &str, limit: usize) -> String {
     let clean: String = name.chars().filter(|c| !c.is_control()).collect();
-    if UnicodeWidthStr::width(clean.as_str()) <= limit {
-        return clean;
-    }
-    let mut out = String::new();
-    for g in clean.graphemes(true) {
-        if UnicodeWidthStr::width(out.as_str()) + UnicodeWidthStr::width(g) > limit - 1 {
-            break;
-        }
-        out.push_str(g);
-    }
-    out.push('…');
-    out
+    crate::widgets::ellipsize(&clean, limit)
 }
 
 #[derive(Clone, Debug)]
@@ -94,8 +82,14 @@ impl Usage {
             stale,
         }
     }
+    pub fn status_only(&self) -> bool {
+        matches!(
+            self.status.as_str(),
+            "Disabled" | "Login required" | "Deregistered"
+        ) || self.windows.iter().all(|w| w.remaining.is_none())
+    }
     pub fn height(&self) -> usize {
-        if self.status == "Disabled" || self.status == "Login required" {
+        if self.status_only() {
             1
         } else {
             self.windows.len().max(1)
@@ -113,7 +107,7 @@ impl Usage {
         }
     }
     pub fn width(&self, bar: usize, digits: usize) -> usize {
-        if self.windows.is_empty() || self.status == "Disabled" || self.status == "Login required" {
+        if self.status_only() {
             UnicodeWidthStr::width(self.status.as_str())
         } else {
             bar + digits + 5 + if self.stale { 6 } else { 0 }
@@ -131,6 +125,19 @@ impl Usage {
         digits: usize,
     ) {
         self.paint_selected(canvas, x, y, bar, digits, true);
+        if self.status_only() {
+            canvas.accent_text(
+                x + self.width(bar, digits),
+                y,
+                " ◀",
+                Accent {
+                    bold: false,
+                    flash: false,
+                    ..Accent::default()
+                },
+            );
+            return;
+        }
         for row in 0..self.windows.len() {
             for col in x..(x + bar).min(canvas.width) {
                 if y + row >= canvas.height {
@@ -185,6 +192,22 @@ impl Usage {
             }
         }
     }
+    pub fn paint_preview(
+        &self,
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        bar: usize,
+        digits: usize,
+    ) {
+        self.paint_selected(canvas, x, y, bar, digits, true);
+        for row in y..(y + self.height()).min(canvas.height) {
+            for col in (x + bar).min(canvas.width)..(x + self.width(bar, digits)).min(canvas.width)
+            {
+                canvas.cells[row * canvas.width + col].bold = false;
+            }
+        }
+    }
     pub fn paint_selected(
         &self,
         canvas: &mut Canvas,
@@ -194,27 +217,15 @@ impl Usage {
         digits: usize,
         selected: bool,
     ) {
-        if self.status == "Disabled" {
-            canvas.text(
-                x,
-                y,
-                &self.status,
-                Cell {
-                    fg: crate::widgets::MUTED,
-                    ..Cell::default()
-                },
-                false,
-            );
-            return;
-        }
-        if self.windows.is_empty() || self.status == "Login required" {
+        if self.status_only() {
             canvas.accent_text(
                 x,
                 y,
                 &self.status,
                 Accent {
-                    brightness: if selected { 1000 } else { 600 },
+                    brightness: 1000,
                     bold: false,
+                    flash: false,
                     ..Accent::default()
                 },
             );
@@ -379,7 +390,7 @@ impl AccountsLayout {
         for (index, account) in accounts.iter().enumerate() {
             let active = selected == Some(index) && !back;
             if active && !usage_focus {
-                canvas.accent_text(self.left, y, "▸", Accent::default());
+                canvas.accent_text(self.left, y, "▶", Accent::default());
             }
             canvas.accent_text(
                 self.left + 2,
@@ -449,6 +460,40 @@ mod tests {
         }
     }
     #[test]
+    fn status_focus_has_matching_accent_triangle_without_bars_or_white_text() {
+        let mut field = crate::render::Field::new(60, 8, 1967);
+        for status in [
+            "Disabled",
+            "Login required",
+            "Deregistered",
+            "Usage unavailable",
+        ] {
+            let u = Usage {
+                status: status.into(),
+                windows: vec![],
+                stale: false,
+            };
+            let mut c = field.paint(4200);
+            let mut expected = c.clone();
+            u.paint_focused(&mut c, 2, 2, 20, 2);
+            let end = 2 + UnicodeWidthStr::width(status);
+            assert_eq!(c.cells[120 + end].glyph, " ");
+            assert_eq!(c.cells[120 + end + 1].glyph, "◀");
+            expected.accent_text(
+                end,
+                2,
+                " ◀",
+                Accent {
+                    bold: false,
+                    flash: false,
+                    ..Accent::default()
+                },
+            );
+            assert_eq!(expected.cells[120 + end + 1], c.cells[120 + end + 1]);
+            assert!(!c.cells[122].bold);
+        }
+    }
+    #[test]
     fn selected_usage_labels_and_account_status_colors_have_distinct_rules() {
         let mut a = account();
         let u = Usage::account(&a);
@@ -461,7 +506,18 @@ mod tests {
         assert_eq!(u.height(), 1);
         let mut c = Canvas::new(60, 5);
         u.paint_selected(&mut c, 1, 1, 20, 3, true);
-        assert_eq!(c.cells[61].fg, crate::widgets::MUTED);
+        let mut expected = Canvas::new(60, 5);
+        expected.accent_text(
+            1,
+            1,
+            "Disabled",
+            Accent {
+                bold: false,
+                flash: false,
+                ..Accent::default()
+            },
+        );
+        assert_eq!(c.cells[61].fg, expected.cells[61].fg);
         assert!(!c.cells[61].bold);
         assert!(c.cells.iter().all(|c| c.glyph != "━"));
         assert_eq!(display_name("abcdefghijklmnopqrstuvwx"), "abcdefghijklmno…");

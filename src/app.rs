@@ -1249,6 +1249,50 @@ mod tests {
         app.key(up);
         assert_eq!(app.manager.options.selected, 4);
     }
+    #[test]
+    fn home_last_account_wraps_on_fresh_down_and_hold_uses_its_origin() {
+        use crossterm::event::KeyEventKind;
+        let mut app = app();
+        app.inventory(
+            vec![
+                serde_json::from_value(
+                    json!({"id":"codex:work", "enabled":true, "selectable":true, "usage":{}}),
+                )
+                .unwrap(),
+            ],
+            vec![],
+            100,
+        );
+        app.manager
+            .paint(&mut crate::render::Canvas::new(100, 40), 39);
+        assert!(app.manager.inline);
+        let last = app.manager.rows().len() - 1;
+        assert_eq!(last, 5);
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        let repeat = |mut key: KeyEvent| {
+            key.kind = KeyEventKind::Repeat;
+            key
+        };
+        let release = |mut key: KeyEvent| {
+            key.kind = KeyEventKind::Release;
+            key
+        };
+        app.manager.options.selected = last - 1;
+        app.key(down);
+        for _ in 0..20 {
+            app.key(repeat(down));
+        }
+        assert_eq!(app.manager.options.selected, last);
+        app.key(release(down));
+        app.key(down);
+        assert_eq!(app.manager.options.selected, 0);
+        app.key(release(down));
+        app.key(up);
+        assert_eq!(app.manager.options.selected, last);
+        app.key(repeat(up));
+        assert_eq!(app.manager.options.selected, last - 1);
+    }
     fn app() -> App {
         App::new(
             Preferences::default(),
