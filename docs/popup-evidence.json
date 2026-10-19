@@ -2,7 +2,7 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "5ae5ffafcd40082a349194665c839566732afe94",
+    "ui": "ea369cd68f1ab6e30f46f465e15630199c5f46bb",
     "backend": "51764d216830bb9623c877abb2ef325d1c2231fd",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
