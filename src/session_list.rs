@@ -20,17 +20,19 @@ pub enum Action {
     Restore,
     Unavailable,
 }
-fn archive_row(s: &Value) -> Row {
-    let row = Row::gate("Archive Session", s["capabilities"]["archive"] == true);
+fn session_gate(s: &Value, label: &str, capability: &str) -> Row {
+    let row = Row::gate(label, s["capabilities"][capability] == true);
     if row.enabled {
         return row;
     }
     let reason = if s["pending_operation_id"].is_string() {
         "operation active"
-    } else if s["availability"] == "archived" {
+    } else if capability == "archive" && s["availability"] == "archived" {
         "already archived"
     } else if s["availability"] == "running" {
         "end session first"
+    } else if s["attachment"].is_object() {
+        "host unavailable"
     } else {
         "unavailable"
     };
@@ -47,11 +49,11 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
             ),
             (Row::yes("Session Details"), Action::Details),
             (Row::separator(), Action::Unavailable),
-            (archive_row(s), Action::Archive),
             (
-                Row::gate("Delete Session", c["delete"] == true),
-                Action::Delete,
+                session_gate(s, "Archive Session", "archive"),
+                Action::Archive,
             ),
+            (session_gate(s, "Delete Session", "delete"), Action::Delete),
         ];
     }
     let inactive = s["availability"] != "running";
@@ -91,11 +93,11 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     if inactive {
         rows.extend([
             (Row::separator(), Action::Unavailable),
-            (archive_row(s), Action::Archive),
             (
-                Row::gate("Delete Session", c["delete"] == true),
-                Action::Delete,
+                session_gate(s, "Archive Session", "archive"),
+                Action::Archive,
             ),
+            (session_gate(s, "Delete Session", "delete"), Action::Delete),
         ]);
         return rows;
     }
@@ -124,13 +126,11 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
         ),
         (Row::gate("End session", c["stop"] == true), Action::Stop),
         (Row::separator(), Action::Unavailable),
-        (archive_row(s), Action::Archive),
         (
-            Row::gate("Delete Session", c["delete"] == true)
-                .with_selected_preview("(end session first)")
-                .preview_gap(1),
-            Action::Delete,
+            session_gate(s, "Archive Session", "archive"),
+            Action::Archive,
         ),
+        (session_gate(s, "Delete Session", "delete"), Action::Delete),
         (Row::separator(), Action::Unavailable),
         (
             Row::gate("Experimental auto-start after reset", false),
@@ -153,6 +153,7 @@ fn resume_reason(s: &Value, supported: bool) -> &'static str {
     match s["resume_block_reason"].as_str() {
         Some("unknown_account") => "unknown account",
         Some("history_unavailable") => "history unavailable",
+        Some("host_unavailable") => "host unavailable",
         Some("already_running") => "already running",
         Some("moving") => "moving",
         Some("missing_directory") => "missing directory",
@@ -260,7 +261,9 @@ pub fn paint_with_archives(
             &display_name(session["name"].as_str().unwrap_or("Unnamed")),
             name_width,
         );
-        let suffix = if session["availability"] != "running" {
+        let suffix = if session["availability"] != "running" && session["attachment"].is_object() {
+            "(host unavailable)".into()
+        } else if session["availability"] != "running" {
             "(inactive)".to_owned()
         } else if let Some(start) = session["active_since"].as_i64() {
             format!("({})", duration(now - start))
@@ -352,6 +355,7 @@ pub fn paint_with_archives(
             );
             let end = x + 2 + UnicodeWidthStr::width(account.as_str());
             if session["availability"] != "running"
+                && !session["attachment"].is_object()
                 && !(options.selected == index
                     && options.preview_visible
                     && !Options::previews_detached(canvas.width, &rows))
@@ -385,6 +389,16 @@ pub fn paint_with_archives(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn unobserved_live_attachments_explain_the_host_gate() {
+        let s = serde_json::json!({"availability":"unavailable","attachment":{"host":"herdr"},"resume_block_reason":"host_unavailable","capabilities":{}});
+        for (row, action) in actions(&s, true) {
+            if matches!(action, Action::Resume | Action::Archive | Action::Delete) {
+                assert!(!row.enabled);
+                assert_eq!(row.preview.as_deref(), Some("(host unavailable)"));
+            }
+        }
+    }
     #[test]
     fn empty_session_menu_has_only_operations_and_archives_are_conditional() {
         assert_eq!(

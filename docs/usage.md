@@ -62,6 +62,7 @@ Dialogs cover the animated star field without changing its generation or lifetim
 closing a dialog reveals the continuing animation. Valid confirmation does not
 require scrolling explanatory text to the bottom.
 Menus initially focus the first non-separator option, even if unavailable.
+An attachment whose host cannot be confirmed shows `(host unavailable)` rather than being labelled inactive; its lifecycle actions remain gated until positive observation returns.
 Session action hints such as `(tmux)` or `(missing directory)` appear only on
 hover and hide on Back; resume reasons come from the public CLI state.
 The inactive asterisk remains on its session row when the parenthetical moves
