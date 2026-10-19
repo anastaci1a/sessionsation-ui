@@ -16,6 +16,23 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
   t.wait('fixture');t.drain()
   assert t.screen.contains('Add Account') and not t.screen.contains('Manage Accounts')
  finally:t.close()
+ # The configured host prefix closes every screen, including editors and dialogs.
+ prefix_config=root/'herdr-prefix.toml';prefix_config.write_text('[keys]\nprefix="ctrl+a"\n')
+ previous_config=os.environ.get('HERDR_CONFIG_PATH');os.environ['HERDR_CONFIG_PATH']=str(prefix_config)
+ try:
+  for sequence,expected in [(b'', 'New Session'),(b'\r','Account:'),(b'\r\x1b[B\x1b[B\r','Session name'),(b'\x1b[B\x1b[B\r','Codex account name')]:
+   t=Terminal(root)
+   try:
+    t.wait('New Session');t.drain()
+    if sequence:t.send(sequence);t.wait(expected);t.drain()
+    t.send(b'\x02');time.sleep(.03);t.drain();assert t.process.poll() is None,'unconfigured Ctrl-B closed popup'
+    t.send(b'\x01');until=time.monotonic()+2
+    while t.process.poll() is None and time.monotonic()<until:t.drain();time.sleep(.01)
+    assert t.process.poll()==0,'configured prefix failed to close popup'
+   finally:t.close()
+ finally:
+  if previous_config is None:os.environ.pop('HERDR_CONFIG_PATH',None)
+  else:os.environ['HERDR_CONFIG_PATH']=previous_config
  # Native terminal cursor: hidden on menus, visible in the editor, Unicode-aware.
  t=Terminal(root)
  try:

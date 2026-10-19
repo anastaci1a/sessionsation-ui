@@ -308,6 +308,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
         "A terminal is required; use sessionsation api for machine access"
     );
     let client = Client::load()?;
+    let prefixes = sessionsation_ui::host_keys::Prefixes::load();
     let pref =
         preferences.unwrap_or_else(|| sessionsation_ui::client::preferences_path(&config_path()));
     let prefs = Preferences::load(&pref)?;
@@ -434,7 +435,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
          _=receipt.tick(),if app.request.is_some()&&!app.success&&receipt_pending.as_deref()!=app.request.as_ref().and_then(|r|r["request_id"].as_str())=>{receipt_pending=app.request.as_ref().and_then(|r|r["request_id"].as_str()).map(str::to_owned);effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
          message=rx.recv()=>match message.context("Input channel closed")? {
          Message::Background(color)=>{app.terminal_background=color;app.dirty=true;},
-         Message::Input(Event::Key(k))=>{next=app.key(k);},
+         Message::Input(Event::Key(k))=>{if prefixes.matches(k){app.exit=true;}else{next=app.key(k);}},
           Message::Input(Event::Paste(s))=>{next=app.paste(&s);},
           Message::Input(Event::Resize(w,h))=>{dimensions=(w as usize,h as usize);app.dirty=true;},
           Message::Input(Event::FocusGained)=>{app.dirty=true;},Message::Input(_)=>{},

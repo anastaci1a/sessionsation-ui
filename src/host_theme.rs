@@ -1,7 +1,6 @@
 //! Read-only HERDR theme adapter. The current server offers no resolved-palette API.
 use crate::dialog::Palette;
 use anyhow::{Context, Result};
-use std::path::PathBuf;
 fn color(v: &toml::Value) -> Option<[u8; 3]> {
     let s = v.as_str()?.strip_prefix('#')?;
     if s.len() != 6 || !s.is_ascii() {
@@ -78,16 +77,7 @@ pub fn parse(text: &str) -> Result<(Palette, Option<String>)> {
     ))
 }
 pub fn load() -> Result<(Palette, Option<String>)> {
-    let path = std::env::var_os("HERDR_CONFIG_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let base = std::env::var_os("XDG_CONFIG_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
-                });
-            base.join("herdr/config.toml")
-        });
+    let path = crate::host_config::path();
     parse(&std::fs::read_to_string(path).context("HERDR theme could not be read")?)
 }
 #[cfg(test)]

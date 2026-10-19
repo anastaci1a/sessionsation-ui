@@ -163,8 +163,14 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-popup-host-') as tmp:
    while select.select([master],[],[],.01)[0]:screen.feed(os.read(master,65536))
    (root/'popup.json').unlink(missing_ok=True);start=time.perf_counter();key(b'\x02L');wait('Settings');key_samples.append((time.perf_counter()-start)*1000)
    dismiss()
+  # Host prefix is delivered to the popup: it must close from menus and editors.
+  for sequence,label in [(b'', 'Settings'),(b'\r','Account:'),(b'\r\x1b[B\x1b[B\r','Session name')]:
+   (root/'popup.json').unlink(missing_ok=True);host('plugin','action','invoke','sessionsation.launcher');wait('Settings')
+   if sequence:key(sequence);wait(label);pump(.08)
+   key(b'\x02');wait_closed();pump(.1)
+  assert host('pane','process-info','--pane',origin_pane)['process_info']['shell_pid']==origin_pid
   key_samples.sort()
-  print(json.dumps({'keybind_startup':{'samples':len(key_samples),'p50_ms':key_samples[10],'p95_ms':key_samples[19],'max_ms':max(key_samples)},'first_press_ms':first_press_ms,'installed_herdr':host('--version') if False else '0.9.5','plugin_to_first_paint_ms':elapsed,'popup_size':popup['size'],'checks':['origin context without pane ID','90% width / 65% height popup','ui_busy refusal','first press moves before repeat/release','Home/End jump to first/last option','held arrows and release/press wrap through installed HERDR','mixed ordinary/enhanced repeats clamp both boundaries; unrelated release does not rearm','real host resize preserves draft','selected destination normal tab','staged directory','exact name/account','focus then popup exit','second popup cancel preserves new terminal','origin shell unchanged'],'models':0},indent=2))
+  print(json.dumps({'keybind_startup':{'samples':len(key_samples),'p50_ms':key_samples[10],'p95_ms':key_samples[19],'max_ms':max(key_samples)},'first_press_ms':first_press_ms,'installed_herdr':host('--version') if False else '0.9.5','plugin_to_first_paint_ms':elapsed,'popup_size':popup['size'],'checks':['origin context without pane ID','90% width / 65% height popup','ui_busy refusal','first press moves before repeat/release','Home/End jump to first/last option','held arrows and release/press wrap through installed HERDR','mixed ordinary/enhanced repeats clamp both boundaries; unrelated release does not rearm','real host resize preserves draft','selected destination normal tab','staged directory','exact name/account','focus then popup exit','second popup cancel preserves new terminal','host prefix closes Home, summary and editor','origin shell unchanged'],'models':0},indent=2))
  finally:
   host('server','stop')
   if client is not None:

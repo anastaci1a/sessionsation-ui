@@ -59,7 +59,11 @@ not a supervisor upgrade or data-root migration.
 
 Name, account, Space and directory choices open flat themed popups over the current
 configuration screen. Back/Esc restores the opening option and picker position;
-only the current editor owns the terminal cursor. Nested directory/Space creation
+only the current editor owns the terminal cursor. Pressing any configured HERDR
+prefix closes the popup directly from any screen or dialog, without stopping an
+agent or cancelling a backend operation. Prefixes are read from the same HERDR
+configuration as the theme when opening the popup; absent/invalid bindings use
+HERDR’s default Ctrl-B. Nested directory/Space creation
 remains staged until Start. Popup dimensions are measured on opening and remain
 stable through navigation, loading and status changes; terminal resize refits them.
 Short pickers fit their contents with room for expanded Back when possible; long
@@ -80,9 +84,6 @@ case and a blank bullet spacer.
 - Idle Pause is hidden; busy Pause remains unavailable pending public integration.
   Provider-login cancellation is also unfinished: closing the login viewer does
   not cancel a provider-owned login.
-- HERDR 0.9.5 routes all input to an open popup before its configured prefix.
-  Closing the popup and entering the client prefix menu with one press requires
-  a HERDR client change; its public socket API does not expose prefix mode.
 - HERDR's outer popup border cannot follow the animated status bar in 0.9.5.
   Built-in fixed themes/RGB overrides are supported; dynamic/terminal themes use
   an explicit approximation because no resolved runtime palette API is available.

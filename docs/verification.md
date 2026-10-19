@@ -107,7 +107,7 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 ## Verification record and limits
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **157 Rust tests** (155 unit and two visual tests covering
+passed formatting, Clippy, **159 Rust tests** (157 unit and two visual tests covering
 23 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
@@ -121,14 +121,18 @@ tests cover editor focus, Unicode positions, overlay ownership and visibility
 without shape/color changes or per-frame visibility toggling. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
-The artifact used for the owned terminal/HERDR checks and README capture has SHA-256
+The README capture uses SHA-256
 `dc0a7f7c03b3ac9343fc79cec79887666e3ff5d8354ecc4e5dac2c1598419f58`.
-The three PTY scripts and owned
-HERDR popup test passed against this artifact, including summary-preserving editor
+The prefix-closing follow-up retains that visual layout. Its tested artifact is
+`767c6fa8dc72a2e693b62756754631b5c52dde0da37f9e0302da186a1f06e960`;
+all three PTY scripts and the owned HERDR popup test passed against it, including summary-preserving editor
 popups, stable geometry through focus/status/loading, pinned directory actions,
 new-directory selection defaults, empty-directory parent actions and directory-only
 browse shortcuts, inactive account-label hiding and independent preview fit, Space lookup cancellation,
 confirmation, one captured-generation mutation and return to the selected session.
+Configured-prefix tests close Home, summary, editor and dialog screens; an
+unconfigured Ctrl-B does not close a Ctrl-A-configured popup. Owned HERDR checks
+verify default-prefix closing with the origin shell unchanged.
 Installation promotion selects an immutable tested binary for future popups;
 already-running viewers and downstream pins are retained.
 The capability-gated Focus regression verifies two direct attachment checks,
