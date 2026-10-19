@@ -250,9 +250,9 @@ impl Client {
         let out = tokio::time::timeout(
             Duration::from_secs(10),
             tokio::process::Command::new(&self.herdr)
-                .args(["--session", &self.session])
                 .args(args)
                 .env("HERDR_SOCKET_PATH", &self.socket)
+                .env("HERDR_SESSION", &self.session)
                 .stdin(Stdio::null())
                 .kill_on_drop(true)
                 .output(),
@@ -299,6 +299,25 @@ fn refresh_resume_request(request: &mut Value, snapshot: &Value, fresh: &Value) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn explicit_host_socket_is_not_overridden_by_a_session_selector() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let herdr = tmp.path().join("herdr");
+        std::fs::write(&herdr,"#!/bin/sh\n[ \"$1\" = workspace ] || exit 1\n[ \"$HERDR_SOCKET_PATH\" = /chosen.sock ] || exit 2\n[ \"$HERDR_SESSION\" = named ] || exit 3\nprintf '%s\\n' '{\"result\":{\"selected\":true}}'\n").unwrap();
+        std::fs::set_permissions(&herdr, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let client = Client {
+            binary: "unused".into(),
+            root: tmp.path().into(),
+            herdr,
+            socket: "/chosen.sock".into(),
+            session: "named".into(),
+        };
+        assert_eq!(
+            client.host(&["workspace", "list"]).await.unwrap()["selected"],
+            true
+        );
+    }
     #[test]
     fn resume_refresh_preserves_destination_and_rejects_changed_source() {
         let snapshot = json!({"id":"stable","conversation_id":"thread","account_id":"codex:original","directory":"/saved","name":"Original"});
