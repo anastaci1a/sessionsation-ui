@@ -20,3 +20,5 @@ pub mod session_list;
 pub mod terminal_color;
 
 pub mod navigation;
+
+pub mod messages;

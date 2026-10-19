@@ -42,7 +42,10 @@ pub fn reconciliation_message(error: &str) -> String {
     if error.starts_with("SESSION_STATE_UNVERIFIED") || error.starts_with("STALE_TARGET") {
         "Checking session state…".into()
     } else {
-        format!("{error}; reconciling original request")
+        format!(
+            "{}; checking original request",
+            crate::messages::describe(error)
+        )
     }
 }
 fn resume_explanation(error: &str) -> String {

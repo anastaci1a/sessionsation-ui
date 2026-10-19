@@ -87,6 +87,7 @@ pub struct Manager {
     pub active_operation: Option<String>,
     foreground: Option<u64>,
     details_open: bool,
+    session_return: Option<String>,
     observe_after: Option<std::time::Instant>,
 }
 impl Default for Manager {
@@ -115,6 +116,7 @@ impl Default for Manager {
             active_operation: None,
             foreground: None,
             details_open: false,
+            session_return: None,
             observe_after: None,
         }
     }
@@ -767,6 +769,16 @@ impl Manager {
         self.form = form;
     }
     fn mutate(&mut self, args: Vec<String>) -> Vec<Intent> {
+        self.session_return = args.windows(2).find(|w| w[0] == "--session").map(|w| {
+            if matches!(
+                args.first().map(String::as_str),
+                Some("archive-session" | "delete-session")
+            ) {
+                String::new()
+            } else {
+                w[1].clone()
+            }
+        });
         self.details_open = false;
         self.dialog = Some(Dialog::progress("Operation progress"));
         self.form = Form::Progress;
@@ -782,6 +794,16 @@ impl Manager {
         request
     }
     pub fn switch_confirmation(&mut self, s: Value, account: &str) {
+        // Account selection may outlive several state polls. Confirm the current
+        // attachment explicitly, then retain that generation through submission.
+        let Some(s) = self.session(id(&s)).cloned() else {
+            self.note = "SESSION_NOT_FOUND".into();
+            return;
+        };
+        if s["capabilities"]["switch_account"] != true {
+            self.note = "The session is not currently available for account switching. Review its state in Manage Sessions.".into();
+            return;
+        }
         let mut args = Self::target(&s, "switch");
         args.extend(strings(&["--to", account]));
         self.confirm("Switch account",vec![format!("Move {} to {} while retaining conversation history? The backend waits for safe idle; it never steers.",s["name"].as_str().unwrap_or("session"),account)],args);
@@ -791,7 +813,13 @@ impl Manager {
             && !self.usage_focus
             && !self.details_open
         {
-            self.go(Page::Home);
+            if let Some(key) = self.session_return.take() {
+                self.go(Page::Sessions);
+                self.options.selected =
+                    self.sessions.iter().position(|s| id(s) == key).unwrap_or(0);
+            } else {
+                self.go(Page::Home);
+            }
         }
         self.dialog = None;
         self.form = Form::None;
@@ -2065,6 +2093,34 @@ mod tests {
         assert_eq!(m.sessions[m.options.selected]["id"], "saved");
     }
     #[test]
+    fn switching_confirms_latest_snapshot_and_progress_returns_to_sessions() {
+        let mut m = setup();
+        let old = json!({"id":"two","name":"Earlier","generation":"old"});
+        m.sessions = vec![
+            json!({"id":"one"}),
+            json!({"id":"two","name":"Current","generation":"fresh","capabilities":{"switch_account":true}}),
+        ];
+        m.switch_confirmation(old, "codex:account2");
+        assert!(m.dialog.as_ref().unwrap().body[0].contains("Current"));
+        let sent = m.submit(0, vec![]);
+        let Intent::Api(_, args) = &sent[0] else {
+            panic!()
+        };
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--expected-generation", "fresh"])
+        );
+        m.submit(0, vec![]);
+        assert_eq!(m.page, Page::Sessions);
+        assert_eq!(m.options.selected, 1);
+        for command in ["archive-session", "delete-session"] {
+            m.mutate(strings(&[command, "--session", "two"]));
+            m.submit(0, vec![]);
+            assert_eq!(m.page, Page::Sessions);
+            assert_eq!(m.options.selected, 0);
+        }
+    }
+    #[test]
     fn stale_target_uses_centered_status_lane_and_reserves_menu_space() {
         let mut m = setup();
         m.page = Page::Accounts;
@@ -2086,8 +2142,8 @@ mod tests {
             .iter()
             .map(|c| c.glyph.as_str())
             .collect::<String>();
-        assert_eq!(row.trim(), "STALE_TARGET");
-        assert!(row.starts_with(&" ".repeat((40 - 12) / 2)));
+        assert!(row.contains("session changed"));
+        assert!(row.starts_with(' '));
         assert!(m.options.scroll < m.rows().len());
         assert!(c.cells.iter().any(|c| c.glyph == "1"));
     }

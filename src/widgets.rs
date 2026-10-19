@@ -417,7 +417,10 @@ pub fn paint_hint(canvas: &mut Canvas, x: usize, y: usize, text: &str) {
 }
 /// Shared one-line status lane with one blank row before the actual controls.
 pub fn paint_status(canvas: &mut Canvas, controls_start: usize, text: &str) {
-    let text = clip(text, canvas.width.saturating_sub(2));
+    let text = clip(
+        &crate::messages::describe(text),
+        canvas.width.saturating_sub(2),
+    );
     let width = UnicodeWidthStr::width(text.as_str());
     canvas.text(
         canvas.width.saturating_sub(width) / 2,

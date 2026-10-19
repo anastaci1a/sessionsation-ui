@@ -232,10 +232,13 @@ impl Dialog {
         let mut lines: Vec<_> = self
             .body
             .iter()
-            .flat_map(|l| wrap(l, width.saturating_sub(4)))
+            .flat_map(|l| wrap(&crate::messages::describe(l), width.saturating_sub(4)))
             .collect();
         if let Some(status) = &self.status {
-            lines.extend(wrap(status, width.saturating_sub(4)));
+            lines.extend(wrap(
+                &crate::messages::describe(status),
+                width.saturating_sub(4),
+            ));
         }
         let mut normalized = Vec::new();
         for line in lines {
