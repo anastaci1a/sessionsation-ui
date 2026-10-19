@@ -278,7 +278,7 @@ impl Manager {
         self.page = page;
         self.usage_focus = false;
         self.options = Options::default();
-        self.options.selected = self.rows().iter().position(|r| r.enabled).unwrap_or(0);
+        self.options.selected = self.rows().iter().position(|r| !r.separator).unwrap_or(0);
         self.note.clear();
     }
     fn account_back(&mut self, key: &str) {
@@ -1564,6 +1564,21 @@ impl Manager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn session_menu_initially_focuses_unavailable_first_action() {
+        let mut m = setup();
+        for availability in ["running", "unavailable"] {
+            m.sessions = vec![
+                json!({"id":"blocked","availability":availability,"attachment":{"host":"tmux"},"capabilities":{"resume":false}}),
+            ];
+            m.go(Page::Session("blocked".into()));
+            assert_eq!(m.options.selected, 0);
+            assert!(!m.rows()[0].enabled);
+            assert!(m.activate().is_empty());
+            m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+            assert_eq!(m.options.selected, 1);
+        }
+    }
     #[test]
     fn operations_share_creation_order_status_columns_and_id_presentation() {
         let mut m = setup();

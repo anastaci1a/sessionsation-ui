@@ -26,18 +26,24 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     );
     let focus = if s["availability"] == "running" && s["attachment"]["host"] == "tmux" {
         focus
-            .with_column_preview("(tmux)", 16, false)
+            .with_selected_preview("(tmux)")
             .preview_gap(1)
             .preview_color(crate::widgets::SECONDARY)
     } else {
         focus
     };
+    let start = Row::gate("Start Session", resume && c["resume"] == true);
+    let start = if start.enabled {
+        start
+    } else {
+        start
+            .with_selected_preview(format!("({})", resume_reason(s, resume)))
+            .preview_gap(1)
+            .preview_color(crate::widgets::SECONDARY)
+    };
     let mut rows = vec![
         if inactive {
-            (
-                Row::gate("Start Session", resume && c["resume"] == true),
-                Action::Resume,
-            )
+            (start, Action::Resume)
         } else {
             (focus, Action::Focus)
         },
@@ -93,6 +99,22 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
         ),
     ]);
     rows
+}
+fn resume_reason(s: &Value, supported: bool) -> &'static str {
+    if !supported {
+        return "unsupported";
+    }
+    match s["resume_block_reason"].as_str() {
+        Some("unknown_account") => "unknown account",
+        Some("history_unavailable") => "history unavailable",
+        Some("already_running") => "already running",
+        Some("moving") => "moving",
+        Some("missing_directory") => "missing directory",
+        Some("history_busy") => "history busy",
+        Some("unfinished_history") => "unfinished history",
+        Some("conflicting_history") => "conflicting history",
+        _ => "unverified history",
+    }
 }
 pub fn duration(seconds: i64) -> String {
     let s = seconds.max(0);
@@ -312,6 +334,49 @@ mod tests {
         );
         assert_eq!(rows[0].0.preview.as_deref(), Some("(tmux)"));
         assert_eq!(rows[0].0.preview_fg, crate::widgets::SECONDARY);
+    }
+    #[test]
+    fn action_reasons_are_short_selected_only_and_hide_on_back() {
+        for (session, expected) in [
+            (
+                json!({"availability":"running","attachment":{"host":"tmux"}}),
+                "(tmux)",
+            ),
+            (
+                json!({"availability":"unavailable","resume_block_reason":"missing_directory"}),
+                "(missing directory)",
+            ),
+            (
+                json!({"availability":"unavailable","resume_block_reason":"future"}),
+                "(unverified history)",
+            ),
+        ] {
+            let rows: Vec<_> = actions(&session, true)
+                .into_iter()
+                .map(|(row, _)| row)
+                .collect();
+            for width in [30, 80] {
+                for (selected, back) in [(0, false), (1, false), (0, true)] {
+                    let mut canvas = Canvas::new(width, 30);
+                    let mut options = Options {
+                        selected,
+                        back,
+                        ..Options::default()
+                    };
+                    options.paint_menu(&mut canvas, &rows, 3, 26, 29);
+                    let text = canvas
+                        .cells
+                        .iter()
+                        .map(|c| c.glyph.as_str())
+                        .collect::<String>();
+                    assert_eq!(text.contains(expected), selected == 0 && !back);
+                    for cell in canvas.cells.iter().filter(|c| c.glyph == "(") {
+                        assert_eq!(cell.fg, crate::widgets::SECONDARY);
+                        assert!(!cell.bold);
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn reference_spinner_is_persistent_but_disappears_on_idle_exit_or_unknown() {
