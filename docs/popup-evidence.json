@@ -2,13 +2,13 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "1468c7d45f8fc91e1ce526e3ac9641fc8851e671",
+    "ui": "cf10e741c0699199c7836f59d2559b61e7556ad0",
     "backend": "aea768160343b21e575e12394c5662f049d50433",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
   "checks": {
     "rust": {
-      "unit_passed": 99,
+      "unit_passed": 100,
       "visual_snapshot_test_passed": 2,
       "golden_frames": 21,
       "failed": 0,
@@ -124,7 +124,8 @@
       "second popup cancel preserves new terminal",
       "origin shell unchanged"
     ],
-    "models": 0
+    "models": 0,
+    "source_ui": "1468c7d45f8fc91e1ce526e3ac9641fc8851e671"
   },
   "frames": [
     {
@@ -184,7 +185,8 @@
     "Shared list and dialog navigation: hold-origin wrapping, immediate first press, Home/End boundaries without footer hints",
     "Compact Manage Accounts uses normal circle bullets and white/gray names; usage text unbolded",
     "Home status focus opens Enable/Login/Restore confirmations and preserves focus",
-    "Ellipsis survives responsive title reclipping; sole Esc dialog hint hidden"
+    "Ellipsis survives responsive title reclipping; sole Esc dialog hint hidden",
+    "Home focus dims other account names or other text statuses with existing 600/1000 accent brightness; focus exit restores colors across animation phases"
   ],
   "management": {
     "passed": true,
@@ -199,7 +201,8 @@
       "TTY restoration",
       "fast deletion intent and one confirmed CLI admission; detach never cancels/resends"
     ],
-    "models": 0
+    "models": 0,
+    "source_ui": "1468c7d45f8fc91e1ce526e3ac9641fc8851e671"
   },
   "limitations": [
     "No live model/account mutation acceptance",
