@@ -75,7 +75,9 @@ push trigger, or repeated-generation loop. The [hosted workflow](https://github.
 Review `.demo/output/contact-sheet.png`, watch `demo.gif` through the complete
 loop, and inspect `demo-evidence.json` before copying anything into docs. The driver
 asserts a single synthetic launch, staged directories, selected-Space focus and
-popup exit. It caps the GIF at 2 MB/30 seconds and repeats the genuine initial
+popup exit. Keys pause 450 ms, typing takes 100 ms per character, and screens have
+1.2–3 second reading pauses. The driver checks a 30–75 second duration and caps
+the GIF at 3 MB. It repeats the genuine initial
 terminal stream for the loop seam. This is terminal-stream editing, not a mock UI.
 Then deliberately promote the reviewed asset:
 
@@ -84,7 +86,7 @@ cp .demo/output/demo.gif docs/assets/demo.gif
 npm run check
 ```
 
-The checked-in demo is about 640 KiB, 17 seconds and 143 frames at a 12 FPS cap;
+The checked-in demo is about 1.2 MiB, 46 seconds and 319 frames at a 10 FPS cap;
 its 128×40 terminal renders to 1096×718 pixels. It shows bars/limits, session
 activity/details, the staged directory picker and an inert normal-tab handoff.
 The contact sheet and loop seam were inspected before README promotion. No real

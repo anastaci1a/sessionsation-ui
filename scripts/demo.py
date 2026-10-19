@@ -79,10 +79,12 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
         if key in codes:
             os.write(master, b'\x1b[1;1:1'+codes[key]+b'\x1b[1;1:3'+codes[key])
         else: os.write(master, {'enter': b'\r', 'esc': b'\x1b', 'home': b'\x1b[H', 'end': b'\x1b[F'}[key])
-        pump(.16)
+        pump(.45)
     def type_text(text):
-        os.write(master, text.encode())
-        pump(.2)
+        for char in text:
+            os.write(master, char.encode())
+            pump(.10)
+        pump(.5)
     markers = []
     def mark(label): markers.append({'time': round(time.monotonic()-start, 2), 'workflow': label})
     try:
@@ -103,16 +105,16 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
         first = ''.join(e[2] for e in events)
         events = [[0, 'o', first]]
         start = time.monotonic()
-        mark('Home: real stars, shimmer and synthetic account bars'); pump(1.4)
-        press('end'); press('up'); press('right'); pump(.7); press('enter'); wait('Account limits'); mark('Usage focus and limits dialog'); pump(1.3); press('esc')
-        press('home'); press('down'); press('enter'); wait('api-review'); mark('Manage Sessions: busy spinner, idle and saved history'); pump(1.4)
-        press('enter'); wait('Session Details'); press('down'); press('enter'); wait('Saved history: 24576 bytes'); mark('Session details'); pump(1.1)
-        press('esc'); press('esc'); press('esc'); wait('New Session'); press('home'); press('enter'); wait('Account:'); mark('New Session summary')
-        press('down'); press('enter'); wait('Choose Space'); press('down'); press('enter'); wait('Space:   Work')
-        press('down'); press('enter'); wait('Session name'); type_text('demo-notes'); press('enter'); wait('demo-notes')
-        press('down'); press('enter'); wait('Start directory'); mark('Staged directory picker'); pump(1.3); press('esc')
+        mark('Home: real stars, shimmer and synthetic account bars'); pump(3)
+        press('end'); press('up'); press('right'); pump(1.2); press('enter'); wait('Account limits'); mark('Usage focus and limits dialog'); pump(3); press('esc')
+        press('home'); press('down'); press('enter'); wait('api-review'); mark('Manage Sessions: busy spinner, idle and saved history'); pump(3)
+        press('enter'); wait('Session Details'); press('down'); press('enter'); wait('Saved history: 24576 bytes'); mark('Session details'); pump(3)
+        press('esc'); press('esc'); press('esc'); wait('New Session'); press('home'); press('enter'); wait('Account:'); mark('New Session summary'); pump(2.5)
+        press('down'); press('enter'); wait('Choose Space'); pump(2); press('down'); press('enter'); wait('Space:   Work'); pump(1.5)
+        press('down'); press('enter'); wait('Session name'); pump(1.2); type_text('demo-notes'); press('enter'); wait('demo-notes')
+        press('down'); press('enter'); wait('Start directory'); mark('Staged directory picker'); pump(3); press('esc')
         assert not (projects/'demo-notes').exists(), 'Picker created the directory early'
-        press('down'); pump(.4); mark('Start Session: fields validated'); pump(.9); press('enter')
+        press('down'); pump(.4); mark('Start Session: fields validated'); pump(2.5); press('enter')
         until = time.monotonic()+6
         while not (root/'receipt.json').exists() and time.monotonic() < until: pump(.05)
         receipt = json.loads((root/'receipt.json').read_text())
@@ -125,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
             if focused and focused['workspace_id'] == destination['workspace']['workspace_id'] and not screen.contains('Start Session'): break
         else: raise AssertionError('Popup did not exit and focus its selected Space')
         assert host('pane', 'process-info', '--pane', receipt['pane_id'])['process_info']['shell_pid'] > 0
-        mark('Normal-tab handoff: inert shell, no provider'); pump(1.6)
+        mark('Normal-tab handoff: inert shell, no provider'); pump(3)
         host('tab', 'focus', origin['tab']['tab_id'])
         host('tab', 'close', receipt['tab_id'])
         pump(.3); os.write(master, b'\x02L'); wait('Settings'); wait('personal'); pump(.7)
@@ -134,7 +136,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
         cast = output/'demo.cast'
         header = {'version': 2, 'width': width, 'height': height, 'timestamp': 1767268800, 'env': {'TERM': 'xterm-256color', 'SHELL': '/bin/bash'}, 'title': 'Synthetic sessionsation-ui in HERDR'}
         cast.write_text('\n'.join(json.dumps(e) for e in [header, *events])+'\n')
-        subprocess.run(['agg', '--text-font-family', 'DejaVu Sans Mono', '--font-size', '14', '--line-height', '1.25', '--fps-cap', '12', '--last-frame-duration', '1', str(cast), str(output/'demo.gif')], check=True)
+        subprocess.run(['agg', '--text-font-family', 'DejaVu Sans Mono', '--font-size', '14', '--line-height', '1.25', '--fps-cap', '10', '--last-frame-duration', '1', str(cast), str(output/'demo.gif')], check=True)
         from PIL import Image, ImageOps, ImageDraw
         gif = Image.open(output/'demo.gif')
         frames = []
@@ -143,8 +145,8 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
             gif.seek(i)
             frames.append((duration_ms, gif.convert('RGB')))
             duration_ms += gif.info.get('duration', 0)
-        assert gif.info.get('loop') == 0 and 10000 <= duration_ms <= 30000
-        assert (output/'demo.gif').stat().st_size <= 2_000_000, 'Review GIF size budget'
+        assert gif.info.get('loop') == 0 and 30000 <= duration_ms <= 75000
+        assert (output/'demo.gif').stat().st_size <= 3_000_000, 'Review GIF size budget'
         sheet = Image.new('RGB', (1280, 1200), '#111111')
         for i, k in enumerate([0, 1, 2, 5, 6, 7]):
             target = int((markers[k]['time']+.55)*1000)
@@ -155,7 +157,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
         calls = [json.loads(line) for line in (root/'calls.jsonl').read_text().splitlines()]
         assert sum(call[:2] == ['launch', 'start'] for call in calls) == 1
         assert not any(call[0] in ['send', 'switch', 'stop', 'restart'] for call in calls)
-        evidence = {'synthetic_only': True, 'provider_calls': 0, 'models': 0, 'size': [width, height], 'markers': markers, 'gif_bytes': (output/'demo.gif').stat().st_size, 'gif_frames': gif.n_frames, 'gif_duration_ms': duration_ms, 'handoff_verified': True, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'tools': json.loads((repo/'scripts/demo-tools.json').read_text()), 'loop': 'Actual initial terminal stream repeated; no replacement UI drawn'}
+        evidence = {'synthetic_only': True, 'provider_calls': 0, 'models': 0, 'size': [width, height], 'markers': markers, 'gif_bytes': (output/'demo.gif').stat().st_size, 'gif_frames': gif.n_frames, 'gif_duration_ms': duration_ms, 'pacing': {'key_pause_ms': 450, 'typing_ms_per_character': 100, 'reading_pauses_seconds': '1.2–3'}, 'handoff_verified': True, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'tools': json.loads((repo/'scripts/demo-tools.json').read_text()), 'loop': 'Actual initial terminal stream repeated; no replacement UI drawn'}
         (output/'demo-evidence.json').write_text(json.dumps(evidence, indent=2)+'\n')
         print(json.dumps(evidence, indent=2))
     except Exception:
