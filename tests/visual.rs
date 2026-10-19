@@ -69,6 +69,8 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("inline-usage-focus", 100, 30),
         ("attention", 100, 30),
         ("sessions-wide", 110, 24),
+        ("archives-wide", 110, 24),
+        ("archives-compact", 40, 18),
         ("sessions-loading", 60, 18),
         ("sessions-compact", 40, 18),
         ("settings-wide", 140, 24),
@@ -103,6 +105,13 @@ fn management_geometry_usage_markers_and_picker_columns() {
                     .details
                     .insert("auth_required".into(), serde_json::json!(true));
                 m.options.selected = 6;
+            }
+            "archives-wide" | "archives-compact" => {
+                m.page = Page::Archives;
+                m.archives = vec![
+                    serde_json::json!({"id":"11111111-1111-4111-8111-111111111111","name":"Saved notes"}),
+                    serde_json::json!({"id":"22222222-2222-4222-8222-222222222222","name":"Earlier draft"}),
+                ];
             }
             "sessions-loading" => {
                 m.page = Page::Sessions;

@@ -1,4 +1,7 @@
 //! Shared flat popup surface. Content uses the normal editors/options in local cells.
+const DIRECTORY_WIDTH_PERCENT: usize = 60;
+const DIRECTORY_HEIGHT_PERCENT: usize = 80;
+
 use crate::{
     dialog::Palette,
     render::{Canvas, Cell},
@@ -119,28 +122,29 @@ impl Choices<'_> {
             })
     }
     pub fn measure(&self, viewport: (usize, usize)) -> Size {
-        self.measure_selected(viewport, usize::MAX)
-    }
-    pub fn measure_selected(&self, viewport: (usize, usize), selected: usize) -> Size {
         use unicode_width::UnicodeWidthStr;
-        let natural = self.rows.iter().map(|r| {
-            let end = if r.preview_selected_only {
-                2 + UnicodeWidthStr::width(r.label.as_str())
-            } else {
-                Self::row_end(r, usize::MAX / 2)
-            };
-            end + 2 + usize::from(self.inline_note_width > 0) * (1 + self.inline_note_width)
-        });
-        let detail = self
+        let natural = self
             .rows
-            .get(selected)
-            .and_then(|r| r.preview.as_ref().filter(|_| r.preview_selected_only))
-            .map(|s| UnicodeWidthStr::width(s.as_str()) + 2);
-        let width = content_width(
-            viewport.0,
-            self.title,
-            natural.chain(self.editor.map(|_| 24)).chain(detail),
-        );
+            .iter()
+            .map(|r| {
+                let status = if self.reserve_note && !r.separator && r.label != "Cancel" {
+                    1 + self.inline_note_width
+                } else {
+                    0
+                };
+                Self::row_end(r, usize::MAX / 2) + status
+            })
+            .max()
+            .unwrap_or(0);
+        let width = if self.editor.is_some() {
+            // Directory browsing has a stable, useful viewport independent of paths.
+            (viewport.0 * DIRECTORY_WIDTH_PERCENT / 100).max(28)
+        } else {
+            (natural + 4)
+                .max(UnicodeWidthStr::width(self.title) + 2)
+                .max(8)
+        }
+        .min(viewport.0.saturating_sub(4));
         self.fit_width(viewport, width)
     }
     fn fit_width(&self, viewport: (usize, usize), width: usize) -> Size {
@@ -151,7 +155,8 @@ impl Choices<'_> {
             usize::from((self.reserve_note || !self.note.is_empty()) && !self.note_inline(inner))
                 * 2;
         let height = if self.large {
-            viewport.1.saturating_sub(4)
+            (viewport.1 * DIRECTORY_HEIGHT_PERCENT / 100)
+                .max(description + 1 + usize::from(self.editor.is_some()) * 4 + self.pinned + 4)
         } else {
             description + 1 + self.rows.len().max(1) + preview + note + 2
         };
@@ -164,6 +169,9 @@ impl Choices<'_> {
     pub fn grow_for_selection(&mut self, opened: Size, selected: usize) -> Size {
         use unicode_width::UnicodeWidthStr;
         self.inline_note_width = opened.note_width;
+        if self.editor.is_some() {
+            return opened;
+        }
         let note = UnicodeWidthStr::width(self.note);
         let mut required = opened.width;
         if self.reserve_note && note > opened.note_width {
@@ -173,14 +181,12 @@ impl Choices<'_> {
             }
         }
         if let Some(row) = self.rows.get(selected) {
-            required = required.max(UnicodeWidthStr::width(row.label.as_str()) + 6);
-            if row.preview_selected_only
-                && let Some(text) = &row.preview
-            {
-                required = required.max(UnicodeWidthStr::width(text.as_str()) + 6);
+            required = required.max(UnicodeWidthStr::width(row.label.as_str()) + 4);
+            if row.preview_selected_only && row.preview.is_some() {
+                required = required.max(Self::row_end(row, usize::MAX / 2) + 4);
             }
         }
-        let width = required.min(76).min(opened.viewport.0.saturating_sub(4));
+        let width = required.min(opened.viewport.0.saturating_sub(4));
         if width > opened.width || self.inline_note_width > opened.note_width {
             let mut next = self.fit_width(opened.viewport, width);
             next.height = next.height.max(opened.height);
@@ -360,12 +366,111 @@ mod tests {
         render::{Accent, Field},
         widgets::TextInput,
     };
+    fn assert_one_space_before_border(canvas: &Canvas, text: &str) {
+        let row = canvas
+            .cells
+            .chunks(canvas.width)
+            .find(|r| {
+                r.iter()
+                    .map(|c| c.glyph.as_str())
+                    .collect::<String>()
+                    .contains(text)
+            })
+            .unwrap();
+        let border = row.iter().rposition(|c| c.glyph == "│").unwrap();
+        assert_eq!(row[border - 1].glyph, " ");
+        assert_ne!(row[border - 2].glyph, " ");
+    }
+    #[test]
+    fn account_status_has_exactly_one_trailing_space_on_open_and_growth() {
+        use crate::widgets::{Options, Row};
+        let rows = vec![
+            Row::yes("Cancel").popup_option(),
+            Row::separator().popup_option(),
+            Row::yes("personal")
+                .with_column_preview("90% wk", 11, false)
+                .preview_gap(1)
+                .popup_option(),
+        ];
+        let mut view = Choices {
+            title: "Choose Account",
+            description: "Choose an account for this session.",
+            rows: &rows,
+            editor: None,
+            note: "Ready",
+            note_accent: true,
+            reserve_note: true,
+            inline_note_width: 5,
+            large: false,
+            pinned: 2,
+            browse_hint: false,
+        };
+        let mut options = Options {
+            selected: 2,
+            ..Options::default()
+        };
+        let opened = view.measure((100, 30));
+        let mut canvas = Canvas::new(100, 30);
+        paint_choices(
+            &mut canvas,
+            &Palette::default(),
+            &view,
+            &mut options,
+            opened,
+        );
+        assert_one_space_before_border(&canvas, "Ready");
+        view.note = "Login required";
+        let grown = view.grow_for_selection(opened, 2);
+        let mut canvas = Canvas::new(100, 30);
+        paint_choices(&mut canvas, &Palette::default(), &view, &mut options, grown);
+        assert_one_space_before_border(&canvas, "Login required");
+    }
+    #[test]
+    fn space_ids_are_inline_with_one_trailing_space_unless_viewport_is_too_thin() {
+        use crate::widgets::{Options, Row};
+        let rows = vec![
+            Row::yes("Longer space")
+                .with_selected_preview("(space-id-012345)")
+                .preview_gap(1)
+                .popup_option(),
+            Row::yes("Short")
+                .with_selected_preview("(id)")
+                .preview_gap(1)
+                .popup_option(),
+        ];
+        let view = Choices {
+            title: "Choose Space",
+            description: "Choose a destination Space.",
+            rows: &rows,
+            editor: None,
+            note: "",
+            note_accent: false,
+            reserve_note: false,
+            inline_note_width: 0,
+            large: false,
+            pinned: 0,
+            browse_hint: false,
+        };
+        let size = view.measure((100, 30));
+        assert!(!Options::previews_detached(size.width - 4, &rows));
+        let mut canvas = Canvas::new(100, 30);
+        paint_choices(
+            &mut canvas,
+            &Palette::default(),
+            &view,
+            &mut Options::default(),
+            size,
+        );
+        assert_one_space_before_border(&canvas, "(space-id-012345)");
+        let narrow = view.measure((30, 24));
+        assert!(Options::previews_detached(narrow.width - 4, &rows));
+    }
     #[test]
     fn hidden_space_ids_do_not_expand_the_frame_until_selected() {
         use crate::widgets::Row;
         let rows = vec![
-            Row::yes("One").with_selected_preview("(a)"),
-            Row::yes("Two").with_selected_preview("(b)"),
+            Row::yes("One").popup_option().with_selected_preview("(a)"),
+            Row::yes("Two").popup_option().with_selected_preview("(b)"),
         ];
         let mut view = Choices {
             title: "Choose Space",
@@ -380,11 +485,12 @@ mod tests {
             pinned: 0,
             browse_hint: false,
         };
-        let opened = view.measure_selected((100, 30), 0);
-        assert_eq!(opened.width, 24);
+        let opened = view.measure((100, 30));
+        assert_eq!(opened.width, 14);
         let updated = vec![
             rows[0].clone(),
             Row::yes("Two")
+                .popup_option()
                 .with_selected_preview("A newly observed Space identifier that is longer"),
         ];
         view.rows = &updated;
@@ -416,8 +522,10 @@ mod tests {
             pinned: 4,
             browse_hint: false,
         };
-        let opened = view.measure_selected((100, 30), 4);
-        assert!(opened.width < 40);
+        let opened = view.measure((100, 30));
+        assert_eq!((opened.width, opened.height), (60, 24));
+        let larger = view.measure((200, 40));
+        assert_eq!((larger.width, larger.height), (120, 32));
         assert_eq!(view.grow_for_selection(opened, 4).width, opened.width);
     }
     #[test]
@@ -426,10 +534,10 @@ mod tests {
         for viewport in [(100, 30), (40, 16)] {
             let rows = vec![
                 crate::widgets::Row::yes("First")
-                    .left_aligned()
+                    .popup_option()
                     .with_selected_preview("/a/long/directory/that/must/move/below"),
-                crate::widgets::Row::yes("Second").left_aligned(),
-                crate::widgets::Row::yes("Cancel").left_aligned(),
+                crate::widgets::Row::yes("Second").popup_option(),
+                crate::widgets::Row::yes("Cancel").popup_option(),
             ];
             let mut view = Choices {
                 title: "Choose",

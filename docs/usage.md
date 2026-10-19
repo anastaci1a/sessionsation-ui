@@ -67,10 +67,15 @@ HERDR’s default Ctrl-B. Nested directory/Space creation
 remains staged until Start. Choice popups measure their labels and currently known
 details on opening; explanatory text wraps within that width. Polling alone does
 not enlarge them for unseen details. Hovering a newly longer account status, Space
-ID or directory name grows the frame only as needed, up to the terminal/readable
-maximum; it retains that space until close or terminal resize. Other dialogs keep
+ID grows the frame only as needed, up to the main popup’s available width; it
+retains that space until close or terminal resize. Known Space names and IDs
+are allocated together on the right at opening; only a genuinely narrow main
+popup moves IDs below. Other dialogs keep
 their opening dimensions through live updates. Long directory paths scroll inside
 the editor with a leading `…` for hidden characters; they never widen the popup.
+The directory picker uses 60% of the main popup’s width and 80% of its height,
+with a usable minimum and a small-terminal bound. Other pickers fit their content.
+Popup frames supply exactly one outer padding cell; previews do not add another.
 Fixed-choice heights fit their description, choices and Cancel button exactly.
 Forms share the boxed account-name editor; all popup choices are left aligned,
 with descriptive text followed by one blank line before fields or choices.
@@ -238,6 +243,10 @@ New Session remains on the home menu. Archive, Restore and permanent Delete call
 the public CLI with stable identity, generation and request ID after confirmation.
 Delete requires typing the displayed session name. Archive storage and restoration
 belong to the backend; restoration does not start an agent or send a message.
+Archived session IDs appear in parentheses beside the hovered name, in normal
+unbolded deselected gray. Inline/below placement is decided for the whole list,
+including offscreen rows; if any ID cannot fit inline, the selected ID appears
+centered below instead.
 
 Session Details opens from cached state immediately and refreshes on the one-second
 read-only state poll, retaining the last details during discovery failures. It shows
@@ -368,7 +377,7 @@ Use this directory, Leave unset (for defaults), Create subdirectory and Cancel s
 subdirectory list and its range counter, separated from it by a blank bullet row
 even when empty. Left on `(none)` navigates to the parent; Enter does nothing.
 If at most five rows fit, the whole list
-scrolls instead. Directory popup height stays fixed; a newly hovered longer name may widen it. Pending navigation clears
+scrolls instead. Directory popup dimensions stay fixed through browsing and path editing. Pending navigation clears
 old child rows and shows Loading… one blank line below the actions. Right browses
 child rows only; Left returns to their parent and does nothing on action rows.
 Only child rows show the Parent/Open hint. Tab and Ctrl-U have no directory-picker

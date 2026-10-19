@@ -587,6 +587,8 @@ impl Manager {
                     Row::yes(crate::usage::display_name(
                         s["name"].as_str().unwrap_or("Unnamed"),
                     ))
+                    .with_selected_preview(format!("({})", id(s)))
+                    .preview_gap(1)
                 })
                 .collect(),
             Page::Spaces(_) => self.space_choices["spaces"]
@@ -605,11 +607,11 @@ impl Manager {
                                 row
                             }
                         })
-                        .map(Row::left_aligned)
-                        .chain(std::iter::once(Row::yes("Cancel").left_aligned()))
+                        .map(Row::popup_option)
+                        .chain(std::iter::once(Row::yes("Cancel").popup_option()))
                         .collect()
                 })
-                .unwrap_or_else(|| vec![Row::yes("Cancel").left_aligned()]),
+                .unwrap_or_else(|| vec![Row::yes("Cancel").popup_option()]),
             Page::Session(key) => crate::session_list::actions(
                 self.session(key).unwrap_or(&Value::Null),
                 self.capabilities["resume"]["version"] == 1,
@@ -1939,9 +1941,7 @@ impl Manager {
                 .popup_size
                 .is_none_or(|s| s.viewport != (canvas.width, canvas.height))
             {
-                self.popup_size = Some(
-                    view.measure_selected((canvas.width, canvas.height), self.options.selected),
-                );
+                self.popup_size = Some(view.measure((canvas.width, canvas.height)));
             }
             self.popup_size =
                 Some(view.grow_for_selection(self.popup_size.unwrap(), self.options.selected));
@@ -2110,6 +2110,38 @@ impl Manager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn archived_ids_share_list_wide_preview_fit_and_unbolded_gray() {
+        use super::*;
+        let mut m = setup();
+        m.page = Page::Archives;
+        m.archives = vec![json!({"id":"short-id","name":"Saved"})];
+        m.archives.extend((0..20).map(
+            |i| json!({"id":format!("archive-{i}-with-a-longer-stable-session-id"),"name":"Other"}),
+        ));
+        let rows = m.rows();
+        assert_eq!(rows[0].preview.as_deref(), Some("(short-id)"));
+        assert!(rows.iter().all(|r| r.preview_selected_only
+            && r.preview_fg == crate::widgets::SECONDARY
+            && r.preview_gap == 1));
+        assert!(Options::previews_detached(40, &rows));
+        let mut c = Canvas::new(40, 24);
+        m.options.paint_menu(&mut c, &rows, 3, 18, 23);
+        let first = c.cells.iter().position(|c| c.glyph == "(").unwrap();
+        assert!(first / 40 > 3);
+        assert!(
+            c.cells[first..first + 10]
+                .iter()
+                .all(|c| c.fg == crate::widgets::SECONDARY && !c.bold)
+        );
+        assert!(!Options::previews_detached(120, &rows));
+        let mut c = Canvas::new(120, 24);
+        m.options.paint_menu(&mut c, &rows, 3, 18, 23);
+        assert_eq!(
+            c.cells.iter().position(|c| c.glyph == "(").unwrap() / 120,
+            3
+        );
+    }
     #[test]
     fn loading_confirmation_and_operation_share_the_opened_frame() {
         use super::*;

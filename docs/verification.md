@@ -91,7 +91,7 @@ cp .demo/output/demo.gif docs/assets/demo.gif
 npm run check
 ```
 
-The checked-in demo is about 1.1 MiB, 46 seconds and 316 frames at a 10 FPS cap;
+The checked-in demo is about 1.1 MiB, 46 seconds and 314 frames at a 10 FPS cap;
 its 128×40 terminal renders to 1096×718 pixels. It shows bars/limits, session
 activity/details, the staged directory picker and an inert normal-tab handoff.
 The contact sheet and loop seam were inspected before README promotion. No real
@@ -107,8 +107,8 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 ## Verification record and limits
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **171 Rust tests** (169 unit and two visual tests covering
-23 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
+passed formatting, Clippy, **174 Rust tests** (172 unit and two visual tests covering
+25 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
 disabled. Regressions cover Back history, stable selection across refreshed lists,
@@ -122,7 +122,10 @@ without shape/color changes or per-frame visibility toggling. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
 The README capture and tested release artifact use SHA-256
-`c61ea2221593a52f4be710b404464ac952f11af0a9d7d6c95f986434b6146a0b`.
+`72fbe93a851ec37f2417bb5aaf8127ccda1c7204bf43bf67ebd587b958e4c3a9`.
+Exact cell regressions verify one space between the longest inline status/Space
+ID and the popup border, including growth after hover. Known Space names/IDs are
+allocated together at opening; fallback below is reserved for narrow main popups.
 Account statuses remain below the list when usage cannot fit in a very narrow popup.
 All three PTY scripts and the owned HERDR popup test passed against the release artifact. Shared
 form, choice, information and progress regressions cover exact fixed-choice
@@ -132,7 +135,10 @@ body/status changes, loading-to-confirmation transitions and completion. Choice
 popups additionally cache their opening detail budget: polling a hidden longer
 status or Space ID does not resize the frame, while hovering it can grow the
 frame up to the viewport limit. Long directory paths scroll with a leading
-ellipsis rather than determining popup width. Account selection restores the
+ellipsis rather than determining popup width. Directory viewport checks assert
+60% main-popup width and 80% height, with small-terminal bounds. Archived IDs
+use parenthesized gray/unbolded previews with a list-wide decision including
+offscreen rows; wide/compact goldens verify both placements. Account selection restores the
 current/default ID or first account below the Cancel/separator group and retains
 that identity through reordered inventory. Resize refits the frame; long content
 scrolls inside it. Directory goldens cover pinned

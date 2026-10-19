@@ -56,7 +56,11 @@ Its reusable components are:
   and known statuses determine opening width; descriptions wrap and path editors
   scroll with a leading ellipsis. Polling cannot grow the frame for hidden details.
   A hovered detail may increase the cached budget, retaining that space until
-  close. Account statuses keep the shared inline/detached fit rule. Compositing translates
+  close. Directory browsing instead uses 60% width/80% height independently of
+  path length. Popup rows reuse the frame’s outer padding; borderless previews
+  own one edge cell. Known Space IDs are included in opening width. Account
+  statuses and archived IDs keep the shared list-wide inline/detached fit rule.
+  Compositing translates
   the native cursor and keeps background star lifetimes independent.
 - `dialog`: shared one/multiple-field forms, confirmations, information and
   progress. The same boxed editor paints session/account names and directory

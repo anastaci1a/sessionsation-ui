@@ -486,12 +486,12 @@ impl App {
             Page::Launching => vec![Row::gate("Starting session…", false)],
         };
         if Self::is_popup(&self.page) {
-            rows = rows.into_iter().map(Row::left_aligned).collect();
+            rows = rows.into_iter().map(Row::popup_option).collect();
             if !matches!(
                 self.page,
                 Page::Directory(_) | Page::Spaces | Page::Accounts
             ) {
-                rows.push(Row::yes("Cancel").left_aligned());
+                rows.push(Row::yes("Cancel").popup_option());
             }
         }
         rows
@@ -1489,10 +1489,7 @@ impl App {
             .as_ref()
             .is_none_or(|(page, size)| *page != self.page || size.viewport != (width, height))
         {
-            self.popup_size = Some((
-                self.page.clone(),
-                presentation.measure_selected((width, height), self.options.selected),
-            ));
+            self.popup_size = Some((self.page.clone(), presentation.measure((width, height))));
         }
         let opened = self.popup_size.as_ref().unwrap().1;
         self.popup_size = Some((

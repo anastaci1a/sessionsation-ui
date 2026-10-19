@@ -158,6 +158,7 @@ pub struct Row {
     pub preview_gap: usize,
     pub separator: bool,
     left_aligned: bool,
+    preview_edge_padding: usize,
     placeholder: bool,
     preview_group: u8,
     field_padding: Option<std::ops::Range<usize>>,
@@ -189,6 +190,7 @@ impl Row {
             preview_gap: 2,
             separator: false,
             left_aligned: false,
+            preview_edge_padding: 1,
             placeholder: false,
             preview_group: 0,
             field_padding: None,
@@ -208,8 +210,10 @@ impl Row {
         row.placeholder = true;
         row
     }
-    pub fn left_aligned(mut self) -> Self {
+    /// Popup frames already supply one outer padding cell on either side.
+    pub fn popup_option(mut self) -> Self {
         self.left_aligned = true;
+        self.preview_edge_padding = 0;
         self
     }
     pub fn with_preview_group(mut self, group: u8) -> Self {
@@ -254,12 +258,14 @@ impl Row {
         let start = if let Some(column) = self.preview_column {
             x + column
         } else if self.right_preview {
-            width.saturating_sub(2 + UnicodeWidthStr::width(preview))
+            width.saturating_sub(self.preview_edge_padding + UnicodeWidthStr::width(preview))
         } else {
             minimum
         };
-        (start >= minimum && start + UnicodeWidthStr::width(preview) <= width.saturating_sub(2))
-            .then_some(start)
+        (start >= minimum
+            && start + UnicodeWidthStr::width(preview)
+                <= width.saturating_sub(self.preview_edge_padding))
+        .then_some(start)
     }
     pub fn separator() -> Self {
         Self {
@@ -275,6 +281,7 @@ impl Row {
             preview_gap: 2,
             separator: true,
             left_aligned: false,
+            preview_edge_padding: 1,
             placeholder: false,
             preview_group: 0,
             field_padding: None,
@@ -677,7 +684,7 @@ impl Options {
                 top + rows.len().saturating_sub(self.scroll).min(result.1) + 1
             };
             if y + 1 < controls_start && canvas.width > 3 {
-                let max = canvas.width - 2;
+                let max = canvas.width.saturating_sub(row.preview_edge_padding * 2);
                 let text = if UnicodeWidthStr::width(preview) > max {
                     ellipsize(preview, max)
                 } else {
