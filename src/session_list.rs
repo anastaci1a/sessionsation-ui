@@ -13,6 +13,7 @@ pub enum Action {
     Rename,
     Resume,
     Switch,
+    MoveSpace,
     Restart,
     Stop,
     Archive,
@@ -106,6 +107,10 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
         (
             Row::gate("Switch account", c["switch_account"] == true),
             Action::Switch,
+        ),
+        (
+            Row::gate("Move to Space", c["move_space"] == true),
+            Action::MoveSpace,
         ),
         (Row::separator(), Action::Unavailable),
         (Row::gate("Move project folder", false), Action::Unavailable),

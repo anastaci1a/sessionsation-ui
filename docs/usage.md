@@ -58,7 +58,7 @@ not a supervisor upgrade or data-root migration.
 ## Capabilities and limits
 
 - The popup uses public backend API v1 only: accounts/usage/limits, new/resume,
-  session details/rename, supported switch/restart/stop, archive/restore/delete,
+  session details/rename, supported switch/restart/stop, HERDR Space moves, archive/restore/delete,
   and operation progress. Final checks and destructive confirmations belong to CLI.
 - Codex is implemented; Claude enrollment, usage, messaging and lifecycle are not.
   Cross-provider conversion is outside this version.
@@ -76,6 +76,29 @@ not a supervisor upgrade or data-root migration.
   is different. Existing tmux sessions are retained; they are not automatically
   converted to HERDR tabs. Cross-instance discovery requires compatible backend
   readers; keep all consumers of one root on reviewed versions.
+
+## Move a running HERDR session
+
+In Manage Sessions, open the session, choose **Move to Space**, then an existing
+Space on that session's host and confirm. The current Space stays hoverable but
+cannot be submitted. Choices come from `api spaces` on the bound host, not the
+popup's own Space list. Loading/cancel remain responsive; late cancelled responses
+are discarded. The selected session's captured generation is checked by CLI at
+submission, rather than silently refreshed underneath the confirmation.
+
+The CLI moves only that pane into a new normal tab. Account, provider process,
+conversation, directory and permissions stay intact, including during active work.
+Split siblings remain; an empty source tab/Space can close. No move between HERDR
+instances, no tmux conversion, and no inactive-session move is implied. Choose the
+destination in New/Resume for an inactive conversation instead.
+
+Progress closes back to Manage Sessions on the same stable session. An uncertain
+move is never retried automatically: Operations → Recover asks CLI to reconcile
+placement without another host move. Until verified, the CLI reserves that session
+against competing lifecycle actions. The
+[backend contract](https://github.com/anastaci1a/sessionsation/blob/main/docs/contract.md#herdr-space-placement)
+owns recovery and safety semantics. Older backends without the per-session
+`move_space` capability leave this action unavailable.
 
 ## Account and session menus
 

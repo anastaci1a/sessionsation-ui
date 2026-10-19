@@ -31,6 +31,10 @@ pub fn describe(text: &str) -> String {
         "SESSION_OPERATION_IN_PROGRESS" | "RESUME_IN_PROGRESS" | "OPERATION_BUSY" => {
             "Another action is still changing this session. Check its progress in Operations first."
         }
+        "SESSION_NOT_IN_HERDR" => "Only a running HERDR session can be moved between Spaces.",
+        "SPACE_MOVE_LOCATION_CONFLICT" | "SPACE_MOVE_IDENTITY_MISMATCH" => {
+            "Terminal placement is not verified. Inspect the original operation in Operations before another move."
+        }
         "ACCOUNT_UNAVAILABLE" => {
             "The selected account is unavailable. Check that it is enabled and signed in."
         }
@@ -38,7 +42,9 @@ pub fn describe(text: &str) -> String {
             "The saved directory is missing. Choose an available directory before resuming."
         }
         "SESSION_NAME_EXISTS" => "Another session already uses this name. Choose a different name.",
-        "WORKSPACE_NOT_FOUND" => "The selected Space no longer exists. Choose another Space.",
+        "WORKSPACE_NOT_FOUND" | "SPACE_NOT_FOUND" => {
+            "The selected Space no longer exists. Choose another Space."
+        }
         "WORKSPACE_NAME_EXISTS" => {
             "A Space already uses this name. Select that Space or choose another name."
         }
@@ -123,6 +129,18 @@ pub fn phase(value: &str) -> String {
         first.to_uppercase().collect::<String>() + chars.as_str()
     })
 }
+pub fn operation_phase(kind: &str, value: &str) -> String {
+    if kind == "move_space" {
+        return match value {
+            "admitted" => "Preparing the terminal move.",
+            "dispatching" => "Moving the existing terminal; its agent keeps running.",
+            "reconciling" => "Verifying the moved terminal's ownership.",
+            _ => return phase(value),
+        }
+        .into();
+    }
+    phase(value)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,5 +161,7 @@ mod tests {
             "Awaiting risk confirmation"
         );
         assert_eq!(phase("unknown"), "Checking operation state");
+        assert!(operation_phase("move_space", "dispatching").contains("keeps running"));
+        assert!(!operation_phase("move_space", "admitted").contains("Launch"));
     }
 }

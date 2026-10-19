@@ -17,6 +17,7 @@ pub enum Page {
     Sessions,
     Archives,
     Session(String),
+    Spaces(String),
     Operations,
     Operation(String),
     Launch(&'static str, String),
@@ -37,6 +38,7 @@ enum Purpose {
     Archives,
     Operations,
     Resume(String),
+    Spaces(Value),
     Launches(&'static str),
     Launch(&'static str, String),
     Remove(String),
@@ -83,6 +85,8 @@ pub struct Manager {
     sequence: u64,
     pending: BTreeMap<u64, Purpose>,
     readiness: BTreeMap<String, Value>,
+    space_choices: Value,
+    space_session: Value,
     deletion_previews: BTreeMap<String, Value>,
     pub active_operation: Option<String>,
     foreground: Option<u64>,
@@ -112,6 +116,8 @@ impl Default for Manager {
             sequence: 0,
             pending: BTreeMap::new(),
             readiness: BTreeMap::new(),
+            space_choices: Value::Null,
+            space_session: Value::Null,
             deletion_previews: BTreeMap::new(),
             active_operation: None,
             foreground: None,
@@ -343,6 +349,7 @@ impl Manager {
                         .unwrap_or("Unnamed")
                 );
             }
+            Page::Spaces(_) => "Choose Space",
             Page::Operations => "Operations",
             Page::Launch(..) => "Launch progress",
             Page::Operation(_) => "Operation",
@@ -477,6 +484,25 @@ impl Manager {
                     ))
                 })
                 .collect(),
+            Page::Spaces(_) => self.space_choices["spaces"]
+                .as_array()
+                .map(|spaces| {
+                    spaces
+                        .iter()
+                        .map(|space| {
+                            let row = Row::gate(
+                                space["name"].as_str().unwrap_or("Unnamed Space"),
+                                space["current"] != true,
+                            );
+                            if space["current"] == true {
+                                row.with_selected_preview("(current)").preview_gap(1)
+                            } else {
+                                row
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             Page::Session(key) => crate::session_list::actions(
                 self.session(key).unwrap_or(&Value::Null),
                 self.capabilities["resume"]["version"] == 1,
@@ -921,6 +947,7 @@ impl Manager {
                 self.go(Page::Sessions);
                 self.options.selected = self.sessions.iter().position(|s| id(s) == key).unwrap_or(0)
             }
+            Page::Spaces(key) => self.go(Page::Session(key)),
             Page::Operation(_) | Page::Launch(..) => self.go(Page::Operations),
             Page::Operations => self.go(Page::Sessions),
             Page::Archives => self.go(Page::Sessions),
@@ -1047,6 +1074,24 @@ impl Manager {
                     self.go(Page::Session(id(s).to_owned()));
                 }
             }
+            Page::Spaces(_) => {
+                if let Some(space) = self.space_choices["spaces"]
+                    .as_array()
+                    .and_then(|spaces| spaces.get(index))
+                {
+                    if space["current"] == true {
+                        return vec![];
+                    }
+                    let mut args = Self::target(&self.space_session, "move-space");
+                    args.extend(strings(&[
+                        "--space",
+                        space["id"].as_str().unwrap_or(""),
+                        "--request-id",
+                        &uuid::Uuid::new_v4().to_string(),
+                    ]));
+                    self.confirm("Move to Space", vec![format!("Move this terminal to a new tab in {}? Its running process, account, directory and history stay unchanged. Split siblings stay in place; an empty source tab or Space may close.",space["name"].as_str().unwrap_or("the selected Space"))], args);
+                }
+            }
             Page::Session(key) => {
                 let Some(s) = self.session(&key).cloned() else {
                     return vec![];
@@ -1119,6 +1164,13 @@ impl Manager {
                         self.validate_dialog_names();
                     }
 
+                    crate::session_list::Action::MoveSpace => {
+                        return self.preview(
+                            "Choose Space",
+                            Self::target(&s, "spaces"),
+                            Purpose::Spaces(s),
+                        );
+                    }
                     crate::session_list::Action::Switch => return vec![Intent::Switch(s)],
                     crate::session_list::Action::Resume => {
                         return self.preview(
@@ -1193,7 +1245,10 @@ impl Manager {
                                 "Operation progress"
                             },
                             vec![
-                                crate::messages::phase(o["phase"].as_str().unwrap_or("unknown")),
+                                crate::messages::operation_phase(
+                                    o["kind"].as_str().unwrap_or(""),
+                                    o["phase"].as_str().unwrap_or("unknown"),
+                                ),
                                 o["detail"].as_str().unwrap_or("").into(),
                             ],
                             &[if terminal(o["phase"].as_str().unwrap_or("")) {
@@ -1368,7 +1423,11 @@ impl Manager {
         };
         if matches!(
             purpose,
-            Purpose::Remove(_) | Purpose::Delete(_) | Purpose::Limits(_) | Purpose::Resume(_)
+            Purpose::Remove(_)
+                | Purpose::Delete(_)
+                | Purpose::Limits(_)
+                | Purpose::Resume(_)
+                | Purpose::Spaces(_)
         ) && (self.foreground != Some(token) || !matches!(self.form, Form::Loading))
         {
             return vec![];
@@ -1513,7 +1572,10 @@ impl Manager {
                     && let Some(d) = &mut self.dialog
                 {
                     d.body = vec![
-                        crate::messages::phase(o["phase"].as_str().unwrap_or("unknown")),
+                        crate::messages::operation_phase(
+                            o["kind"].as_str().unwrap_or(""),
+                            o["phase"].as_str().unwrap_or("unknown"),
+                        ),
                         o["detail"].as_str().unwrap_or("").into(),
                     ];
                     if terminal(o["phase"].as_str().unwrap_or("")) {
@@ -1529,6 +1591,20 @@ impl Manager {
             }
             Purpose::Observe(key) => {
                 self.readiness.insert(key, value);
+            }
+            Purpose::Spaces(session) => {
+                if self.page == Page::Session(id(&session).into()) {
+                    if value["session_id"] != session["id"]
+                        || value["generation"] != session["generation"]
+                    {
+                        self.dismiss();
+                        self.note = "Session changed while its Spaces were loading. Refresh and choose again.".into();
+                        return vec![];
+                    }
+                    self.space_choices = value;
+                    self.space_session = session.clone();
+                    self.go(Page::Spaces(id(&session).into()));
+                }
             }
             Purpose::Resume(key) => {
                 if self.page == Page::Session(key) {
@@ -1831,6 +1907,128 @@ impl Manager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn space_picker_uses_bound_backend_choices_and_captured_generation() {
+        use super::*;
+        let session = json!({"id":"stable","name":"Example","generation":"g1","availability":"running","attachment":{"host":"herdr"},"capabilities":{"move_space":true}});
+        let mut m = Manager {
+            page: Page::Session("stable".into()),
+            sessions: vec![session],
+            ..Default::default()
+        };
+        m.options.selected = m
+            .rows()
+            .iter()
+            .position(|r| r.label == "Move to Space")
+            .unwrap();
+        let sent = m.activate();
+        let Intent::Api(token, args) = &sent[0] else {
+            panic!()
+        };
+        assert_eq!(
+            args,
+            &strings(&[
+                "spaces",
+                "--session",
+                "stable",
+                "--expected-generation",
+                "g1"
+            ])
+        );
+        assert!(
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .buttons
+                .iter()
+                .any(|s| s.label == "Cancel")
+        );
+        m.response(*token, Ok(json!({"session_id":"stable","generation":"g1","current_space_id":"w1","spaces":[{"id":"w1","name":"Origin","current":true},{"id":"w2","name":"Work","current":false}]})));
+        assert_eq!(m.page, Page::Spaces("stable".into()));
+        assert_eq!(m.options.selected, 0);
+        assert!(!m.rows()[0].enabled);
+        assert!(m.activate().is_empty());
+        m.options.selected = 1;
+        // A later state refresh must not silently rebind the confirmed move.
+        m.sessions[0]["generation"] = json!("g2");
+        assert!(m.activate().is_empty());
+        assert!(m.submit(1, vec![]).is_empty(), "cancel is read-only");
+        m.activate();
+        let sent = m.submit(0, vec![]);
+        let Intent::Api(_, args) = &sent[0] else {
+            panic!()
+        };
+        assert_eq!(
+            &args[..7],
+            &strings(&[
+                "move-space",
+                "--session",
+                "stable",
+                "--expected-generation",
+                "g1",
+                "--space",
+                "w2"
+            ])
+        );
+        assert_eq!(args[7], "--request-id");
+        assert!(uuid::Uuid::parse_str(&args[8]).is_ok());
+        m.dismiss();
+        assert_eq!(m.page, Page::Sessions);
+        assert_eq!(m.options.selected, 0);
+    }
+
+    #[test]
+    fn cancelled_space_lookup_cannot_reopen_or_replace_a_new_picker() {
+        use super::*;
+        let session = json!({"id":"stable","generation":"g1"});
+        let mut m = Manager {
+            page: Page::Session("stable".into()),
+            ..Default::default()
+        };
+        let sent = m.preview("Choose Space", vec![], Purpose::Spaces(session.clone()));
+        let Intent::Api(old, _) = &sent[0] else {
+            panic!()
+        };
+        m.submit(0, vec![]);
+        let sent = m.preview("Choose Space", vec![], Purpose::Spaces(session));
+        let Intent::Api(new, _) = &sent[0] else {
+            panic!()
+        };
+        m.response(
+            *old,
+            Ok(json!({"session_id":"stable","generation":"g1","spaces":[]})),
+        );
+        assert_eq!(m.page, Page::Session("stable".into()));
+        assert!(matches!(m.form, Form::Loading));
+        m.response(
+            *new,
+            Ok(json!({"session_id":"other","generation":"g1","spaces":[]})),
+        );
+        assert_ne!(m.page, Page::Spaces("stable".into()));
+        assert!(m.note.contains("changed"));
+    }
+
+    #[test]
+    fn space_move_is_gated_by_public_capability_and_preserves_picker_back() {
+        use super::*;
+        let session = json!({"id":"stable","generation":"g1","availability":"running","attachment":{"host":"tmux"},"capabilities":{}});
+        let mut m = Manager {
+            page: Page::Session("stable".into()),
+            sessions: vec![session],
+            ..Default::default()
+        };
+        m.options.selected = m
+            .rows()
+            .iter()
+            .position(|r| r.label == "Move to Space")
+            .unwrap();
+        assert!(!m.rows()[m.options.selected].enabled);
+        assert!(m.activate().is_empty());
+        m.go(Page::Spaces("stable".into()));
+        m.back();
+        assert_eq!(m.page, Page::Session("stable".into()));
+    }
+
     #[test]
     fn archive_restore_delete_delegate_confirmed_identity_to_cli_only() {
         let saved = serde_json::json!({"id":"stable","name":"Saved","generation":"g1","availability":"saved","capabilities":{"archive":true,"delete":true}});

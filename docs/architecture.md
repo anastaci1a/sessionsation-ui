@@ -18,6 +18,11 @@ validation remains authoritative. Selections use backend IDs and captured
 generations; stale errors require refresh. No automatic mutation retry, legacy
 receipt adapter or Submit/Queue semantic change belongs here.
 
+HERDR Space movement uses the backend's generation-bound `spaces/move-space`
+actions. The management reducer captures the selected session, cancels pending
+choice viewers without mutation, and discards late lookup responses. It never
+calls HERDR's pane-move command itself or rewrites ownership metadata.
+
 The management plugin is a viewer. It never launches an agent in an overlay.
 The separate terminal launcher executes backend-produced argv with process
 replacement. A Bash parent stays alive to retain the host prompt when an agent
