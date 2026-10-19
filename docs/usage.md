@@ -306,6 +306,8 @@ Only the highlighted Space's `[id]` appears, one space after its name, unbolded
 gray; Back focus hides it. If any ID
 cannot fit inline, the whole list uses the standard centered preview below the
 options or range counter, separated by one blank line.
+Global-root and Space-root paths follow the same preview rules, remain unbolded
+gray, and appear as bare paths one space after the option text when inline.
 
 Open **New Session**, edit Account, Space, Name and Directory in any order, then
 select Start Session directly below the fields and separator. The top bar shows the

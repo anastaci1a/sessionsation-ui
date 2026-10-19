@@ -390,19 +390,22 @@ impl App {
                     }
                 )),
                 Row::gate("Global root", self.prefs.mode == Mode::Global)
-                    .with_preview(path(self.prefs.global_root.as_deref())),
+                    .with_preview(path(self.prefs.global_root.as_deref()))
+                    .preview_gap(1),
                 Row::gate("Space roots", self.prefs.mode == Mode::PerSpace),
             ],
             Page::Roots => self
                 .spaces
                 .iter()
                 .map(|s| {
-                    Row::yes(&s.label).with_preview(path(
-                        self.prefs
-                            .space_roots
-                            .get(&Preferences::key(&self.instance, &s.workspace_id))
-                            .map(PathBuf::as_path),
-                    ))
+                    Row::yes(&s.label)
+                        .with_preview(path(
+                            self.prefs
+                                .space_roots
+                                .get(&Preferences::key(&self.instance, &s.workspace_id))
+                                .map(PathBuf::as_path),
+                        ))
+                        .preview_gap(1)
                 })
                 .collect(),
             Page::Accounts => {
@@ -1982,6 +1985,75 @@ mod tests {
         assert!(a.activate().is_empty());
         assert_eq!(a.page, Page::Config);
         assert!(a.rows()[0].label.starts_with("Default Dir:"));
+    }
+    #[test]
+    fn root_paths_use_bare_gray_selected_previews_with_one_space_and_global_fit() {
+        let mut a = app();
+        a.prefs.global_root = Some("/projects/global".into());
+        a.page = Page::Config;
+        let row = a.rows().remove(1);
+        assert_eq!(row.preview.as_deref(), Some("/projects/global"));
+        assert_eq!(row.preview_gap, 1);
+        assert_eq!(row.preview_fg, crate::widgets::SECONDARY);
+        assert!(row.preview_selected_only);
+        a.page = Page::Roots;
+        a.spaces = vec![
+            Workspace {
+                workspace_id: "w1".into(),
+                label: "Alpha".into(),
+                focused: false,
+            },
+            Workspace {
+                workspace_id: "w2".into(),
+                label: "Beta".into(),
+                focused: false,
+            },
+        ];
+        for (id, path) in [
+            ("w1", "/short"),
+            ("w2", "/projects/a/path/too/long/to/fit/inline"),
+        ] {
+            a.prefs
+                .space_roots
+                .insert(Preferences::key(&a.instance, id), path.into());
+        }
+        let rows = a.rows();
+        assert!(Options::previews_detached(36, &rows));
+        for width in [36, 120] {
+            let mut field = Field::new(width, 24, 1);
+            let c = a.paint(&mut field, 1000, width, 24);
+            let start = 3 * width
+                + c.cells[3 * width..20 * width]
+                    .iter()
+                    .position(|c| c.glyph == "/")
+                    .unwrap();
+            assert_eq!(
+                c.cells[start..start + 6]
+                    .iter()
+                    .map(|c| c.glyph.as_str())
+                    .collect::<String>(),
+                "/short"
+            );
+            assert!(
+                c.cells[start..start + 6]
+                    .iter()
+                    .all(|c| c.fg == crate::widgets::SECONDARY && !c.bold)
+            );
+            if width == 36 {
+                assert_eq!(start / width, 6);
+            } else {
+                let left = Options::left(width, &rows);
+                assert_eq!(start % width, left + 2 + "Alpha".len() + 1);
+            }
+            a.options.back = true;
+            let c = a.paint(&mut field, 1050, width, 24);
+            assert!(
+                c.cells[3 * width..20 * width]
+                    .iter()
+                    .all(|c| c.glyph != "/")
+            );
+            a.options.back = false;
+        }
     }
     #[test]
     fn space_ids_use_shared_selected_previews_and_global_detached_fit() {

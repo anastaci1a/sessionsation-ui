@@ -107,7 +107,7 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 ## Verification record and limits
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **144 Rust tests** (142 unit and two visual tests covering
+passed formatting, Clippy, **145 Rust tests** (143 unit and two visual tests covering
 21 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
@@ -115,11 +115,11 @@ disabled. Regressions cover Back history, stable selection across refreshed list
 active/inactive grouping, unbolded Ready styling and delayed inventory without
 an Add/Manage Account button flash, HERDR-style title borders and star fades over
 neutral, blue-gray and purple backgrounds, and selected-only Space ID previews
-with list-wide inline/detached fit. The isolated
+with list-wide inline/detached fit. Root-path previews additionally verify bare
+paths, one-space gaps, gray unbolded styling and Back-focus hiding. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
-The current release built from these Rust sources, at
-`target-ui/release/sessionsation-ui`, has SHA-256
+The artifact used for the owned terminal/HERDR checks and README capture has SHA-256
 `72d63081c994ab8f56fdcaa0f05de7717e0b03629222c2436d6fd1446dd1cfe1`.
 The three PTY scripts and owned
 HERDR popup test passed against this artifact, including Space lookup cancellation,
