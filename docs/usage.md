@@ -28,7 +28,10 @@ Growing the screen returns that list to Home; forms remain open and Back chooses
 the appropriate current layout without losing their account selection.
 
 On Home, the name selector uses `▶`. While a name is selected, other account names
-use the darker bullet hue. Moving focus away restores their normal hue. Right from an account with available usage selects its bars; Enter/Space
+use the darker bullet hue. Focus on any account name or usage/status also dims
+the top-option bullets, just like Close focus. Close focus dims all account names,
+bars and text statuses; normal deselected gray-white labels/percentages retain
+their brightness and are unbolded. Moving focus away restores the appropriate hue. Right from an account with available usage selects its bars; Enter/Space
 opens Limits directly. Left returns to the name. Cancel, close and save retain the
 same account and bar focus. Only usage focus selects its percentages. The focused bar keeps its normal colors
 and bolds its line characters; other bars darken without adding

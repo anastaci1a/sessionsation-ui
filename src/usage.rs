@@ -399,7 +399,11 @@ impl AccountsLayout {
                 y,
                 &short_name(&account.id),
                 Accent {
-                    brightness: if name_focus && !active { 600 } else { 1000 },
+                    brightness: if back || name_focus && !active {
+                        600
+                    } else {
+                        1000
+                    },
                     bold: active && !usage_focus,
                     ..Accent::default()
                 },
@@ -407,7 +411,7 @@ impl AccountsLayout {
             let usage = Usage::account(account);
             if active && usage_focus {
                 usage.paint_focused(canvas, self.bars, y, self.bar_width, self.digits);
-            } else if usage_focus && !back {
+            } else if back || usage_focus {
                 usage.paint_deemphasized(canvas, self.bars, y, self.bar_width, self.digits);
             } else {
                 usage.paint_selected(
@@ -457,7 +461,7 @@ mod tests {
                 let mut y = 3;
                 for (i, a) in accounts.iter().enumerate() {
                     let active = selected == Some(i) && !back;
-                    let dim_name = selected.is_some() && !back && !usage_focus && !active;
+                    let dim_name = back || selected.is_some() && !usage_focus && !active;
                     let mut expected = base.clone();
                     expected.accent_text(
                         layout.left + 2,
@@ -473,7 +477,7 @@ mod tests {
                     assert_eq!(c.cells[cell], expected.cells[cell]);
                     let usage = Usage::account(a);
                     if usage.status_only() {
-                        let brightness = if usage_focus && !back && !active {
+                        let brightness = if back || usage_focus && !active {
                             600
                         } else {
                             1000
@@ -484,6 +488,27 @@ mod tests {
                         {
                             assert_eq!(c.cells[y * 100 + x], expected.cells[y * 100 + x]);
                             assert!(!c.cells[y * 100 + x].bold);
+                        }
+                    }
+                    if back && !usage.status_only() {
+                        let mut plain = base.clone();
+                        usage.paint(&mut plain, layout.bars, y, layout.bar_width, layout.digits);
+                        for row in y..y + usage.height() {
+                            for x in layout.bars + layout.bar_width + 1
+                                ..layout.bars + usage.width(layout.bar_width, layout.digits)
+                            {
+                                assert_eq!(c.cells[row * 100 + x], plain.cells[row * 100 + x]);
+                                assert_eq!(c.cells[row * 100 + x].fg, crate::widgets::SECONDARY);
+                                assert!(!c.cells[row * 100 + x].bold);
+                            }
+                            for x in layout.bars..layout.bars + layout.bar_width {
+                                assert_eq!(
+                                    c.cells[row * 100 + x].fg,
+                                    plain.cells[row * 100 + x]
+                                        .fg
+                                        .map(|v| (u16::from(v) * 65 / 100) as u8)
+                                );
+                            }
                         }
                     }
                     y += usage.height() + 1;

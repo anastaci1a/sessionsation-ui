@@ -1468,7 +1468,7 @@ impl Manager {
                     top_left,
                     3 + i,
                     self.options.selected == i && !self.options.back,
-                    self.options.back,
+                    self.options.back || self.options.selected >= 5,
                 );
             }
             l.paint(
@@ -1889,6 +1889,33 @@ mod tests {
         m.capabilities =
             json!({"providers":[{"id":"codex","account_limits":true,"enrollment":true}]});
         m
+    }
+    #[test]
+    fn home_account_focus_dims_top_bullets_like_close_without_dimming_labels() {
+        let mut m = setup();
+        let mut field = crate::render::Field::new(100, 40, 1967);
+        let base = field.paint(4200);
+        let mut close = base.clone();
+        m.options.back = true;
+        m.paint(&mut close, 39);
+        for usage_focus in [false, true] {
+            m.options.back = false;
+            m.options.selected = 5;
+            m.usage_focus = usage_focus;
+            let mut selected = base.clone();
+            m.paint(&mut selected, 39);
+            for y in [3, 4, 5, 7] {
+                let range = y * 100..(y + 1) * 100;
+                let x = close.cells[range.clone()]
+                    .iter()
+                    .position(|c| c.glyph == "○")
+                    .unwrap();
+                assert_eq!(selected.cells[y * 100 + x], close.cells[y * 100 + x]);
+                let label = &selected.cells[y * 100 + x + 2];
+                assert_eq!(label.fg, crate::widgets::SECONDARY);
+                assert!(!label.bold);
+            }
+        }
     }
     #[test]
     fn home_usage_focus_limits_returns_to_same_selection() {
