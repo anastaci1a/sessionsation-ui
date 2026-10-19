@@ -66,13 +66,15 @@ configuration as the theme when opening the popup; absent/invalid bindings use
 HERDR’s default Ctrl-B. Nested directory/Space creation
 remains staged until Start. Popup dimensions are measured on opening and remain
 stable through navigation, loading and status changes; terminal resize refits them.
-Fixed-choice popups fit their description, choices and Cancel button exactly.
+Popup widths fit their title, text, fields and choices up to a readable maximum.
+Fixed-choice heights fit their description, choices and Cancel button exactly.
 Forms share the boxed account-name editor; all popup choices are left aligned,
 with descriptive text followed by one blank line before fields or choices.
-Information-only dialogs dismiss with Enter/Esc. Progress and loading dialogs
+Information-only dialogs, including a dialog whose only action is Close, hide
+that action and all bottom controls; Enter/Esc dismisses them. Progress and loading dialogs
 reserve a fixed body viewport and scroll updates within it. Long lists scroll
 and selected previews can move below them. Action groups use title case and a
-blank bullet spacer.
+blank bullet spacer. Where top actions exist, Cancel belongs to that same group.
 
 ## Capabilities and limits
 
@@ -167,7 +169,7 @@ line length (one cell less than the rendered width). Percentages precede period 
 observations show Disabled, Login required or Usage unavailable as appropriate;
 stale observations are marked. New/resume account pickers use standard bullets
 with white/gray names and an aligned `x% 5h / x% wk` block one space after the longest name, omitting the short period and
-slash for weekly-only accounts. The selected account’s status appears one blank line below the list or range counter, without repeating its name. Ready uses the animated selected-bullet hue, unbolded; other statuses remain unbolded gray. Account names accept at most 30 ASCII characters;
+slash for weekly-only accounts. The selected account’s status follows its right-side usage block when every account’s detail can fit at that width; otherwise it appears one blank line below the list or range counter, without repeating its name. Ready uses the popup accent, unbolded; other statuses remain unbolded gray. Account names accept at most 30 ASCII characters;
 typing and paste stop at the limit.
 Duplicate names immediately invalidate the editor and disable confirmation.
 Session creation/resume/rename accepts at most 30 Unicode scalar values, also
@@ -354,9 +356,11 @@ The default Space is
 the one currently focused in HERDR; no focus leaves it unset. Pickers preserve the
 draft on Cancel/Esc. Existing automatic paths require explicit selection. Directory Enter
 selects the current option. In an unfamiliar directory, focus starts on the first
-subdirectory, or Go to Parent when empty; revisiting restores its selection.
-Use This Dir, Leave Unset (for defaults) and Create Dir stay above the scrolling
-subdirectory list and its range counter. If at most six rows fit, the whole list
+subdirectory, or the non-activating `(none)` placeholder when empty; revisiting restores its selection.
+Use This Dir, Leave Unset (for defaults), Create Dir and Cancel stay above the scrolling
+subdirectory list and its range counter, separated from it by a blank bullet row
+even when empty. Left on `(none)` navigates to the parent; Enter does nothing.
+If at most five rows fit, the whole list
 scrolls instead. Directory popup dimensions stay fixed; pending navigation clears
 old child rows and shows Loading… one blank line below the actions. Right browses
 child rows only; Left returns to their parent and does nothing on action rows.

@@ -199,7 +199,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
                         .collect(),
                     ..Listing::default()
                 };
-                app.options.selected = app.rows().len() - 2;
+                app.options.selected = app.rows().len() - 1;
                 if name == "directory-loading" {
                     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
                 }

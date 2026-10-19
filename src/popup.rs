@@ -82,35 +82,66 @@ pub struct Choices<'a> {
     pub note: &'a str,
     pub note_accent: bool,
     pub reserve_note: bool,
+    pub inline_note_width: usize,
     pub large: bool,
     pub pinned: usize,
     pub browse_hint: bool,
 }
+/// Natural content width, capped for readable wrapping and the current terminal.
+pub fn content_width(
+    viewport: usize,
+    title: &str,
+    lines: impl IntoIterator<Item = usize>,
+) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    (lines.into_iter().max().unwrap_or(0) + 4)
+        .max(UnicodeWidthStr::width(title) + 2)
+        .clamp(24, 76)
+        .min(viewport.saturating_sub(4))
+}
 impl Choices<'_> {
+    fn row_end(row: &crate::widgets::Row, width: usize) -> usize {
+        use unicode_width::UnicodeWidthStr;
+        row.preview_position(width, 0)
+            .zip(row.preview.as_deref())
+            .map_or(2 + UnicodeWidthStr::width(row.label.as_str()), |(x, s)| {
+                x + UnicodeWidthStr::width(s)
+            })
+    }
+    fn note_inline(&self, width: usize) -> bool {
+        self.inline_note_width > 0
+            && self.rows.iter().filter(|r| r.label != "Cancel").all(|r| {
+                (r.preview.is_none() || r.preview_position(width, 0).is_some())
+                    && Self::row_end(r, width) + 1 + self.inline_note_width <= width
+            })
+    }
     pub fn measure(&self, viewport: (usize, usize)) -> Size {
-        let width = 76.min(viewport.0.saturating_sub(4));
+        use unicode_width::UnicodeWidthStr;
+        let natural = self.rows.iter().map(|r| {
+            Self::row_end(r, usize::MAX / 2)
+                + 2
+                + usize::from(self.inline_note_width > 0) * (1 + self.inline_note_width)
+        });
+        let width = content_width(
+            viewport.0,
+            self.title,
+            natural
+                .chain([UnicodeWidthStr::width(self.description)])
+                .chain(
+                    self.editor
+                        .map(|f| UnicodeWidthStr::width(f.input.value.as_str()).max(24)),
+                ),
+        );
         let inner = width.saturating_sub(4);
         let description = crate::dialog::wrap(self.description, inner).len();
         let preview = usize::from(crate::widgets::Options::previews_detached(inner, self.rows)) * 2;
-        let note = usize::from(self.reserve_note || !self.note.is_empty()) * 2;
+        let note =
+            usize::from((self.reserve_note || !self.note.is_empty()) && !self.note_inline(inner))
+                * 2;
         let height = if self.large {
             viewport.1.saturating_sub(4)
         } else {
-            description
-                + 1
-                + (if self.reserve_note && self.rows.is_empty() {
-                    3
-                } else {
-                    self.rows.len()
-                })
-                + if self.rows.is_empty() && !self.reserve_note {
-                    1
-                } else {
-                    2
-                }
-                + preview
-                + note
-                + 2
+            description + 1 + self.rows.len().max(1) + preview + note + 2
         };
         Size::fit(viewport, width, height)
     }
@@ -129,15 +160,12 @@ pub fn paint_choices(
             ..Cell::default()
         };
         let description = crate::dialog::wrap(view.description, local.width);
-        let minimum = description.len()
-            + 1
-            + usize::from(view.editor.is_some()) * 4
-            + if view.rows.is_empty() { 1 } else { 3 };
+        let minimum = description.len() + 1 + usize::from(view.editor.is_some()) * 4 + 1;
         if local.height < minimum {
             local.text(
                 0,
                 0,
-                &crate::widgets::clip("Resize to view; Esc cancels", local.width),
+                &clip("Resize to view; Esc cancels", local.width),
                 style,
                 false,
             );
@@ -153,26 +181,60 @@ pub fn paint_choices(
             editor.paint_box(local, 0, top, local.width, palette, true);
             top += 4;
         }
-        let cancel_y = local.height.saturating_sub(if view.large { 2 } else { 1 });
-        let note_height = usize::from(view.reserve_note || !view.note.is_empty()) * 2;
-        let controls = cancel_y.saturating_sub(note_height);
-        let bottom = controls.saturating_sub(1);
+        let inline = view.note_inline(local.width);
+        let note_height = (usize::from((view.reserve_note || !view.note.is_empty()) && !inline)
+            * 2)
+        .min(local.height.saturating_sub(
+            top + usize::from(view.large)
+                + 2
+                + usize::from(crate::widgets::Options::previews_detached(
+                    local.width,
+                    view.rows,
+                )) * 2,
+        ));
+        let bottom = local
+            .height
+            .saturating_sub(usize::from(view.large) + note_height);
         options.back = false;
-        if view.pinned > 0 {
-            options.paint_pinned_menu(local, view.rows, view.pinned, top, bottom, controls);
+        let (_, capacity) = if view.pinned > 0 {
+            options.paint_pinned_menu(local, view.rows, view.pinned, top, bottom, bottom + 1)
         } else {
-            options.paint_menu(local, view.rows, top, bottom, controls);
-        }
+            options.paint_menu(local, view.rows, top, bottom, bottom + 1)
+        };
         if !view.note.is_empty() {
-            let y = if view.large {
-                top + view.rows.len().min(bottom.saturating_sub(top)) + 1
+            let selected_y = if view.pinned > 0
+                && capacity > 5
+                && view.rows.len() > capacity
+                && options.selected < view.pinned
+            {
+                Some(top + options.selected)
             } else {
-                controls
+                options
+                    .selected
+                    .checked_sub(options.scroll)
+                    .filter(|i| *i < capacity)
+                    .map(|i| top + i)
+            };
+            let (x, y) = if inline {
+                view.rows
+                    .get(options.selected)
+                    .zip(selected_y)
+                    .map(|(r, y)| (Choices::row_end(r, local.width) + 1, y))
+                    .unwrap_or((0, local.height))
+            } else {
+                let y = top
+                    + view.rows.len().min(capacity)
+                    + usize::from(view.rows.len() > capacity)
+                    + 1;
+                (
+                    (local.width.saturating_sub(view.note.chars().count())) / 2,
+                    y.min(local.height.saturating_sub(usize::from(view.large) + 1)),
+                )
             };
             local.text(
-                0,
+                x,
                 y,
-                &crate::widgets::clip(view.note, local.width),
+                &clip(view.note, local.width.saturating_sub(x)),
                 Cell {
                     fg: if view.note_accent {
                         palette.accent
@@ -184,17 +246,10 @@ pub fn paint_choices(
                 false,
             );
         }
-        crate::widgets::Row::yes("Cancel").paint(
-            local,
-            0,
-            cancel_y,
-            options.selected == view.rows.len(),
-            false,
-        );
         if view.browse_hint {
             local.text(
                 0,
-                cancel_y + 1,
+                local.height.saturating_sub(1),
                 "◀/▶: Parent/Open",
                 Cell {
                     fg: crate::widgets::SECONDARY,
@@ -266,6 +321,7 @@ mod tests {
                     .left_aligned()
                     .with_selected_preview("/a/long/directory/that/must/move/below"),
                 crate::widgets::Row::yes("Second").left_aligned(),
+                crate::widgets::Row::yes("Cancel").left_aligned(),
             ];
             let mut view = Choices {
                 title: "Choose",
@@ -275,13 +331,14 @@ mod tests {
                 note: "",
                 note_accent: false,
                 reserve_note: false,
+                inline_note_width: 0,
                 large: false,
                 pinned: 0,
                 browse_hint: false,
             };
             let size = view.measure(viewport);
             let detached = crate::widgets::Options::previews_detached(size.width - 4, &rows);
-            assert_eq!(size.height, 8 + usize::from(detached) * 2);
+            assert_eq!(size.height, 7 + usize::from(detached) * 2);
             let mut options = crate::widgets::Options::default();
             let mut c = Canvas::new(viewport.0, viewport.1);
             paint_choices(&mut c, &palette, &view, &mut options, size);
@@ -297,12 +354,13 @@ mod tests {
                 .unwrap();
             assert_eq!(first, desc + 2);
             let cancel = lines.iter().position(|l| l.contains("Cancel")).unwrap();
-            assert_eq!(cancel, (viewport.1 - size.height) / 2 + size.height - 2);
+            assert_eq!(cancel, first + 2);
             assert_eq!(
                 lines[first].find('○').or_else(|| lines[first].find('●')),
                 lines[cancel].find('○').or_else(|| lines[cancel].find('●'))
             );
             view.note = "Asynchronously updated";
+            options.selected = rows.len() - 1;
             let mut c = Canvas::new(viewport.0, viewport.1);
             paint_choices(&mut c, &palette, &view, &mut options, size);
             assert!(
@@ -310,7 +368,12 @@ mod tests {
                     .iter()
                     .map(|c| c.glyph.as_str())
                     .collect::<String>()
-                    .contains("Cancel")
+                    .contains("Cancel"),
+                "{:?}",
+                c.cells
+                    .chunks(c.width)
+                    .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
+                    .collect::<Vec<_>>()
             );
         }
     }

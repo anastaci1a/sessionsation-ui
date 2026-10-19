@@ -913,6 +913,7 @@ impl Manager {
         dialog.size = self.dialog.as_ref().and_then(|d| d.size);
         if matches!(form, Form::Loading) {
             dialog.minimum_height = 16;
+            dialog.minimum_width = 76;
         }
         self.dialog = Some(dialog);
         self.form = form;
@@ -1924,11 +1925,12 @@ impl Manager {
             let view = crate::popup::Choices {
                 title: "Choose Space",
                 description: "Choose a destination Space for this session.",
-                rows: &rows[..rows.len() - 1],
+                rows: &rows,
                 editor: None,
                 note: &self.note,
                 note_accent: false,
                 reserve_note: false,
+                inline_note_width: 0,
                 large: false,
                 pinned: 0,
                 browse_hint: false,

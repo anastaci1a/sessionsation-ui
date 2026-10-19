@@ -87,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
   t.wait('Manage Sessions');t.send(b'\x1b[B\r');t.wait('Savedfixture');time.sleep(.2);t.drain();t.send(b'\x1b[A');t.wait('Operations',selected=True);t.send(b'\r');t.wait('Resume');t.wait('complete')
   t.drain()
   if not t.screen.contains('Resume',selected=True): t.send(b'\x1b[B')
-  t.wait('Resume',selected=True);t.send(b'\r');t.wait('Details',selected=True);t.send(b'\r');t.wait('Close',selected=True)
+  t.wait('Resume',selected=True);t.send(b'\r');t.wait('Details',selected=True);t.send(b'\r');t.wait('Status: Complete.')
   t.send(b'\r');t.wait('Details',selected=True);time.sleep(1.2);t.drain()
   assert t.screen.contains('Details'),'status polling must not reopen dismissed details'
  finally:t.close()
@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
   time.sleep(.6);t.drain();assert not t.screen.contains('Origin'),'cancelled lookup must stay cancelled'
   t.send(b'\r');t.wait('Choose Space');t.wait('Origin');t.send(b'\x1b[B\r');t.wait('running process');t.send(b'\x1b');t.wait('Choose Space')
   assert not (root/'space-moved.json').exists(),'confirmation cancel must not move'
-  t.send(b'\r\r');t.wait('Close',selected=True);t.send(b'\r');t.wait('Manage Sessions')
+  t.send(b'\r\r');t.wait('Session moved.');t.send(b'\r');t.wait('Manage Sessions')
   moved=json.loads((root/'space-moved.json').read_text());assert moved[:5]==['move-space','--session','11111111-1111-4111-8111-111111111111','--expected-generation','captured']
   assert moved[moved.index('--space')+1]=='w2'
  finally:t.close()

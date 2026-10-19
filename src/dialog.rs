@@ -156,6 +156,7 @@ pub struct Dialog {
     pub status: Option<String>,
     pub size: Option<crate::popup::Size>,
     pub minimum_height: usize,
+    pub minimum_width: usize,
     navigation: crate::widgets::SelectionNavigation,
 }
 pub enum Event {
@@ -179,6 +180,7 @@ impl Dialog {
             status: None,
             size: None,
             minimum_height: 0,
+            minimum_width: 0,
             navigation: crate::widgets::SelectionNavigation::default(),
         }
     }
@@ -291,7 +293,32 @@ impl Dialog {
         canvas.overlay(|canvas| self.paint_panel(canvas, palette));
     }
     fn paint_panel(&mut self, canvas: &mut Canvas, palette: &Palette) {
-        let width = canvas.width.saturating_sub(4).min(76);
+        let compact = self.compact
+            || !self.busy
+                && self.fields.is_empty()
+                && self.buttons.len() == 1
+                && self.buttons[0].label == "Close";
+        let natural = self
+            .body
+            .iter()
+            .chain(self.status.iter())
+            .map(|s| UnicodeWidthStr::width(s.as_str()))
+            .chain(self.fields.iter().map(|f| {
+                (UnicodeWidthStr::width(f.label.as_str()) + 4)
+                    .max(UnicodeWidthStr::width(f.input.value.as_str()) + 3)
+                    .max(24)
+            }))
+            .chain(
+                self.buttons
+                    .iter()
+                    .map(|b| UnicodeWidthStr::width(b.label.as_str()) + 2),
+            );
+        let desired_width = crate::popup::content_width(canvas.width, &self.title, natural)
+            .max(self.minimum_width.min(canvas.width.saturating_sub(4)));
+        let width = self
+            .size
+            .filter(|s| s.viewport == (canvas.width, canvas.height))
+            .map_or(desired_width, |s| s.width);
         let max_height = canvas.height.saturating_sub(4);
         let mut lines: Vec<_> = self
             .body
@@ -318,7 +345,7 @@ impl Dialog {
             normalized.pop();
         }
         let lines = normalized;
-        let base_reserved = if self.compact || self.buttons.is_empty() && self.fields.is_empty() {
+        let base_reserved = if compact || self.buttons.is_empty() && self.fields.is_empty() {
             2
         } else {
             self.fields.len() * 3 + self.buttons.len() + if self.fields.is_empty() { 3 } else { 4 }
@@ -337,7 +364,7 @@ impl Dialog {
         let scroll_hint = lines.len() > height.saturating_sub(base_reserved);
         // The footer already owns one blank row; use it for a scroll hint after
         // a live update instead of growing the frame or removing the sole body row.
-        let extra = if scroll_hint {
+        let extra = if scroll_hint && !compact {
             2.min(height.saturating_sub(base_reserved + 1))
         } else {
             0
@@ -376,8 +403,15 @@ impl Dialog {
         for (i, line) in lines.iter().skip(self.offset).take(body_height).enumerate() {
             canvas.text(x + 2, y + 1 + i, line, style.clone(), false);
         }
-        if !self.compact {
-            let mut row = y + 1 + body_height + usize::from(!self.fields.is_empty());
+        if !compact {
+            let mut row = y
+                + 1
+                + lines
+                    .len()
+                    .saturating_sub(self.offset)
+                    .min(body_height)
+                    .max(1)
+                + usize::from(!self.fields.is_empty());
             for (index, field) in self.fields.iter().enumerate() {
                 field.paint_box(
                     canvas,
@@ -410,7 +444,7 @@ impl Dialog {
         } else {
             "Esc: Back"
         };
-        if scroll_hint && (extra > 0 || !self.compact && !self.buttons.is_empty()) {
+        if scroll_hint && !compact && (extra > 0 || !self.buttons.is_empty()) {
             canvas.text(
                 x + 2,
                 if extra > 0 {
@@ -478,6 +512,49 @@ mod tests {
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
     }
     #[test]
+    fn lone_close_is_hidden_but_background_progress_remains_actionable() {
+        let mut d = Dialog::new("Information", vec!["Done".into()], &["Close"]);
+        let mut c = Canvas::new(100, 30);
+        d.paint(&mut c, &Palette::default());
+        assert!(d.size.unwrap().width < 76);
+        let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+        assert!(!text.contains("Close") && !text.contains("Esc:"));
+        assert!(matches!(d.key(enter()), Event::Choose(0, _)));
+        let mut d = Dialog::progress("Working");
+        let mut c = Canvas::new(100, 30);
+        d.paint(&mut c, &Palette::default());
+        assert!(
+            c.cells
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+                .contains("Continue in background")
+        );
+    }
+    #[test]
+    fn async_form_fields_follow_description_with_exactly_one_blank_row() {
+        let mut d = Dialog::new("Limits", vec!["Description".into()], &["Save", "Cancel"]);
+        d.minimum_height = 16;
+        d.fields = vec![Field::new("First", "20"), Field::new("Second", "30")];
+        let mut c = Canvas::new(100, 30);
+        d.paint(&mut c, &Palette::default());
+        let lines: Vec<String> = c
+            .cells
+            .chunks(c.width)
+            .map(|r| r.iter().map(|c| c.glyph.as_str()).collect())
+            .collect();
+        let body = lines
+            .iter()
+            .position(|r| r.contains("Description"))
+            .unwrap();
+        let field = lines.iter().position(|r| r.contains("First")).unwrap();
+        assert_eq!(field, body + 2);
+        let original = d.size.unwrap();
+        d.fields[0].input.insert("longer value");
+        d.paint(&mut Canvas::new(100, 30), &Palette::default());
+        assert_eq!(d.size.unwrap().width, original.width);
+    }
+    #[test]
     fn live_content_and_completion_never_resize_an_open_dialog() {
         let mut d = Dialog::progress("Work");
         let palette = Palette::default();
@@ -524,11 +601,11 @@ mod tests {
             let mut canvas = Canvas::new(60, 24);
             d.paint(&mut canvas, &Palette::default());
             let start = canvas.cells.iter().position(|c| c.glyph == "┌").unwrap();
-            let row = canvas.cells[start..start + 56]
+            let row = canvas.cells[start..start + d.size.unwrap().width]
                 .iter()
                 .map(|c| c.glyph.as_str())
                 .collect::<String>();
-            assert!(row.starts_with(&format!("┌{}", clip(title, 54))));
+            assert!(row.starts_with(&format!("┌{}", clip(title, d.size.unwrap().width - 2))));
             assert!(row.ends_with('┐'));
             if title == "Popup Title" {
                 assert!(row.starts_with("┌Popup Title──"));

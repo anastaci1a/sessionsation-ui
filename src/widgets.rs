@@ -151,6 +151,7 @@ pub struct Row {
     pub preview_gap: usize,
     pub separator: bool,
     left_aligned: bool,
+    placeholder: bool,
     preview_group: u8,
     field_padding: Option<std::ops::Range<usize>>,
 }
@@ -181,6 +182,7 @@ impl Row {
             preview_gap: 2,
             separator: false,
             left_aligned: false,
+            placeholder: false,
             preview_group: 0,
             field_padding: None,
         }
@@ -193,6 +195,11 @@ impl Row {
     pub fn account(mut self) -> Self {
         self.account = true;
         self
+    }
+    pub fn placeholder(label: impl Into<String>) -> Self {
+        let mut row = Self::gate(label, false);
+        row.placeholder = true;
+        row
     }
     pub fn left_aligned(mut self) -> Self {
         self.left_aligned = true;
@@ -261,6 +268,7 @@ impl Row {
             preview_gap: 2,
             separator: true,
             left_aligned: false,
+            placeholder: false,
             preview_group: 0,
             field_padding: None,
         }
@@ -277,6 +285,19 @@ impl Row {
         back: bool,
         show_preview: bool,
     ) {
+        if self.placeholder {
+            canvas.text(
+                x + 2,
+                y,
+                &self.label,
+                Cell {
+                    fg: SECONDARY,
+                    ..Cell::default()
+                },
+                true,
+            );
+            return;
+        }
         if self.separator {
             canvas.accent_text(
                 x,
@@ -707,25 +728,11 @@ impl Options {
             .saturating_sub(top);
         let overflow = rows.len() > available;
         let capacity = available.saturating_sub(usize::from(overflow));
-        if !overflow || capacity <= 6 || pinned >= rows.len() {
+        if !overflow || capacity <= 5 || pinned >= rows.len() {
             return self.paint_menu(canvas, rows, top, bottom, controls_start);
         }
-        self.preview_visible = false;
-        let body_capacity = capacity.saturating_sub(pinned);
-        self.scroll = self
-            .scroll
-            .max(pinned)
-            .min(rows.len().saturating_sub(body_capacity).max(pinned));
-        if self.selected >= pinned {
-            if self.selected < self.scroll {
-                self.scroll = self.selected;
-            }
-            if self.selected >= self.scroll + body_capacity {
-                self.scroll = self.selected + 1 - body_capacity;
-            }
-        }
         let left = Self::left(canvas.width, rows);
-        for (i, row) in rows.iter().enumerate().take(pinned) {
+        for (i, row) in rows.iter().take(pinned).enumerate() {
             row.paint(
                 canvas,
                 left,
@@ -734,24 +741,19 @@ impl Options {
                 self.back,
             );
         }
-        for (i, row) in rows
-            .iter()
-            .enumerate()
-            .skip(self.scroll)
-            .take(body_capacity)
-        {
-            row.paint(
-                canvas,
-                left,
-                top + pinned + i - self.scroll,
-                self.selected == i && !self.back,
-                self.back,
-            );
-        }
         let mut body = self.clone();
-        body.scroll = self.scroll - pinned;
-        body.paint_range(canvas, rows.len() - pinned, body_capacity, top + capacity);
-        (left, capacity)
+        body.selected = self.selected.checked_sub(pinned).unwrap_or(usize::MAX);
+        body.scroll = self.scroll.saturating_sub(pinned);
+        let (_, body_capacity) = body.paint_menu(
+            canvas,
+            &rows[pinned..],
+            top + pinned,
+            bottom,
+            controls_start,
+        );
+        self.scroll = body.scroll + pinned;
+        self.preview_visible = body.preview_visible;
+        (left, pinned + body_capacity)
     }
     pub fn paint_range(&self, canvas: &mut Canvas, count: usize, capacity: usize, y: usize) {
         if capacity == 0 || count <= capacity {
@@ -797,6 +799,26 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyEventKind};
     use std::time::{Duration, Instant};
+    #[test]
+    fn pinned_header_survives_six_rows_but_five_scrolls_everything() {
+        let mut rows = vec![Row::yes("Action"), Row::yes("Cancel"), Row::separator()];
+        rows.extend((0..20).map(|i| Row::yes(format!("Child {i}"))));
+        for (bottom, pinned) in [(7, true), (6, false)] {
+            let mut options = Options {
+                selected: rows.len() - 1,
+                ..Options::default()
+            };
+            let mut c = Canvas::new(50, 15);
+            options.paint_pinned_menu(&mut c, &rows, 3, 0, bottom, 12);
+            let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+            assert_eq!(text.contains("Action"), pinned);
+            assert_eq!(text.contains("Cancel"), pinned);
+            assert!(text.contains("Child 19"));
+        }
+        let mut c = Canvas::new(40, 10);
+        Row::placeholder("(none)").paint(&mut c, 0, 0, true, false);
+        assert!(c.cells.iter().all(|c| !c.strike && !c.bold));
+    }
     #[test]
     fn pinned_actions_stay_visible_and_short_viewports_scroll_the_whole_list() {
         let mut rows = vec![

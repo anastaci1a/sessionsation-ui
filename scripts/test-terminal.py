@@ -63,9 +63,9 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  t=Terminal(root)
  try:
   t.wait('New Session');t.drain();t.send(b'\r');t.wait('Account:')
-  t.send(b'\x1b[B'*3+b'\r');t.wait('Start directory');t.wait('Go to Parent',selected=True);t.drain()
+  t.send(b'\x1b[B'*3+b'\r');t.wait('Start directory');t.wait('(none)');t.drain()
   assert not t.screen.contains('Parent/Open')
-  t.send(b'\r');t.wait('projects/');t.drain()
+  t.send(b'\x1b[D');t.wait('projects/');t.drain()
   assert t.screen.contains('Parent/Open')
   t.send(b'\x1b[H');time.sleep(.06);t.drain();assert not t.screen.contains('Parent/Open')
   t.send(b'\x1b');t.wait('Account:');assert not (root/'start.json').exists()

@@ -50,9 +50,11 @@ Its reusable components are:
 - `usage`: one measurement/rendering system for remaining-allowance bars, limit
   markers, status-only accounts and shared columns across responsive layouts.
 - `popup`: shared frame, measured size and choice-list template (optional boxed
-  editor, pinned action group, selected preview, status and Cancel). Callers supply
+  editor, pinned action group including Cancel, selected preview and status). Callers supply
   content and handle actions; they do not duplicate layout. Pickers preserve the
-  opening screen and cache geometry until terminal resize. Compositing translates
+  opening screen and cache geometry until terminal resize. Natural widths fit
+  known content up to a readable maximum; selected account statuses share a
+  list-wide inline/detached fit rule. Compositing translates
   the native cursor and keeps background star lifetimes independent.
 - `dialog`: shared one/multiple-field forms, confirmations, information and
   progress. The same boxed editor paints session/account names and directory
@@ -61,7 +63,9 @@ Its reusable components are:
   Geometry is measured once per open dialog; live body/status updates and progress
   completion scroll inside it. Async loading reserves its result viewport before
   the request completes. Options are left aligned below descriptive text and a
-  blank line. Controllers own validation, cancellation and CLI effects.
+  blank line. Fields follow the actual visible text, not unused viewport rows.
+  Lone Close actions are presentation-free Enter/Esc dismissals; active progress
+  retains Continue in background. Controllers own validation, cancellation and CLI effects.
 - `host_theme`: reads HERDR colors without changing host configuration.
 - `management`: stable-ID list focus, account action groups and lifecycle menus;
   navigation history restores opener identity and scroll position, and shared

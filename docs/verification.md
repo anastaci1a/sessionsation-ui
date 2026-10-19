@@ -91,7 +91,7 @@ cp .demo/output/demo.gif docs/assets/demo.gif
 npm run check
 ```
 
-The checked-in demo is about 1.1 MiB, 46 seconds and 319 frames at a 10 FPS cap;
+The checked-in demo is about 1.1 MiB, 46 seconds and 318 frames at a 10 FPS cap;
 its 128×40 terminal renders to 1096×718 pixels. It shows bars/limits, session
 activity/details, the staged directory picker and an inert normal-tab handoff.
 The contact sheet and loop seam were inspected before README promotion. No real
@@ -107,7 +107,7 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 ## Verification record and limits
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **163 Rust tests** (161 unit and two visual tests covering
+passed formatting, Clippy, **166 Rust tests** (164 unit and two visual tests covering
 23 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
@@ -121,15 +121,19 @@ tests cover editor focus, Unicode positions, overlay ownership and visibility
 without shape/color changes or per-frame visibility toggling. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
-The README capture and tested artifact use SHA-256
-`a79ca7707c9f743e37bf17f2c4549e4e40f719a747bc3aebface3c354c07761a`.
-All three PTY scripts and the owned HERDR popup test passed against it. Shared
+The README capture uses SHA-256 `125ca57415b64f91ef34c11695d65077127b93b82b2d29937970cce0b605227d`.
+The tested release artifact is `5c84ed036f31c40f2c08078ffbca434293857614dbeaec9d81820be58dd5fc76`; its final guard additionally
+keeps account statuses below the list when usage cannot fit in a very narrow popup.
+All three PTY scripts and the owned HERDR popup test passed against the release artifact. Shared
 form, choice, information and progress regressions cover exact fixed-choice
 height, left alignment, Cancel/history restoration, one/multiple-input cursor
 ownership, Enter/Esc information dismissal and locked geometry through live
 body/status changes, loading-to-confirmation transitions and completion. Resize
 refits the frame; long content scrolls inside it. Directory goldens cover pinned
-actions, loading without stale children and a visible Cancel button. Other
+actions with Cancel in the same group, the five-row scrolling fallback, loading
+without stale children and the non-activating `(none)` row with Left-to-parent.
+Width-fitting and one-blank-line field spacing, inline/detached account statuses,
+and hidden lone Close buttons with preserved background progress are covered. Other
 coverage includes inactive account-label hiding, independent preview fit, Space
 lookup cancellation, confirmation, one captured-generation mutation and return
 to the selected session. Configured-prefix tests close Home, summary, editor
