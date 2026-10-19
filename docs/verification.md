@@ -2,7 +2,7 @@
 
 ## Rust popup
 
-The expanded popup passes **107 Rust tests** (105 unit tests and two tests covering
+The expanded popup passes **108 Rust tests** (106 unit tests and two tests covering
 21 complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
 regressions**. Syntax, manifest fields and documentation links pass. The goldens
 exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,
