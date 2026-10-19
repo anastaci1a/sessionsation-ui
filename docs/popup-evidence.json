@@ -2,13 +2,13 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "6e9ea1e3a7bbbe163c9d3d7d67a5814cc82761bf",
-    "backend": "aea768160343b21e575e12394c5662f049d50433",
+    "ui": "6bf0a6523c07c3eae863e8fe0afad701fb0ed188",
+    "backend": "043b3f3081b4dc83f50e70232a341761de8922e7",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
   "checks": {
     "rust": {
-      "unit_passed": 107,
+      "unit_passed": 110,
       "visual_snapshot_test_passed": 2,
       "golden_frames": 21,
       "failed": 0,
@@ -24,13 +24,13 @@
       "command": "npm run check"
     },
     "backend": {
-      "standard_tests_passed": 243,
+      "standard_tests_passed": 245,
       "installed_herdr_test_passed": 3,
       "failed": 0,
       "standard_command": "scripts/check.sh",
-      "standard_source": "aea768160343b21e575e12394c5662f049d50433",
+      "standard_source": "043b3f3081b4dc83f50e70232a341761de8922e7",
       "tests": {
-        "unit": 127,
+        "unit": 129,
         "cli": 8,
         "external_move": 62,
         "external_move_ignored": 3,
@@ -255,6 +255,25 @@
       "failed": 0,
       "source": "aea768160343b21e575e12394c5662f049d50433",
       "isolation": "Disposable owner, account and fake provider; no production deletion"
+    }
+  },
+  "session_action_regressions": {
+    "initial_focus": "First non-separator row even when unavailable",
+    "hints": "Selected-only gray unbolded tmux and short public resume reason; hide on Back and use shared narrow-screen fallback",
+    "unfinished_resume": "Warning confirmation carries explicit CLI consent; cancel has no lifecycle effects",
+    "host_acceptance": {
+      "source": "043b3f3081b4dc83f50e70232a341761de8922e7",
+      "passed": 1,
+      "models": 0,
+      "test": "launch::installed_herdr_new_tab_handoff_retains_exact_account_and_shell",
+      "checks": [
+        "unfinished history requires explicit confirmation",
+        "original-account exact resume",
+        "cross-account resume without repeated warning",
+        "stale/idempotency guards",
+        "conversation identity and origin shell retained",
+        "no turn/start or turn/steer"
+      ]
     }
   }
 }

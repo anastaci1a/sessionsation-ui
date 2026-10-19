@@ -3,18 +3,18 @@
   "kind": "Rust account/session popup; preserved original switcher and Agent DM selection",
   "artifacts": {
     "ui": {
-      "source_commit": "6e9ea1e3a7bbbe163c9d3d7d67a5814cc82761bf",
-      "path": "/mnt/user/live/packages/sessionsation-ui/releases/6e9ea1e3a7bbbe163c9d3d7d67a5814cc82761bf/sessionsation-ui",
-      "sha256": "9f066abb0976100ed87c39a7d03e02ef28ac215034058c7d49e2a4f48cfa6d50",
+      "source_commit": "6bf0a6523c07c3eae863e8fe0afad701fb0ed188",
+      "path": "/mnt/user/live/packages/sessionsation-ui/releases/6bf0a6523c07c3eae863e8fe0afad701fb0ed188/sessionsation-ui",
+      "sha256": "003be713ebc0c8b3764484d02f331cf417dc940138c904efdf338f305e91a34a",
       "cargo_lock_sha256": "91cbb0257cb3f9aca0b38fbfe5adb67af0f7e24510eadc232c9a39585f1e5e08",
       "profile": "release",
       "rust_version": "1.95.0",
       "minimum_rust_version": "1.88"
     },
     "backend": {
-      "source_commit": "aea768160343b21e575e12394c5662f049d50433",
-      "path": "/mnt/user/live/packages/sessionsation/popup/aea768160343b21e575e12394c5662f049d50433/sessionsation",
-      "sha256": "bc66f2b6c353e6f8cdd69294c025d1e19e6e3842769f99f0c8bccb7e7958f200",
+      "source_commit": "043b3f3081b4dc83f50e70232a341761de8922e7",
+      "path": "/mnt/user/live/packages/sessionsation/popup/043b3f3081b4dc83f50e70232a341761de8922e7/sessionsation",
+      "sha256": "3fddad00cf7bfa3109f95c563e719c38e4480169c60d5a1d96a558c088d9a3c7",
       "cargo_lock_sha256": "13959dc2de624ff7f6bc4a7fed537b01b6d89572b61e8bb9238cb748afc17265",
       "profile": "release",
       "rust_version": "1.95.0",
@@ -54,8 +54,8 @@
     "reload_command": "herdr --session default server reload-config",
     "rollback_restores": "pre-popup default numbered launcher and exact HERDR configuration; removes popup client config; installed artifacts and UI preferences retained",
     "runtime_update": {
-      "ui_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/ui-dff00d67-8056-4b53-a45e-41110a756d98.json",
-      "backend_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/client-80527a5b-d9b6-48f5-a00d-6c157d1303b8.json",
+      "ui_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/ui-47655a29-0e0f-48cb-8876-855aa9090c90.json",
+      "backend_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/client-4a7e8419-f28b-4a4b-91f3-eac19d7241b9.json",
       "rollback": "Restore the corresponding client config/UI symlink receipt. Owner rollback additionally requires public daemon stop, registry-lock release and previous immutable daemon start against the same root; never stop native agents."
     },
     "account_deletion": {
