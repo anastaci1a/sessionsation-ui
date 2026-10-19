@@ -109,6 +109,8 @@ struct Saved {
     options: Options,
     text: String,
     listing: Listing,
+    listing_pending: bool,
+    popup_size: Option<(Page, crate::popup::Size)>,
 }
 pub struct App {
     navigation: crate::widgets::Navigation,
@@ -117,6 +119,7 @@ pub struct App {
     pub options: Options,
     pub input: TextInput,
     pub listing: Listing,
+    listing_pending: bool,
     pub draft: Draft,
     pub prefs: Preferences,
     pub accounts: Vec<Account>,
@@ -145,6 +148,7 @@ pub struct App {
     auto_space: bool,
     pub dirty: bool,
     pending_child: Option<PathBuf>,
+    popup_size: Option<(Page, crate::popup::Size)>,
     status: crate::status::Status,
 }
 impl App {
@@ -169,6 +173,7 @@ impl App {
             options: Options::default(),
             input: TextInput::default(),
             listing: Listing::default(),
+            listing_pending: false,
             draft,
             prefs,
             accounts: vec![],
@@ -197,6 +202,7 @@ impl App {
             auto_space: true,
             dirty: true,
             pending_child: None,
+            popup_size: None,
             status: crate::status::Status::default(),
         }
     }
@@ -438,7 +444,8 @@ impl App {
                     })
                     .collect()
             }
-            Page::Spaces => std::iter::once(Row::yes("[create new space]"))
+            Page::Spaces => std::iter::once(Row::yes("Create New Space"))
+                .chain((!self.spaces.is_empty()).then(Row::separator))
                 .chain(self.spaces.iter().map(|s| {
                     Row::yes(&s.label)
                         .with_selected_preview(format!("({})", s.workspace_id))
@@ -455,26 +462,24 @@ impl App {
                 "Create directory",
                 valid_name(&self.input.value) && self.listing.creatable,
             )],
-            Page::Directory(_) => {
-                std::iter::once(Row::gate("[use this dir]", self.listing.existing))
-                    .chain((self.directory_action_count() == 3).then(|| Row::yes("[leave unset]")))
-                    .chain(std::iter::once(Row::gate(
-                        "[create dir]",
-                        self.listing.existing || self.listing.creatable,
-                    )))
-                    .chain(
-                        self.directory_parent_option()
-                            .then(|| Row::yes("[parent dir]")),
-                    )
-                    .chain((!self.listing.children.is_empty()).then(Row::separator))
-                    .chain(self.listing.children.iter().map(|p| {
-                        Row::yes(format!(
-                            "{}/",
-                            p.file_name().unwrap_or_default().to_string_lossy()
-                        ))
-                    }))
-                    .collect()
-            }
+            Page::Directory(_) => std::iter::once(Row::gate("Use This Dir", self.listing.existing))
+                .chain((self.directory_action_count() == 3).then(|| Row::yes("Leave Unset")))
+                .chain(std::iter::once(Row::gate(
+                    "Create Dir",
+                    self.listing.existing || self.listing.creatable,
+                )))
+                .chain(
+                    self.directory_parent_option()
+                        .then(|| Row::yes("Go to Parent")),
+                )
+                .chain((!self.listing.children.is_empty()).then(Row::separator))
+                .chain(self.listing.children.iter().map(|p| {
+                    Row::yes(format!(
+                        "{}/",
+                        p.file_name().unwrap_or_default().to_string_lossy()
+                    ))
+                }))
+                .collect(),
             Page::Launching => vec![Row::gate("Starting session…", false)],
         }
     }
@@ -484,14 +489,17 @@ impl App {
             options: self.options.clone(),
             text: self.input.value.clone(),
             listing: self.listing.clone(),
+            listing_pending: self.listing_pending,
+            popup_size: self.popup_size.take(),
         });
         self.page = page;
+        self.pending_child = None;
         self.options.selected = 0;
         if self.page == Page::Spaces
             && let Some(Space::Existing { id, .. }) = &self.draft.space
             && let Some(index) = self.spaces.iter().position(|s| s.workspace_id == *id)
         {
-            self.options.selected = index + 1;
+            self.options.selected = index + 2;
         }
         self.options.scroll = 0;
         self.options.back = false;
@@ -511,6 +519,7 @@ impl App {
         }
     }
     fn inspect(&mut self) -> Vec<Effect> {
+        self.listing_pending = true;
         self.revision += 1;
         self.listing = Listing::default();
         vec![Effect::Inspect(
@@ -525,6 +534,7 @@ impl App {
         )]
     }
     fn pop(&mut self) -> Vec<Effect> {
+        self.revision += 1;
         let save = matches!(self.page, Page::Config | Page::Roots);
         if self.page == Page::Accounts {
             self.switch = None;
@@ -541,6 +551,8 @@ impl App {
             self.input.cursor = self.input.value.len();
             self.input.max_chars = (self.page == Page::Name).then_some(NAME_MAX_CHARS);
             self.listing = old.listing;
+            self.listing_pending = old.listing_pending;
+            self.popup_size = old.popup_size;
             self.options.back = false;
             self.error.clear();
             self.dirty = true;
@@ -639,7 +651,7 @@ impl App {
         let picker_space = if self.page == Page::Spaces {
             self.options
                 .selected
-                .checked_sub(1)
+                .checked_sub(2)
                 .and_then(|i| self.spaces.get(i))
                 .map(|s| s.workspace_id.clone())
         } else {
@@ -653,7 +665,7 @@ impl App {
                 .spaces
                 .iter()
                 .position(|s| s.workspace_id == id)
-                .map(|i| i + 1)
+                .map(|i| i + 2)
                 .unwrap_or(0);
         }
         if self.auto_space {
@@ -718,13 +730,35 @@ impl App {
         {
             return;
         }
+        self.listing_pending = false;
         match result {
             Ok(l) => {
                 self.listing = l;
-                if let Some(child) = self.pending_child.take()
-                    && let Some(index) = self.listing.children.iter().position(|p| *p == child)
-                {
-                    self.options.selected = index + self.directory_children_offset();
+                if matches!(self.page, Page::Directory(_)) && self.listing.existing {
+                    let child = self
+                        .pending_child
+                        .take()
+                        .and_then(|child| self.listing.children.iter().position(|p| *p == child))
+                        .map(|i| i + self.directory_children_offset());
+                    let prior = self
+                        .listing
+                        .path
+                        .as_ref()
+                        .and_then(|path| self.history.get(path))
+                        .copied();
+                    let rows = self.rows();
+                    let remembered =
+                        prior.filter(|i| rows.get(*i).is_some_and(|row| !row.separator));
+                    self.options.selected = child.or(remembered).unwrap_or_else(|| {
+                        if !self.listing.children.is_empty() {
+                            self.directory_children_offset()
+                        } else if self.directory_parent_option() {
+                            self.directory_action_count()
+                        } else {
+                            0
+                        }
+                    });
+                    self.options.scroll = 0;
                 }
             }
             Err(e) => {
@@ -966,7 +1000,7 @@ impl App {
                     self.push(Page::SpaceName, String::new())
                 } else {
                     self.auto_space = false;
-                    let s = &self.spaces[self.options.selected - 1];
+                    let s = &self.spaces[self.options.selected - 2];
                     self.draft.space = Some(Space::Existing {
                         id: s.workspace_id.clone(),
                         label: s.label.clone(),
@@ -1296,30 +1330,64 @@ impl App {
         let options = std::mem::replace(&mut self.options, saved.options.clone());
         let input = std::mem::replace(&mut self.input, TextInput::new(saved.text.clone()));
         let listing = std::mem::replace(&mut self.listing, saved.listing.clone());
+        let listing_pending = std::mem::replace(&mut self.listing_pending, saved.listing_pending);
         let error = std::mem::take(&mut self.error);
         let pending = std::mem::replace(&mut self.pending, false);
+        let popup_size = std::mem::replace(&mut self.popup_size, saved.popup_size.clone());
         self.paint_page(canvas, width, height);
         self.page = page;
         self.options = options;
         self.input = input;
         self.listing = listing;
+        self.listing_pending = listing_pending;
         self.error = error;
         self.pending = pending;
+        self.popup_size = popup_size;
     }
     fn paint_page(&mut self, canvas: &mut Canvas, width: usize, height: usize) {
         if Self::is_popup(&self.page) {
-            let inner_width = width.saturating_sub(4).min(76).saturating_sub(4);
+            let rows = self.rows();
+            let directory = matches!(self.page, Page::Directory(_));
+            let preferred_width = if self.is_form() {
+                76
+            } else {
+                crate::popup::picker_width(&rows)
+            };
+            let inner_width = preferred_width
+                .min(width.saturating_sub(4))
+                .saturating_sub(4);
             let hints = crate::widgets::hint_lines(self.control_tokens(), inner_width);
             let top = if self.is_form() { 2 } else { 0 };
-            let rows = self.rows();
-            let extra = usize::from(Options::previews_detached(inner_width, &rows)) * 2;
-            let note =
-                usize::from(self.page == Page::Accounts || !self.error.is_empty() || self.pending)
-                    * 2;
-            let desired = 2 + top + rows.len() + hints.len() + 2 + extra + note;
+            if self
+                .popup_size
+                .as_ref()
+                .is_none_or(|(page, size)| *page != self.page || size.viewport != (width, height))
+            {
+                let extra = usize::from(Options::previews_detached(inner_width, &rows)) * 2;
+                let row_count = if self.page == Page::Accounts
+                    && self.accounts.is_empty()
+                    && !self.manager.inventory_known
+                {
+                    8
+                } else {
+                    rows.len()
+                };
+                let desired = if directory {
+                    height.saturating_sub(4)
+                } else {
+                    2 + top + row_count + hints.len() + 4 + extra
+                };
+                self.popup_size = Some((
+                    self.page.clone(),
+                    crate::popup::Size::fit((width, height), preferred_width, desired),
+                ));
+            }
+            let size = self.popup_size.as_ref().unwrap().1;
+            let hints =
+                crate::widgets::hint_lines(self.control_tokens(), size.width.saturating_sub(4));
             let palette = self.manager.palette.clone();
             let title = self.popup_title();
-            crate::popup::paint(canvas, title, &palette, desired, |local| {
+            crate::popup::paint_sized(canvas, title, &palette, size, |local| {
                 let footer = local.height.saturating_sub(hints.len());
                 self.paint_choices(local, top, footer, local.width, &hints);
             });
@@ -1346,6 +1414,8 @@ impl App {
                         options: Options::default(),
                         text: String::new(),
                         listing: Listing::default(),
+                        listing_pending: false,
+                        popup_size: None,
                     },
                     &mut canvas,
                     width,
@@ -1476,7 +1546,8 @@ impl App {
         hints: &[String],
     ) {
         let rows = self.rows();
-        let has_note = !self.error.is_empty()
+        let has_note = Self::is_popup(&self.page)
+            || !self.error.is_empty()
             || self.pending
             || self.page == Page::Launching
             || self.page == Page::Summary && self.resume.is_none() && !self.manager.sessions_known
@@ -1487,9 +1558,19 @@ impl App {
             footer
         };
         let bottom = menu_controls.saturating_sub(if self.page == Page::Summary { 3 } else { 1 });
-        let (left, capacity) = self
-            .options
-            .paint_menu(canvas, &rows, top, bottom, menu_controls);
+        let (left, capacity) = if matches!(self.page, Page::Directory(_)) {
+            self.options.paint_pinned_menu(
+                canvas,
+                &rows,
+                self.directory_children_offset(),
+                top,
+                bottom,
+                menu_controls,
+            )
+        } else {
+            self.options
+                .paint_menu(canvas, &rows, top, bottom, menu_controls)
+        };
         if self.page != Page::Launching {
             self.options.paint_back(
                 canvas,
@@ -1504,7 +1585,9 @@ impl App {
         }
         if self.is_form() {
             let valid = if matches!(self.page, Page::Directory(_)) {
-                self.listing.existing || self.listing.creatable
+                self.listing_pending || self.listing.existing || self.listing.creatable
+            } else if matches!(self.page, Page::NewDirectory(..)) && self.listing_pending {
+                true
             } else {
                 rows.first().is_some_and(|r| r.enabled)
             };
@@ -1551,7 +1634,10 @@ impl App {
             );
         }
 
-        let note = if !self.error.is_empty() {
+        let loading_directory = matches!(self.page, Page::Directory(_)) && self.listing_pending;
+        let note = if loading_directory {
+            "Loading…".into()
+        } else if !self.error.is_empty() {
             self.error.clone()
         } else if self.page == Page::Accounts {
             self.accounts
@@ -1579,7 +1665,12 @@ impl App {
         } else {
             String::new()
         };
-        if self.page == Page::Accounts && self.error.is_empty() {
+        if loading_directory {
+            let y = top + rows.len().min(capacity) + 1;
+            if y < footer {
+                crate::widgets::paint_status(canvas, y + 2, &note);
+            }
+        } else if self.page == Page::Accounts && self.error.is_empty() {
             let y = top + rows.len().min(capacity) + usize::from(rows.len() > capacity) + 1;
             if y + 1 < footer {
                 crate::widgets::paint_status_colored(canvas, y + 2, &note, note == "Ready");
@@ -1602,6 +1693,132 @@ impl App {
 mod tests {
     use super::*;
     #[test]
+    fn popup_geometry_is_stable_across_focus_status_and_loading_changes() {
+        let mut a = app();
+        a.accounts =
+            vec![serde_json::from_value(json!({"id":"codex:personal","selectable":true})).unwrap()];
+        a.spaces = vec![Workspace {
+            workspace_id: "w1".into(),
+            label: "Work".into(),
+            focused: true,
+        }];
+        a.manager.inventory_known = true;
+        for page in [
+            Page::Accounts,
+            Page::Spaces,
+            Page::Roots,
+            Page::Name,
+            Page::SpaceName,
+            Page::Directory(Target::Draft),
+        ] {
+            a.page = page;
+            a.popup_size = None;
+            a.pending = false;
+            a.error.clear();
+            a.options.back = false;
+            let mut field = Field::new(100, 30, 2);
+            a.paint(&mut field, 0, 100, 30);
+            let initial = a.popup_size.as_ref().unwrap().1;
+            for back in [true, false] {
+                a.options.back = back;
+                a.pending = true;
+                a.error = "Synthetic status".into();
+                a.paint(&mut field, 20, 100, 30);
+                let size = a.popup_size.as_ref().unwrap().1;
+                assert_eq!((size.width, size.height), (initial.width, initial.height));
+            }
+            a.paint(&mut field, 40, 40, 14);
+            let resized = a.popup_size.as_ref().unwrap().1;
+            assert_eq!(resized.viewport, (40, 14));
+            assert!(resized.width <= 36 && resized.height <= 10);
+        }
+        a.page = Page::Accounts;
+        a.options.back = true;
+        a.pending = false;
+        a.error.clear();
+        a.popup_size = None;
+        let c = a.paint(&mut Field::new(100, 30, 1), 0, 100, 30);
+        assert!(a.popup_size.as_ref().unwrap().1.width < 76);
+        assert!(
+            c.cells
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+                .contains("◀— Back")
+        );
+    }
+    #[test]
+    fn directory_navigation_defaults_and_loading_keep_the_frame_and_actions() {
+        let mut a = app();
+        a.page = Page::Directory(Target::Draft);
+        a.input = TextInput::new("/projects".into());
+        a.listing(
+            a.revision,
+            Ok(Listing {
+                path: Some("/projects".into()),
+                existing: true,
+                children: vec!["/projects/child".into()],
+                ..Listing::default()
+            }),
+        );
+        assert_eq!(a.options.selected, a.directory_children_offset());
+        let mut field = Field::new(100, 30, 7);
+        a.paint(&mut field, 0, 100, 30);
+        let size = a.popup_size.as_ref().unwrap().1;
+        a.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let c = a.paint(&mut field, 20, 100, 30);
+        let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+        assert!(
+            text.contains("Use This Dir")
+                && text.contains("Create Dir")
+                && text.contains("Loading…")
+        );
+        assert!(!text.contains("child/"));
+        let lines: Vec<_> = c
+            .cells
+            .chunks(100)
+            .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
+            .collect();
+        let create = lines.iter().position(|s| s.contains("Create Dir")).unwrap();
+        let loading = lines.iter().position(|s| s.contains("Loading…")).unwrap();
+        assert_eq!(loading, create + 2);
+        assert_eq!(a.popup_size.as_ref().unwrap().1.height, size.height);
+        a.listing(
+            a.revision,
+            Ok(Listing {
+                path: Some("/projects/child".into()),
+                existing: true,
+                children: vec![],
+                ..Listing::default()
+            }),
+        );
+        assert!(!a.listing_pending);
+        assert_eq!(a.rows()[a.options.selected].label, "Go to Parent");
+        a.activate();
+        a.listing(
+            a.revision,
+            Ok(Listing {
+                path: Some("/projects".into()),
+                existing: true,
+                children: vec!["/projects/a".into(), "/projects/child".into()],
+                ..Listing::default()
+            }),
+        );
+        assert_eq!(a.rows()[a.options.selected].label, "child/");
+        a.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        a.history.insert("/projects/child".into(), 1);
+        a.listing(
+            a.revision,
+            Ok(Listing {
+                path: Some("/projects/child".into()),
+                existing: true,
+                children: vec!["/projects/child/inner".into()],
+                ..Listing::default()
+            }),
+        );
+        assert_eq!(a.options.selected, 1);
+    }
+    #[test]
     fn directory_actions_separate_children_and_empty_directories_have_parent_action() {
         for target in [Target::Draft, Target::Global] {
             let mut a = app();
@@ -1613,7 +1830,7 @@ mod tests {
                 ..Listing::default()
             };
             let parent = a.directory_action_count();
-            assert_eq!(a.rows()[parent].label, "[parent dir]");
+            assert_eq!(a.rows()[parent].label, "Go to Parent");
             assert!(!a.rows().iter().any(|r| r.separator));
             a.options.selected = parent;
             assert!(!a.control_tokens().contains(&"◀/▶: Parent/Open"));
@@ -1647,7 +1864,7 @@ mod tests {
             assert!(!a.control_tokens().contains(&"◀/▶: Parent/Open"));
             a.listing.path = Some("/".into());
             a.listing.children.clear();
-            assert!(!a.rows().iter().any(|r| r.label == "[parent dir]"));
+            assert!(!a.rows().iter().any(|r| r.label == "Go to Parent"));
         }
     }
     #[test]
@@ -2034,6 +2251,8 @@ mod tests {
                 },
                 text: String::new(),
                 listing: Listing::default(),
+                listing_pending: false,
+                popup_size: None,
             },
             Saved {
                 page: Page::Directory(Target::Draft),
@@ -2043,6 +2262,8 @@ mod tests {
                 },
                 text: "/tmp".into(),
                 listing: Listing::default(),
+                listing_pending: false,
+                popup_size: None,
             },
         ];
         let effects = a.activate();
@@ -2174,9 +2395,9 @@ mod tests {
                 children: vec!["/tmp/child".into()],
                 ..Listing::default()
             };
-            assert_eq!(a.rows()[0].label, "[use this dir]");
-            assert_eq!(a.rows()[1].label, "[leave unset]");
-            assert_eq!(a.rows()[2].label, "[create dir]");
+            assert_eq!(a.rows()[0].label, "Use This Dir");
+            assert_eq!(a.rows()[1].label, "Leave Unset");
+            assert_eq!(a.rows()[2].label, "Create Dir");
             for row in 0..3 {
                 a.options.selected = row;
                 a.options.back = false;
@@ -2323,36 +2544,38 @@ mod tests {
         ];
         let rows = a.rows();
         assert!(rows.iter().all(|row| row.preview_column.is_none()));
-        assert_eq!(rows[0].label, "[create new space]");
-        assert_eq!(rows[1].preview.as_deref(), Some("(w1)"));
-        for selected in [1, 2] {
+        assert_eq!(rows[0].label, "Create New Space");
+        assert_eq!(rows[2].preview.as_deref(), Some("(w1)"));
+        for selected in [2, 3] {
             a.options.selected = selected;
             let mut field = Field::new(100, 24, 1);
             let c = a.paint(&mut field, 1000, 100, 24);
             let index = c.cells.iter().position(|c| c.glyph == "(").unwrap();
-            let label_row = c
-                .cells
-                .chunks(100)
-                .position(|r| {
-                    r.iter()
-                        .map(|c| c.glyph.as_str())
-                        .collect::<String>()
-                        .contains(&rows[selected].label)
-                })
-                .unwrap();
-            assert_eq!(index / 100, label_row);
-            assert_eq!(
-                Some(index % 100),
-                rows[selected]
-                    .preview_position(72, Options::left(72, &rows))
-                    .map(|x| x + 14)
-            );
+            let size = a.popup_size.as_ref().unwrap().1;
+            let inner = size.width - 4;
+            let origin_x = (100 - size.width) / 2 + 2;
+            let origin_y = (24 - size.height) / 2 + 1;
+            if Options::previews_detached(inner, &rows) {
+                assert_eq!(index / 100, origin_y + rows.len() + 1);
+                assert_eq!(
+                    index % 100,
+                    origin_x + (inner - rows[selected].preview.as_ref().unwrap().len()) / 2
+                );
+            } else {
+                assert_eq!(index / 100, origin_y + selected);
+                assert_eq!(
+                    Some(index % 100),
+                    rows[selected]
+                        .preview_position(inner, Options::left(inner, &rows))
+                        .map(|x| x + origin_x)
+                );
+            }
             assert_eq!(c.cells[index].fg, crate::widgets::SECONDARY);
             assert!(!c.cells[index].bold);
             assert_eq!(c.cells.iter().filter(|c| c.glyph == "(").count(), 1);
         }
         assert!(Options::previews_detached(36, &rows));
-        a.options.selected = 1;
+        a.options.selected = 2;
         let mut field = Field::new(36, 24, 1);
         let c = a.paint(&mut field, 1000, 36, 24);
         let index = c.cells.iter().position(|c| c.glyph == "(").unwrap();
@@ -2363,7 +2586,7 @@ mod tests {
                 r.iter()
                     .map(|c| c.glyph.as_str())
                     .collect::<String>()
-                    .contains("[create new space]")
+                    .contains("Create New Space")
             })
             .unwrap();
         assert_eq!(index / 36, first_row + rows.len() + 1);
@@ -2394,11 +2617,11 @@ mod tests {
         a.inventory(vec![], spaces.clone(), 0);
         assert!(matches!(&a.draft.space,Some(Space::Existing {id,..}) if id=="w2"));
         a.push(Page::Spaces, String::new());
-        assert_eq!(a.options.selected, 2);
+        assert_eq!(a.options.selected, 3);
         let mut reordered = spaces.clone();
         reordered.reverse();
         a.inventory(vec![], reordered, 0);
-        assert_eq!(a.options.selected, 1);
+        assert_eq!(a.options.selected, 2);
         let none = spaces
             .iter()
             .cloned()
@@ -2410,7 +2633,7 @@ mod tests {
         a.inventory(vec![], none, 0);
         assert_eq!(a.draft.space, None);
         a.inventory(vec![], spaces.clone(), 0);
-        a.options.selected = 1;
+        a.options.selected = 2;
         a.activate();
         a.inventory(vec![], spaces, 0);
         assert!(matches!(&a.draft.space,Some(Space::Existing {id,..}) if id=="w1"));

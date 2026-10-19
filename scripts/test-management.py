@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
  try:
   t.wait('Manage Sessions');time.sleep(.2);t.drain()
   # Compact account list, common bottom bars and action separators.
-  t.send(b'\x1b[B\x1b[B\r');t.wait('[add account]');t.send(b'\x1b[B');t.wait('5h');t.drain()
+  t.send(b'\x1b[B\x1b[B\r');t.wait('Add Account');t.send(b'\x1b[B');t.wait('5h');t.drain()
   assert all('│' not in ''.join(row) for row in t.screen.grid[22:23]),'one blank row above controls'
   t.send(b'\r');t.wait('Usage details');t.wait('Deregister account');t.drain()
   dots=[i for i,row in enumerate(t.screen.grid[:24]) if '•' in row];assert len(dots)>=2
@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
   t.send(b'\x1b');t.wait('Account:');t.send(b'\x1b');t.wait('Manage Sessions')
   # Select a saved session, then Resume (selection itself never attaches).
   t.send(b'\x1b[B\r');t.wait('Savedfixture');t.send(b'\r');t.wait('Start Session');t.send(b'\r');t.wait('Resume Session');t.wait('Dir:');time.sleep(.2);t.drain()
-  t.send(b'\x1b[B\x1b[B\x1b[B\r');t.wait('Start directory');t.send(b'\x7f'*len(str(root/'projects'))+str(root).encode());time.sleep(.2);t.drain();t.send(b'\r');t.wait('Resume Session');t.send(b'\x1b[B\r');t.wait('Continue in background');t.send(b'\x1b');t.wait('Manage Sessions')
+  t.send(b'\x1b[B\x1b[B\x1b[B\r');t.wait('Start directory');t.send(b'\x7f'*len(str(root/'projects'))+str(root).encode());time.sleep(.2);t.drain();t.send(b'\x1b[H\r');t.wait('Resume Session');t.send(b'\x1b[B\r');t.wait('Continue in background');t.send(b'\x1b');t.wait('Manage Sessions')
   deadline=time.monotonic()+3
   while not (root/'start.json').exists() and time.monotonic()<deadline:t.drain();time.sleep(.01)
   request=json.loads((root/'start.json').read_text())

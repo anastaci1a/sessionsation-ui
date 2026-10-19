@@ -45,6 +45,8 @@ Its reusable components are:
   Background geometry is independent of option scrolling.
 - `widgets`: option focus/scrolling, enabled/disabled row styling and grapheme-aware
   input editing/painting. Start uses the same row control as the pickers.
+  Pinned action headers share the normal selection/navigation model; independent
+  preview groups retain a list-wide fit decision within each group.
 - `usage`: one measurement/rendering system for remaining-allowance bars, limit
   markers, status-only accounts and shared columns across responsive layouts.
 - `popup`: centered flat surfaces, local option/editor layout and translated native

@@ -91,7 +91,7 @@ cp .demo/output/demo.gif docs/assets/demo.gif
 npm run check
 ```
 
-The checked-in demo is about 1.1 MiB, 46 seconds and 321 frames at a 10 FPS cap;
+The checked-in demo is about 1.1 MiB, 46 seconds and 317 frames at a 10 FPS cap;
 its 128×40 terminal renders to 1096×718 pixels. It shows bars/limits, session
 activity/details, the staged directory picker and an inert normal-tab handoff.
 The contact sheet and loop seam were inspected before README promotion. No real
@@ -107,8 +107,8 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 ## Verification record and limits
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **153 Rust tests** (151 unit and two visual tests covering
-21 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
+passed formatting, Clippy, **157 Rust tests** (155 unit and two visual tests covering
+23 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
 disabled. Regressions cover Back history, stable selection across refreshed lists,
@@ -122,10 +122,12 @@ without shape/color changes or per-frame visibility toggling. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
 The artifact used for the owned terminal/HERDR checks and README capture has SHA-256
-`4e24dcf414d1f303899d1203624a7b67ca6896409df6a538a13623bf72b06d63`.
+`dc0a7f7c03b3ac9343fc79cec79887666e3ff5d8354ecc4e5dac2c1598419f58`.
 The three PTY scripts and owned
 HERDR popup test passed against this artifact, including summary-preserving editor
-popups, empty-directory parent actions and directory-only browse shortcuts, Space lookup cancellation,
+popups, stable geometry through focus/status/loading, pinned directory actions,
+new-directory selection defaults, empty-directory parent actions and directory-only
+browse shortcuts, inactive account-label hiding and independent preview fit, Space lookup cancellation,
 confirmation, one captured-generation mutation and return to the selected session.
 Installation promotion selects an immutable tested binary for future popups;
 already-running viewers and downstream pins are retained.

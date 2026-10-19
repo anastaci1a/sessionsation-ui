@@ -150,6 +150,7 @@ pub struct Row {
     pub account: bool,
     pub preview_gap: usize,
     pub separator: bool,
+    preview_group: u8,
     field_padding: Option<std::ops::Range<usize>>,
 }
 impl Row {
@@ -178,6 +179,7 @@ impl Row {
             account: false,
             preview_gap: 2,
             separator: false,
+            preview_group: 0,
             field_padding: None,
         }
     }
@@ -188,6 +190,10 @@ impl Row {
     }
     pub fn account(mut self) -> Self {
         self.account = true;
+        self
+    }
+    pub fn with_preview_group(mut self, group: u8) -> Self {
+        self.preview_group = group;
         self
     }
     pub fn preview_color(mut self, color: [u8; 3]) -> Self {
@@ -248,6 +254,7 @@ impl Row {
             account: false,
             preview_gap: 2,
             separator: true,
+            preview_group: 0,
             field_padding: None,
         }
     }
@@ -556,13 +563,30 @@ impl Options {
         }
         left
     }
-    pub fn previews_detached(width: usize, rows: &[Row]) -> bool {
+    fn preview_groups(width: usize, rows: &[Row]) -> [bool; 256] {
+        let mut groups = [false; 256];
         let left = Self::left(width, rows);
-        rows.iter().any(|r| {
-            r.preview_selected_only
-                && r.preview.is_some()
-                && r.preview_position(width, left).is_none()
-        })
+        for row in rows {
+            if row.preview_selected_only
+                && row.preview.is_some()
+                && row.preview_position(width, left).is_none()
+            {
+                groups[row.preview_group as usize] = true;
+            }
+        }
+        groups
+    }
+    pub fn previews_detached(width: usize, rows: &[Row]) -> bool {
+        Self::preview_groups(width, rows)
+            .iter()
+            .any(|detached| *detached)
+    }
+    fn preview_group_detached(width: usize, rows: &[Row], group: u8) -> bool {
+        Self::preview_groups(width, rows)[group as usize]
+    }
+    pub fn selected_preview_detached(&self, width: usize, rows: &[Row]) -> bool {
+        rows.get(self.selected)
+            .is_some_and(|r| Self::preview_group_detached(width, rows, r.preview_group))
     }
     /// One fit decision for the whole list, independent of selection and scrolling.
     pub fn paint_menu(
@@ -583,7 +607,8 @@ impl Options {
             bottom
         };
         let result = self.paint(canvas, rows, top, bottom);
-        self.preview_visible = !detached
+        let selected_detached = self.selected_preview_detached(canvas.width, rows);
+        self.preview_visible = !selected_detached
             && !self.back
             && self.selected >= self.scroll
             && self.selected < self.scroll + result.1
@@ -591,7 +616,7 @@ impl Options {
                 .get(self.selected)
                 .is_some_and(|r| r.preview_position(canvas.width, result.0).is_some());
         self.paint_range(canvas, rows.len(), result.1, bottom);
-        if detached
+        if selected_detached
             && !self.back
             && result.1 > 0
             && let Some(row) = rows.get(self.selected)
@@ -643,7 +668,7 @@ impl Options {
         }
         self.scroll = self.scroll.min(rows.len().saturating_sub(capacity));
         let left = Self::left(canvas.width, rows);
-        let inline = !Self::previews_detached(canvas.width, rows);
+        let detached_groups = Self::preview_groups(canvas.width, rows);
         for (i, row) in rows.iter().enumerate().skip(self.scroll).take(capacity) {
             row.paint_with_preview(
                 canvas,
@@ -651,9 +676,71 @@ impl Options {
                 top + i - self.scroll,
                 i == self.selected && !self.back,
                 self.back,
-                inline || !row.preview_selected_only,
+                !detached_groups[row.preview_group as usize] || !row.preview_selected_only,
             );
         }
+        (left, capacity)
+    }
+    /// Scroll a list body independently while retaining its action header.
+    /// Very short viewports use ordinary whole-list scrolling instead.
+    pub fn paint_pinned_menu(
+        &mut self,
+        canvas: &mut Canvas,
+        rows: &[Row],
+        pinned: usize,
+        top: usize,
+        bottom: usize,
+        controls_start: usize,
+    ) -> (usize, usize) {
+        let available = bottom
+            .min(controls_start.saturating_sub(1))
+            .saturating_sub(top);
+        let overflow = rows.len() > available;
+        let capacity = available.saturating_sub(usize::from(overflow));
+        if !overflow || capacity <= 6 || pinned >= rows.len() {
+            return self.paint_menu(canvas, rows, top, bottom, controls_start);
+        }
+        self.preview_visible = false;
+        let body_capacity = capacity.saturating_sub(pinned);
+        self.scroll = self
+            .scroll
+            .max(pinned)
+            .min(rows.len().saturating_sub(body_capacity).max(pinned));
+        if self.selected >= pinned {
+            if self.selected < self.scroll {
+                self.scroll = self.selected;
+            }
+            if self.selected >= self.scroll + body_capacity {
+                self.scroll = self.selected + 1 - body_capacity;
+            }
+        }
+        let left = Self::left(canvas.width, rows);
+        for (i, row) in rows.iter().enumerate().take(pinned) {
+            row.paint(
+                canvas,
+                left,
+                top + i,
+                self.selected == i && !self.back,
+                self.back,
+            );
+        }
+        for (i, row) in rows
+            .iter()
+            .enumerate()
+            .skip(self.scroll)
+            .take(body_capacity)
+        {
+            row.paint(
+                canvas,
+                left,
+                top + pinned + i - self.scroll,
+                self.selected == i && !self.back,
+                self.back,
+            );
+        }
+        let mut body = self.clone();
+        body.scroll = self.scroll - pinned;
+        body.paint_range(canvas, rows.len() - pinned, body_capacity, top + capacity);
         (left, capacity)
     }
     pub fn paint_range(&self, canvas: &mut Canvas, count: usize, capacity: usize, y: usize) {
@@ -700,6 +787,51 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyEventKind};
     use std::time::{Duration, Instant};
+    #[test]
+    fn pinned_actions_stay_visible_and_short_viewports_scroll_the_whole_list() {
+        let mut rows = vec![
+            Row::yes("Use This Dir"),
+            Row::yes("Leave Unset"),
+            Row::yes("Create Dir"),
+            Row::separator(),
+        ];
+        rows.extend((0..30).map(|i| Row::yes(format!("directory{i:02}/"))));
+        let mut options = Options {
+            selected: rows.len() - 1,
+            ..Options::default()
+        };
+        let mut c = Canvas::new(60, 20);
+        let (_, capacity) = options.paint_pinned_menu(&mut c, &rows, 4, 2, 14, 17);
+        let line = |y: usize| {
+            c.cells[y * 60..(y + 1) * 60]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+        };
+        for (i, label) in ["Use This Dir", "Leave Unset", "Create Dir"]
+            .iter()
+            .enumerate()
+        {
+            assert!(line(2 + i).contains(label));
+        }
+        assert!(line(5).contains('•'));
+        assert!(line(2 + capacity - 1).contains("directory29/"));
+        assert!(line(2 + capacity).contains(" of 30"));
+        options.selected = 0;
+        let mut top = Canvas::new(60, 20);
+        options.paint_pinned_menu(&mut top, &rows, 4, 2, 14, 17);
+        assert!(top.cells.iter().any(|c| c.glyph == "U" && c.bold));
+        let mut tiny = Canvas::new(60, 10);
+        options.selected = rows.len() - 1;
+        options.paint_pinned_menu(&mut tiny, &rows, 4, 2, 8, 9);
+        let text = tiny
+            .cells
+            .iter()
+            .map(|c| c.glyph.as_str())
+            .collect::<String>();
+        assert!(!text.contains("Use This Dir"));
+        assert!(text.contains("directory29/"));
+    }
     #[test]
     fn held_arrows_stop_at_edges_and_release_rearms_wrap() {
         let mut nav = Navigation::default();

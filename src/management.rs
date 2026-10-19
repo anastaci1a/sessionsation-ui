@@ -107,6 +107,7 @@ pub struct Manager {
     session_return: Option<String>,
     observe_after: Option<std::time::Instant>,
     history: Vec<Location>,
+    popup_size: Option<crate::popup::Size>,
 }
 impl Default for Manager {
     fn default() -> Self {
@@ -139,6 +140,7 @@ impl Default for Manager {
             session_return: None,
             observe_after: None,
             history: vec![],
+            popup_size: None,
         }
     }
 }
@@ -230,9 +232,9 @@ impl Manager {
                 .accounts
                 .get(self.options.selected - 5)
                 .map(|a| a.id.clone()),
-            Page::Accounts if self.options.selected > 0 => self
+            Page::Accounts if self.options.selected >= 2 => self
                 .accounts
-                .get(self.options.selected - 1)
+                .get(self.options.selected - 2)
                 .map(|a| a.id.clone()),
             Page::Account(id) => Some(id.clone()),
             _ => None,
@@ -317,7 +319,7 @@ impl Manager {
             if let Some(index) = self.accounts.iter().position(|a| a.id == id) {
                 match self.page {
                     Page::Home if self.inline => self.options.selected = 5 + index,
-                    Page::Accounts => self.options.selected = 1 + index,
+                    Page::Accounts => self.options.selected = 2 + index,
                     _ => {}
                 }
             } else if matches!(self.page, Page::Home | Page::Accounts) {
@@ -379,6 +381,7 @@ impl Manager {
         self.foreground = None;
         self.details_open = false;
         self.page = page;
+        self.popup_size = None;
         self.usage_focus = false;
         self.options = Options::default();
         self.options.selected = self.rows().iter().position(|r| !r.separator).unwrap_or(0);
@@ -436,7 +439,7 @@ impl Manager {
                 .accounts
                 .iter()
                 .position(|a| a.id == key)
-                .map(|i| i + if self.page == Page::Home { 5 } else { 1 }),
+                .map(|i| i + if self.page == Page::Home { 5 } else { 2 }),
             Some(Focus::Session(key)) => match self.page {
                 Page::Archives => self.archives.iter().position(|s| id(s) == key),
                 _ => self
@@ -476,7 +479,7 @@ impl Manager {
             Page::Accounts
         });
         self.options.selected = index
-            .map(|i| i + if self.inline { 5 } else { 1 })
+            .map(|i| i + if self.inline { 5 } else { 2 })
             .unwrap_or(0);
     }
     pub fn rows(&self) -> Vec<Row> {
@@ -510,7 +513,8 @@ impl Manager {
                     .max()
                     .unwrap_or(0)
                     + 4;
-                std::iter::once(Row::yes("[add account]"))
+                std::iter::once(Row::yes("Add Account"))
+                    .chain((!self.accounts.is_empty()).then(Row::separator))
                     .chain(self.accounts.iter().map(|a| {
                         let enabled =
                             a.details.get("enabled").and_then(Value::as_bool) == Some(true);
@@ -1126,7 +1130,7 @@ impl Manager {
             Page::Accounts => {
                 if index == 0 {
                     self.add()
-                } else if let Some(a) = self.accounts.get(index - 1) {
+                } else if let Some(a) = self.accounts.get(index - 2) {
                     self.enter(Page::Account(a.id.clone()));
                 }
             }
@@ -1905,15 +1909,26 @@ impl Manager {
             self.note = note;
             let rows = self.rows();
             let palette = self.palette.clone();
-            let inner = canvas.width.saturating_sub(4).min(76).saturating_sub(4);
+            let width = crate::popup::picker_width(&rows).min(canvas.width.saturating_sub(4));
+            let inner = width.saturating_sub(4);
             let hints = hint_lines(
                 &["▲/▼/◀/▶: Move", "Enter/Space: Select", "Esc: Back"],
                 inner,
             );
-            let desired = rows.len() + hints.len() + 4 + usize::from(!self.note.is_empty()) * 2;
-            crate::popup::paint(canvas, "Choose Space", &palette, desired, |local| {
+            if self
+                .popup_size
+                .is_none_or(|s| s.viewport != (canvas.width, canvas.height))
+            {
+                self.popup_size = Some(crate::popup::Size::fit(
+                    (canvas.width, canvas.height),
+                    width,
+                    rows.len() + hints.len() + 6,
+                ));
+            }
+            let size = self.popup_size.unwrap();
+            crate::popup::paint_sized(canvas, "Choose Space", &palette, size, |local| {
                 let controls = local.height.saturating_sub(hints.len());
-                let bottom = controls.saturating_sub(if self.note.is_empty() { 1 } else { 3 });
+                let bottom = controls.saturating_sub(3);
                 let (left, _) = self.options.paint_menu(local, &rows, 0, bottom, controls);
                 self.options.paint_back(local, left, 0, "Back");
                 crate::widgets::paint_status(local, controls, &self.note);
@@ -2113,7 +2128,7 @@ mod tests {
         m.options.selected = 2;
         m.key(enter);
         assert_eq!(m.page, Page::Accounts);
-        m.options.selected = 2;
+        m.options.selected = 3;
         m.options.scroll = 1;
         m.key(enter);
         assert_eq!(m.page, Page::Account("codex:account2".into()));
@@ -2121,7 +2136,7 @@ mod tests {
         m.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         m.key(enter);
         assert_eq!(m.page, Page::Accounts);
-        assert_eq!(m.options.selected, 1);
+        assert_eq!(m.options.selected, 2);
         assert_eq!(m.options.scroll, 1);
         assert!(!m.options.back);
         m.key(escape);
@@ -2806,13 +2821,13 @@ mod tests {
         m.accounts.extend((3..9).map(account));
         m.page = Page::Accounts;
         let rows = m.rows();
-        assert_eq!(rows[1].preview.as_deref(), Some("Disabled"));
-        assert_eq!(rows[1].preview_fg, crate::widgets::MUTED);
-        assert_eq!(rows[2].preview.as_deref(), Some("Enabled*"));
-        m.options.selected = 1;
+        assert_eq!(rows[2].preview.as_deref(), Some("Disabled"));
+        assert_eq!(rows[2].preview_fg, crate::widgets::MUTED);
+        assert_eq!(rows[3].preview.as_deref(), Some("Enabled*"));
+        m.options.selected = 2;
         let mut c = Canvas::new(40, 18);
         m.paint(&mut c, 17);
-        for y in 6..16 {
+        for y in 7..16 {
             let row = c.cells[y * 40..(y + 1) * 40]
                 .iter()
                 .map(|c| c.glyph.as_str())
@@ -2991,12 +3006,12 @@ mod tests {
         m.page = Page::Accounts;
         let rows = m.rows();
         assert_eq!(
-            rows[1].preview_position(60, 5),
-            rows[2].preview_position(60, 5)
+            rows[2].preview_position(60, 5),
+            rows[3].preview_position(60, 5)
         );
-        assert_eq!(rows[1].preview.as_deref(), Some("Enabled"));
-        assert!(rows[1].preview_accent);
-        assert!(!rows[2].preview_accent);
+        assert_eq!(rows[2].preview.as_deref(), Some("Enabled"));
+        assert!(rows[2].preview_accent);
+        assert!(!rows[3].preview_accent);
         m.inventory((0..30).map(account).collect());
         m.page = Page::Accounts;
         m.options.selected = 10;
@@ -3225,7 +3240,7 @@ mod tests {
         assert_eq!(m.rows()[2].label, "Manage Accounts");
         m.activate();
         assert_eq!(m.page, Page::Accounts);
-        m.options.selected = 2;
+        m.options.selected = 3;
         let mut canvas = Canvas::new(60, 16);
         m.paint(&mut canvas, 14);
         let row = |n: usize| {
@@ -3234,15 +3249,15 @@ mod tests {
                 .map(|c| c.glyph.as_str())
                 .collect::<String>()
         };
-        assert!(row(6).trim().is_empty());
-        assert!(row(7).contains("5h"));
-        assert!(row(8).contains("wk"));
+        assert!(row(7).trim().is_empty());
+        assert!(row(8).contains("5h"));
+        assert!(row(9).contains("wk"));
         assert!(m.rows().iter().all(|r| !r.account));
-        assert!(row(5).contains("●"));
-        assert!(!row(5).contains("▶"));
-        let name_x = row(5).find("account2").unwrap();
-        assert_eq!(canvas.cells[5 * 60 + name_x].fg, [238; 3]);
-        for y in [7, 8] {
+        assert!(row(6).contains("●"));
+        assert!(!row(6).contains("▶"));
+        let name_x = row(6).find("account2").unwrap();
+        assert_eq!(canvas.cells[6 * 60 + name_x].fg, [238; 3]);
+        for y in [8, 9] {
             let percent = row(y).chars().position(|c| c == '%').unwrap();
             assert!(!canvas.cells[y * 60 + percent].bold);
             assert_eq!(canvas.cells[y * 60 + percent].fg, crate::widgets::SELECTED);

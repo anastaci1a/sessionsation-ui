@@ -56,6 +56,38 @@ impl Panel {
         );
     }
 }
+/// Measured once per opened picker and remeasured only on terminal resize.
+#[derive(Clone, Copy, Debug)]
+pub struct Size {
+    pub viewport: (usize, usize),
+    pub width: usize,
+    pub height: usize,
+}
+impl Size {
+    pub fn fit(viewport: (usize, usize), width: usize, height: usize) -> Self {
+        Self {
+            viewport,
+            width: width.min(viewport.0.saturating_sub(4)),
+            height: height.min(viewport.1.saturating_sub(4)),
+        }
+    }
+}
+/// Leave enough centered room for the expanded Back arrow whenever possible.
+pub fn picker_width(rows: &[crate::widgets::Row]) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    let longest = rows
+        .iter()
+        .map(|row| {
+            row.preview_column
+                .zip(row.preview.as_deref())
+                .map_or(UnicodeWidthStr::width(row.label.as_str()), |(col, text)| {
+                    col.saturating_sub(2) + UnicodeWidthStr::width(text)
+                })
+        })
+        .max()
+        .unwrap_or(0);
+    (longest + 24).clamp(48, 76)
+}
 pub fn paint(
     canvas: &mut Canvas,
     title: &str,
@@ -63,8 +95,17 @@ pub fn paint(
     desired_height: usize,
     content: impl FnOnce(&mut Canvas),
 ) {
-    let width = canvas.width.saturating_sub(4).min(76);
-    let height = desired_height.min(canvas.height.saturating_sub(4));
+    let size = Size::fit((canvas.width, canvas.height), 76, desired_height);
+    paint_sized(canvas, title, palette, size, content);
+}
+pub fn paint_sized(
+    canvas: &mut Canvas,
+    title: &str,
+    palette: &Palette,
+    size: Size,
+    content: impl FnOnce(&mut Canvas),
+) {
+    let Size { width, height, .. } = size;
     if width < 8 || height < 4 {
         return;
     }

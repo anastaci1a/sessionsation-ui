@@ -60,9 +60,11 @@ not a supervisor upgrade or data-root migration.
 Name, account, Space and directory choices open flat themed popups over the current
 configuration screen. Back/Esc restores the opening option and picker position;
 only the current editor owns the terminal cursor. Nested directory/Space creation
-remains staged until Start. Directory actions are separated from subdirectories
-by a blank bullet row. Empty directories offer `[parent dir]`; only hovering a
-subdirectory enables the `◀/▶: Parent/Open` shortcuts and their hint.
+remains staged until Start. Popup dimensions are measured on opening and remain
+stable through navigation, loading and status changes; terminal resize refits them.
+Short pickers fit their contents with room for expanded Back when possible; long
+lists scroll and selected previews can move below them. Action groups use title
+case and a blank bullet spacer.
 
 ## Capabilities and limits
 
@@ -78,6 +80,9 @@ subdirectory enables the `◀/▶: Parent/Open` shortcuts and their hint.
 - Idle Pause is hidden; busy Pause remains unavailable pending public integration.
   Provider-login cancellation is also unfinished: closing the login viewer does
   not cancel a provider-owned login.
+- HERDR 0.9.5 routes all input to an open popup before its configured prefix.
+  Closing the popup and entering the client prefix menu with one press requires
+  a HERDR client change; its public socket API does not expose prefix mode.
 - HERDR's outer popup border cannot follow the animated status bar in 0.9.5.
   Built-in fixed themes/RGB overrides are supported; dynamic/terminal themes use
   an explicit approximation because no resolved runtime palette API is available.
@@ -174,8 +179,7 @@ Host commands use the popup’s explicit socket rather than a CLI session select
 An attachment whose host cannot be confirmed shows `(host unavailable)` rather than being labelled inactive; its lifecycle actions remain gated until positive observation returns.
 Session action hints such as `(tmux)` or `(missing directory)` appear only on
 hover and hide on Back; resume reasons come from the public CLI state.
-The inactive asterisk remains on its session row when the parenthetical moves
-to the centered preview below the list. Unavailable field segments are struck
+Unavailable field segments are struck
 through separately; alignment padding is never struck through.
 Resume forms retain their chosen destination through stale or pending checks.
 Only confirmed invalid choices disable Resume; selected-only parentheticals explain
@@ -274,11 +278,11 @@ spinner, advancing every 100 ms after one space following the account. The timer
 follows after another space when it fits inline, otherwise uses the shared hover
 panel. Read-only state refreshes once per second, one request at a time; idle, exit,
 unknown activity or discovery failure removes the spinner. Active session account tags use the normal bullet hue on row hover and the dimmer
-hue otherwise. Inactive tags stay dim and show `[account] *`, with an
-asterisk separated by one space. The asterisk uses the same muted gray as
-`(inactive)` and disappears while that parenthetical is visible inline or below the
-list. Account tags are bold on row selection, including inactive sessions; they return
-to normal weight on deselection or Back focus. Asterisks stay unbolded. Inactive hover markers stay muted and unbolded. Timers use normal deselected gray.
+hue otherwise and bold on row selection. Inactive rows omit account tags and put
+a muted, unbolded asterisk at the start of the account column. Their `(inactive)`
+preview has a separate list-wide fit calculation from active timers: it can appear
+inline farther left, otherwise below the list. Only an inline parenthetical replaces
+the asterisk. Back hides previews. Timers use normal deselected gray.
 
 Errors and status notices use a centered bottom line, separated from controls by
 one blank line. Menus reserve the status lane before calculating scroll capacity.
@@ -344,8 +348,15 @@ launch flow. The UI never creates directories or starts an agent before confirma
 The default Space is
 the one currently focused in HERDR; no focus leaves it unset. Pickers preserve the
 draft on Back. Existing automatic paths require explicit selection. Directory Enter
-selects; Right browses child rows only, leaving `[use this dir]` and `[create dir]` unchanged; Left goes
-up or focuses Back. Tab and Ctrl-U have no directory-picker action. Typing and paste edit the path. Create stages
+selects the current option. In an unfamiliar directory, focus starts on the first
+subdirectory, or Go to Parent when empty; revisiting restores its selection.
+Use This Dir, Leave Unset (for defaults) and Create Dir stay above the scrolling
+subdirectory list and its range counter. If at most six rows fit, the whole list
+scrolls instead. Directory popup dimensions stay fixed; pending navigation clears
+old child rows and shows Loading… one blank line below the actions. Right browses
+child rows only; Left returns to their parent or focuses Back on action rows.
+Only child rows show the Parent/Open hint. Tab and Ctrl-U have no directory-picker
+action. Typing and paste edit the path. Create stages
 intent and never calls mkdir. Configuration uses the same picker and saves on Back.
 Missing per-Space roots remain unset, without a global fallback. Last-account prefill
 initially requires fresh usage within existing limits. Once selected, the account remains

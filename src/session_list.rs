@@ -50,10 +50,6 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
             ),
             (Row::yes("Session Details"), Action::Details),
             (Row::separator(), Action::Unavailable),
-            (
-                session_gate(s, "Archive Session", "archive"),
-                Action::Archive,
-            ),
             (session_gate(s, "Delete Session", "delete"), Action::Delete),
         ];
     }
@@ -272,11 +268,12 @@ pub fn paint_with_archives(
     let mut rows = rows_with_archives(sessions, known, archives);
     let account_width = sessions
         .iter()
+        .filter(|s| s["availability"] == "running")
         .map(|s| {
             UnicodeWidthStr::width(short_name(s["account_id"].as_str().unwrap_or("?")).as_str()) + 6
         })
         .max()
-        .unwrap_or(0);
+        .unwrap_or(4);
     let max_name = canvas.width.saturating_sub(account_width + 8);
     let show_accounts = !sessions.is_empty() && max_name >= 4;
     let name_width = sessions
@@ -317,6 +314,7 @@ pub fn paint_with_archives(
             rows[i] = rows[i]
                 .clone()
                 .with_selected_preview(suffix)
+                .with_preview_group(u8::from(session["availability"] != "running"))
                 .preview_gap(1)
                 .preview_color(if session["availability"] == "running" {
                     crate::widgets::SECONDARY
@@ -335,7 +333,11 @@ pub fn paint_with_archives(
                 .and_then(|i| sessions.get(i))
                 .filter(|_| show_accounts)
             {
-                table_width - if busy(session) { 0 } else { 2 }
+                if session["availability"] != "running" {
+                    name_width + 1
+                } else {
+                    table_width - if busy(session) { 0 } else { 2 }
+                }
             } else {
                 table_width
             };
@@ -374,13 +376,32 @@ pub fn paint_with_archives(
             if index < options.scroll || index >= options.scroll + capacity {
                 continue;
             }
+            let y = 3 + index - options.scroll;
+            if session["availability"] != "running" {
+                if !(session["attachment"].is_object()
+                    || options.selected == index
+                        && options.preview_visible
+                        && !options.selected_preview_detached(canvas.width, &rows))
+                {
+                    canvas.text(
+                        left + 2 + name_width + 2,
+                        y,
+                        "*",
+                        crate::render::Cell {
+                            fg: crate::widgets::MUTED,
+                            ..crate::render::Cell::default()
+                        },
+                        false,
+                    );
+                }
+                continue;
+            }
             let account = format!(
                 "[{}]",
                 short_name(session["account_id"].as_str().unwrap_or("?"))
             );
             let pad = account_width.saturating_sub(UnicodeWidthStr::width(account.as_str()) + 4);
             let x = left + 2 + name_width + pad;
-            let y = 3 + index - options.scroll;
             canvas.accent_text(
                 x + 2,
                 y,
@@ -400,24 +421,6 @@ pub fn paint_with_archives(
                 },
             );
             let end = x + 2 + UnicodeWidthStr::width(account.as_str());
-            if session["availability"] != "running"
-                && !session["attachment"].is_object()
-                && !(options.selected == index
-                    && options.preview_visible
-                    && !Options::previews_detached(canvas.width, &rows))
-            {
-                canvas.text(
-                    end,
-                    y,
-                    " *",
-                    crate::render::Cell {
-                        fg: crate::widgets::MUTED,
-                        bold: false,
-                        ..crate::render::Cell::default()
-                    },
-                    false,
-                );
-            }
             if busy(session) {
                 let now_ms = canvas.theme.as_ref().map_or(0, |t| t.now);
                 let mut style = canvas.cells[y * canvas.width + end - 1].clone();
@@ -525,10 +528,16 @@ mod tests {
         assert_eq!(rows[0].0.preview_fg, crate::widgets::SECONDARY);
     }
     #[test]
-    fn archive_always_precedes_delete_and_idle_hides_pause() {
+    fn archive_precedes_delete_unless_already_archived_and_idle_hides_pause() {
         for availability in ["running", "saved", "archived"] {
             let mut session = json!({"availability":availability,"activity":"idle","capabilities":{"archive":availability=="saved","delete":availability!="running"}});
             let rows = actions(&session, true);
+            if availability == "archived" {
+                assert!(!rows.iter().any(|(_, a)| *a == Action::Archive));
+                assert!(rows.iter().any(|(_, a)| *a == Action::Restore));
+                assert!(rows.iter().any(|(_, a)| *a == Action::Delete));
+                continue;
+            }
             let archive = rows
                 .iter()
                 .position(|(_, a)| *a == Action::Archive)
@@ -697,7 +706,7 @@ mod tests {
                 .iter()
                 .all(|c| !c.bold && c.fg == crate::widgets::SECONDARY)
         );
-        assert!(text(&c, 5).contains("[work]"));
+        assert!(!text(&c, 5).contains("[work]"));
         assert!(!text(&c, 5).contains("[work]*"));
         options.selected = 2;
         let mut c = Canvas::new(38, 20);
@@ -717,6 +726,56 @@ mod tests {
         assert!(!(0..20).any(|y| text(&c, y).contains("(inactive)")));
     }
     #[test]
+    fn inactive_preview_fit_is_independent_of_active_status_width() {
+        fn text(c: &Canvas, y: usize) -> String {
+            c.cells[y * c.width..(y + 1) * c.width]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect()
+        }
+        let sessions = vec![
+            json!({"name":"Active","account_id":"codex:personal","availability":"running","activity":"busy","active_since":1}),
+            json!({"name":"Saved","account_id":"codex:removed","availability":"saved"}),
+        ];
+        let mut found = false;
+        for width in 30..70 {
+            let mut live = Canvas::new(width, 20);
+            paint(
+                &mut live,
+                &mut Options::default(),
+                &sessions,
+                true,
+                16,
+                90062,
+                19,
+            );
+            let active_below = (6..18).any(|y| text(&live, y).contains("(1:01:01:01)"));
+            let mut saved = Canvas::new(width, 20);
+            paint(
+                &mut saved,
+                &mut Options {
+                    selected: 2,
+                    ..Options::default()
+                },
+                &sessions,
+                true,
+                16,
+                90062,
+                19,
+            );
+            if active_below && text(&saved, 5).contains("(inactive)") {
+                found = true;
+                assert!(!text(&saved, 5).contains('*'));
+                assert!(!text(&saved, 5).contains("[removed]"));
+                break;
+            }
+        }
+        assert!(
+            found,
+            "inactive status should fit inline before the active status does"
+        );
+    }
+    #[test]
     fn duration_matches_reference() {
         assert_eq!(duration(-1), "0:00");
         assert_eq!(duration(61), "1:01");
@@ -724,8 +783,8 @@ mod tests {
         assert_eq!(duration(90061), "1:01:01:01");
     }
     #[test]
-    fn account_tag_bolds_on_hover_including_inactive_without_changing_colors() {
-        for availability in ["running", "saved"] {
+    fn active_account_tag_bolds_on_hover_without_changing_colors() {
+        for availability in ["running"] {
             let sessions = vec![
                 json!({"name":"Session", "account_id":"codex:personal", "availability":availability}),
             ];
@@ -843,22 +902,17 @@ mod tests {
                 })
                 .collect();
             assert_eq!(
-                UnicodeWidthStr::width(&lines[0][..lines[0].find(']').unwrap()]),
-                UnicodeWidthStr::width(&lines[1][..lines[1].find(']').unwrap()])
+                UnicodeWidthStr::width(&lines[0][..lines[0].find('[').unwrap()]),
+                UnicodeWidthStr::width(&lines[1][..lines[1].find('*').unwrap()])
             );
             assert!(lines[0].contains("[a]"));
-            assert!(lines[1].contains("[personal]"));
-            let selected_account = c.cells[3 * width..4 * width]
+            assert!(!lines[1].contains("[personal]"));
+            let marker = c.cells[5 * width..6 * width]
                 .iter()
-                .find(|c| c.glyph == "[")
+                .find(|c| c.glyph == "*")
                 .unwrap();
-            let other_account = c.cells[5 * width..6 * width]
-                .iter()
-                .find(|c| c.glyph == "[")
-                .unwrap();
-            assert!(selected_account.bold);
-            assert_eq!(selected_account.fg, other_account.fg);
-            assert!(!other_account.bold);
+            assert_eq!(marker.fg, crate::widgets::MUTED);
+            assert!(!marker.bold);
         }
     }
 }

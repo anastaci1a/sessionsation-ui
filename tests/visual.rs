@@ -74,6 +74,8 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("settings-wide", 140, 24),
         ("settings-compact", 50, 18),
         ("roots-compact", 50, 18),
+        ("directory-loading", 80, 26),
+        ("directory-pinned", 80, 26),
         ("compact", 60, 16),
         ("actions", 80, 24),
         ("picker", 60, 20),
@@ -123,7 +125,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
             }
             "compact" => {
                 m.page = Page::Accounts;
-                m.options.selected = 1;
+                m.options.selected = 2;
             }
             "actions" => m.page = Page::Account("codex:fixture0".into()),
             "modal" => {
@@ -138,7 +140,10 @@ fn management_geometry_usage_markers_and_picker_columns() {
             }
             _ => {}
         }
-        if name.starts_with("settings-") || name == "roots-compact" {
+        if name.starts_with("settings-")
+            || name == "roots-compact"
+            || name.starts_with("directory-")
+        {
             use sessionsation_ui::{
                 app::{App, Page as AppPage},
                 client::Workspace,
@@ -180,6 +185,24 @@ fn management_geometry_usage_markers_and_picker_columns() {
                     Preferences::key("fixture", "w2"),
                     "/projects/a/very/long/path/that/cannot/fit".into(),
                 );
+            }
+            if name.starts_with("directory-") {
+                use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+                use sessionsation_ui::{app::Target, directory::Listing, widgets::TextInput};
+                app.page = AppPage::Directory(Target::Global);
+                app.input = TextInput::new("/projects".into());
+                app.listing = Listing {
+                    path: Some("/projects".into()),
+                    existing: true,
+                    children: (0..36)
+                        .map(|i| format!("/projects/project{i:02}").into())
+                        .collect(),
+                    ..Listing::default()
+                };
+                app.options.selected = app.rows().len() - 1;
+                if name == "directory-loading" {
+                    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+                }
             }
             c = app.paint(&mut f, 4060, width, height);
             c.cells[..width].fill(sessionsation_ui::render::Cell::default());
