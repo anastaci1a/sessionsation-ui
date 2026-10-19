@@ -3,9 +3,9 @@
   "kind": "Rust account/session popup; preserved original switcher and Agent DM selection",
   "artifacts": {
     "ui": {
-      "source_commit": "ed672269b44d3205e9f8380b20b7e5199835d04e",
-      "path": "/mnt/user/live/packages/sessionsation-ui/releases/ed672269b44d3205e9f8380b20b7e5199835d04e/sessionsation-ui",
-      "sha256": "b1385d980e8aeeba4dcdce1f734d0764e5d700941bdd1ffbaf318ab32d16283e",
+      "source_commit": "3dffba216a5aba0df9aca780ffa773d09c86a9ff",
+      "path": "/mnt/user/live/packages/sessionsation-ui/releases/3dffba216a5aba0df9aca780ffa773d09c86a9ff/sessionsation-ui",
+      "sha256": "83ef271cad0957857c24bf30f9ace83c26c96750e1631266556318367a01ef45",
       "cargo_lock_sha256": "91cbb0257cb3f9aca0b38fbfe5adb67af0f7e24510eadc232c9a39585f1e5e08",
       "profile": "release",
       "rust_version": "1.95.0",
@@ -54,7 +54,7 @@
     "reload_command": "herdr --session default server reload-config",
     "rollback_restores": "pre-popup default numbered launcher and exact HERDR configuration; removes popup client config; installed artifacts and UI preferences retained",
     "runtime_update": {
-      "ui_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/ui-76897278-3ace-411d-93e5-f3932abf42ea.json",
+      "ui_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/ui-8721d9a6-56a7-4e9e-ad83-6cf602199659.json",
       "backend_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/client-d2a2e52b-6393-401e-a974-a959e73f7be4.json",
       "rollback": "Restore the corresponding client config/UI symlink receipt. Owner rollback additionally requires public daemon stop, registry-lock release and previous immutable daemon start against the same root; never stop native agents."
     },
