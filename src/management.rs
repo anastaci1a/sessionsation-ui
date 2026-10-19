@@ -1922,7 +1922,7 @@ impl Manager {
             self.note = note;
             let rows = self.rows();
             let palette = self.palette.clone();
-            let view = crate::popup::Choices {
+            let mut view = crate::popup::Choices {
                 title: "Choose Space",
                 description: "Choose a destination Space for this session.",
                 rows: &rows,
@@ -1939,8 +1939,12 @@ impl Manager {
                 .popup_size
                 .is_none_or(|s| s.viewport != (canvas.width, canvas.height))
             {
-                self.popup_size = Some(view.measure((canvas.width, canvas.height)));
+                self.popup_size = Some(
+                    view.measure_selected((canvas.width, canvas.height), self.options.selected),
+                );
             }
+            self.popup_size =
+                Some(view.grow_for_selection(self.popup_size.unwrap(), self.options.selected));
             crate::popup::paint_choices(
                 canvas,
                 &palette,

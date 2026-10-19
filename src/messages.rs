@@ -2,7 +2,12 @@
 pub fn describe(text: &str) -> String {
     for prefix in ["Launch failed: ", "Status: "] {
         if let Some(rest) = text.strip_prefix(prefix) {
-            return format!("{prefix}{}", describe(rest));
+            let message = describe(rest);
+            return if message.is_empty() {
+                message
+            } else {
+                format!("{prefix}{message}")
+            };
         }
     }
     let code = text.split([':', ' ', '\n']).next().unwrap_or("");
@@ -72,9 +77,7 @@ pub fn describe(text: &str) -> String {
         "PERMISSION_DENIED" => {
             "Local data could not be accessed with the current permissions. Check the selected directory or data-root permissions."
         }
-        "DIRECTORY_ALREADY_EXISTS" => {
-            "The planned directory now exists. Select it as an existing directory before starting."
-        }
+        "DIRECTORY_ALREADY_EXISTS" => "",
         "DIRECTORY_CONFIRMATION_REQUIRED" | "DIRECTORY_CHANGED" | "DIRECTORY_PARENT_CHANGED" => {
             "The selected directory changed or is unavailable. Choose it again before starting."
         }

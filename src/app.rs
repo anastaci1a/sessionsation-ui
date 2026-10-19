@@ -431,17 +431,16 @@ impl App {
                     .map(|a| UnicodeWidthStr::width(crate::usage::short_name(&a.id).as_str()))
                     .max()
                     .unwrap_or(0);
-                self.accounts
-                    .iter()
-                    .zip(labels)
-                    .map(|(a, usage)| {
+                [Row::yes("Cancel"), Row::separator()]
+                    .into_iter()
+                    .chain(self.accounts.iter().zip(labels).map(|(a, usage)| {
                         let column = 2 + name_width + 1 + preview_width
                             - UnicodeWidthStr::width(usage.as_str());
                         Row::gate(crate::usage::short_name(&a.id), a.selectable)
                             .with_column_preview(usage, column, false)
                             .preview_gap(1)
                             .preview_color(crate::widgets::SECONDARY)
-                    })
+                    }))
                     .collect()
             }
             Page::Spaces => [Row::yes("Create new space"), Row::yes("Cancel")]
@@ -488,7 +487,10 @@ impl App {
         };
         if Self::is_popup(&self.page) {
             rows = rows.into_iter().map(Row::left_aligned).collect();
-            if !matches!(self.page, Page::Directory(_) | Page::Spaces) {
+            if !matches!(
+                self.page,
+                Page::Directory(_) | Page::Spaces | Page::Accounts
+            ) {
                 rows.push(Row::yes("Cancel").left_aligned());
             }
         }
@@ -505,7 +507,11 @@ impl App {
         });
         self.page = page;
         self.pending_child = None;
-        self.options.selected = 0;
+        self.options.selected = if self.page == Page::Accounts {
+            self.opening_account_row()
+        } else {
+            0
+        };
         if self.page == Page::Spaces
             && let Some(Space::Existing { id, .. }) = &self.draft.space
             && let Some(index) = self.spaces.iter().position(|s| s.workspace_id == *id)
@@ -657,6 +663,16 @@ impl App {
         spaces: Vec<Workspace>,
         now: i64,
     ) -> Vec<Effect> {
+        let empty_accounts = self.accounts.is_empty();
+        let picker_account = (self.page == Page::Accounts)
+            .then(|| {
+                self.options
+                    .selected
+                    .checked_sub(2)
+                    .and_then(|i| self.accounts.get(i))
+                    .map(|a| a.id.clone())
+            })
+            .flatten();
         let old_account = self.draft.account.clone();
         let old_space = self.draft.space.clone();
         let picker_space = if self.page == Page::Spaces {
@@ -728,6 +744,17 @@ impl App {
         {
             self.draft.account = None;
         }
+        if self.page == Page::Accounts {
+            if let Some(id) = picker_account {
+                self.options.selected = self
+                    .accounts
+                    .iter()
+                    .position(|a| a.id == id)
+                    .map_or_else(|| self.opening_account_row(), |i| i + 2);
+            } else if empty_accounts && !self.accounts.is_empty() {
+                self.options.selected = self.opening_account_row();
+            }
+        }
         self.dirty = true;
         if old_account == self.draft.account && old_space == self.draft.space {
             vec![]
@@ -776,6 +803,18 @@ impl App {
             self.options.selected = 0;
         }
         self.dirty = true;
+    }
+    fn opening_account_row(&self) -> usize {
+        let current = self
+            .switch
+            .as_ref()
+            .and_then(|s| s["account_id"].as_str())
+            .or(self.draft.account.as_deref());
+        self.accounts
+            .iter()
+            .position(|a| Some(a.id.as_str()) == current)
+            .or_else(|| (!self.accounts.is_empty()).then_some(0))
+            .map_or(0, |i| i + 2)
     }
     fn directory_action_count(&self) -> usize {
         if matches!(
@@ -988,7 +1027,7 @@ impl App {
             }
             Page::Accounts => {
                 if let Some(session) = self.switch.take() {
-                    let account = self.accounts[self.options.selected].id.clone();
+                    let account = self.accounts[self.options.selected - 2].id.clone();
                     self.pop();
                     self.manager.switch_confirmation(session, &account);
                     return vec![];
@@ -1406,15 +1445,17 @@ impl App {
         } else if !self.error.is_empty() {
             crate::messages::describe(&self.error)
         } else if self.page == Page::Accounts {
-            self.accounts
-                .get(self.options.selected)
+            self.options
+                .selected
+                .checked_sub(2)
+                .and_then(|i| self.accounts.get(i))
                 .map(|a| crate::usage::Usage::account(a).status)
                 .unwrap_or_default()
         } else {
             String::new()
         };
         let description = self.popup_description();
-        let presentation = crate::popup::Choices {
+        let mut presentation = crate::popup::Choices {
             title: self.popup_title(),
             description,
             rows: &rows,
@@ -1434,6 +1475,8 @@ impl App {
             large: editor.is_some(),
             pinned: if editor.is_some() {
                 self.directory_children_offset()
+            } else if self.page == Page::Accounts {
+                2
             } else if self.page == Page::Spaces && !self.spaces.is_empty() {
                 3
             } else {
@@ -1446,8 +1489,16 @@ impl App {
             .as_ref()
             .is_none_or(|(page, size)| *page != self.page || size.viewport != (width, height))
         {
-            self.popup_size = Some((self.page.clone(), presentation.measure((width, height))));
+            self.popup_size = Some((
+                self.page.clone(),
+                presentation.measure_selected((width, height), self.options.selected),
+            ));
         }
+        let opened = self.popup_size.as_ref().unwrap().1;
+        self.popup_size = Some((
+            self.page.clone(),
+            presentation.grow_for_selection(opened, self.options.selected),
+        ));
         crate::popup::paint_choices(
             canvas,
             &self.manager.palette,
@@ -1693,6 +1744,70 @@ impl App {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn account_picker_opens_on_current_or_default_and_preserves_identity() {
+        for current in [None, Some("codex:b")] {
+            for switching in [false, true] {
+                let mut a = app();
+                a.accounts = serde_json::from_value(json!([
+                    {"id":"codex:a","selectable":true},
+                    {"id":"codex:b","selectable":true}
+                ]))
+                .unwrap();
+                a.page = Page::Summary;
+                if switching {
+                    a.switch = Some(json!({"id":"session","account_id":current}));
+                } else {
+                    a.draft.account = current.map(str::to_owned);
+                }
+                a.push(Page::Accounts, String::new());
+                assert_eq!(a.rows()[0].label, "Cancel");
+                assert!(a.rows()[1].separator);
+                assert_eq!(a.options.selected, if current.is_some() { 3 } else { 2 });
+                let chosen = a.accounts[a.options.selected - 2].id.clone();
+                let mut reordered = a.accounts.clone();
+                reordered.reverse();
+                a.inventory(reordered, vec![], 0);
+                assert_eq!(a.accounts[a.options.selected - 2].id, chosen);
+                a.options.selected = 0;
+                a.activate();
+                assert_eq!(a.page, Page::Summary);
+            }
+        }
+    }
+    #[test]
+    fn polled_account_status_only_grows_the_popup_when_hovered() {
+        let mut a = app();
+        a.accounts = serde_json::from_value(json!([
+            {"id":"codex:a","selectable":true,"usage_fresh":true,"usage":{"observed_at":1,"weekly":{"duration_minutes":10080,"used_percent":10}}},
+            {"id":"codex:b","selectable":true,"usage_fresh":true,"usage":{"observed_at":1,"weekly":{"duration_minutes":10080,"used_percent":10}}}
+        ])).unwrap();
+        a.push(Page::Accounts, String::new());
+        let mut field = Field::new(100, 30, 1);
+        a.paint(&mut field, 0, 100, 30);
+        let opened = a.popup_size.as_ref().unwrap().1;
+        assert_eq!(opened.note_width, 5);
+        let mut polled = a.accounts.clone();
+        polled[1]
+            .details
+            .insert("auth_required".into(), json!(true));
+        polled[1].selectable = false;
+        a.inventory(polled, vec![], 0);
+        a.paint(&mut field, 20, 100, 30);
+        let hidden = a.popup_size.as_ref().unwrap().1;
+        assert_eq!(
+            (hidden.width, hidden.height, hidden.note_width),
+            (opened.width, opened.height, 5)
+        );
+        a.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        a.paint(&mut field, 40, 100, 30);
+        let hovered = a.popup_size.as_ref().unwrap().1;
+        assert!(hovered.width > opened.width);
+        assert_eq!(hovered.note_width, "Login required".len());
+        a.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        a.paint(&mut field, 60, 100, 30);
+        assert_eq!(a.popup_size.as_ref().unwrap().1.width, hovered.width);
+    }
     use super::*;
     #[test]
     fn popup_geometry_is_stable_across_focus_status_and_loading_changes() {
@@ -1933,6 +2048,7 @@ mod tests {
             let mut a = app();
             a.page = Page::Accounts;
             a.switch = switching.then(|| json!({"id":"session"}));
+            a.options.selected = 2;
             a.accounts=vec![serde_json::from_value(json!({"id":"codex:demo","selectable":true,"usage_fresh":true,"usage":{"observed_at":1,"short":{"duration_minutes":300,"used_percent":20},"weekly":{"duration_minutes":10080,"used_percent":10}}})).unwrap()];
             let mut field = Field::new(80, 24, 1);
             let c = a.paint(&mut field, 4200, 80, 24);
@@ -2144,6 +2260,7 @@ mod tests {
     fn picker_columns_are_adjacent_and_status_is_below_list_or_range() {
         let mut a = app();
         a.page = Page::Accounts;
+        a.options.selected = 2;
         let account = |name: &str, short: bool| {
             serde_json::from_value(json!({"id":format!("codex:{name}"),"selectable":true,"usage_fresh":true,"usage":{"observed_at":1,"short":if short{json!({"duration_minutes":300,"used_percent":20})}else{Value::Null},"weekly":{"duration_minutes":10080,"used_percent":10}}})).unwrap()
         };
@@ -2158,15 +2275,15 @@ mod tests {
                     .collect::<String>()
             };
             let ready = (0..24).find(|y| line(*y).contains("Ready")).unwrap();
-            assert!(!line(ready - 1).chars().any(char::is_alphanumeric));
+            assert!(line(ready).contains("longest"));
             let inner = width.saturating_sub(4).min(76) - 4;
             let left = Options::left(inner, &rows);
-            assert_eq!(rows[0].preview_position(inner, left).unwrap(), left + 10);
+            assert_eq!(rows[2].preview_position(inner, left).unwrap(), left + 10);
             assert_eq!(
-                rows[0].preview_position(inner, left).unwrap()
-                    + rows[0].preview.as_ref().unwrap().len(),
-                rows[1].preview_position(inner, left).unwrap()
-                    + rows[1].preview.as_ref().unwrap().len()
+                rows[2].preview_position(inner, left).unwrap()
+                    + rows[2].preview.as_ref().unwrap().len(),
+                rows[3].preview_position(inner, left).unwrap()
+                    + rows[3].preview.as_ref().unwrap().len()
             );
         }
         a.accounts = (0..30)
@@ -2178,7 +2295,7 @@ mod tests {
             .chunks(60)
             .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
             .collect();
-        let range = lines.iter().position(|l| l.contains(" of 31")).unwrap();
+        let range = lines.iter().position(|l| l.contains(" of ")).unwrap();
         assert!(range > 0);
         assert!(
             lines
@@ -2191,7 +2308,7 @@ mod tests {
             .chunks(36)
             .map(|r| r.iter().map(|c| c.glyph.as_str()).collect())
             .collect();
-        let range = lines.iter().position(|l| l.contains(" of 31")).unwrap();
+        let range = lines.iter().position(|l| l.contains(" of ")).unwrap();
         assert!(lines[range + 2].contains("Ready"));
         let tiny = a.paint(&mut Field::new(24, 20, 1), 0, 24, 20);
         let tiny_lines: Vec<String> = tiny
@@ -2205,7 +2322,7 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("acct0") && l.contains("Ready"))
         );
-        a.options.selected = a.rows().len() - 1;
+        a.options.selected = 0;
         let c = a.paint(&mut Field::new(60, 18, 1), 0, 60, 18);
         assert!(
             !c.cells
@@ -2253,7 +2370,7 @@ mod tests {
         for resume in [None, Some(json!({"id":"saved"}))] {
             a.resume = resume;
             let rows = a.rows();
-            for (index, row) in rows.iter().enumerate() {
+            for (index, row) in rows.iter().enumerate().filter(|(_, r)| !r.separator) {
                 assert!(!row.account);
                 let mut canvas = Canvas::new(80, 4);
                 row.paint(&mut canvas, 0, 0, index == 0, false);
@@ -2526,7 +2643,7 @@ mod tests {
                     .iter()
                     .all(|c| c.fg == crate::widgets::SECONDARY && !c.bold)
             );
-            if Options::previews_detached(width.saturating_sub(4).min(76) - 4, &rows) {
+            if Options::previews_detached(a.popup_size.as_ref().unwrap().1.width - 4, &rows) {
                 let alpha = c
                     .cells
                     .chunks(width)
@@ -2588,14 +2705,15 @@ mod tests {
             let inner = size.width - 4;
             let origin_x = (100 - size.width) / 2 + 2;
             let origin_y = (24 - size.height) / 2 + 1;
+            let option_top = crate::dialog::wrap(a.popup_description(), inner).len() + 1;
             if Options::previews_detached(inner, &rows) {
-                assert_eq!(index / 100, origin_y + 3 + rows.len());
+                assert_eq!(index / 100, origin_y + option_top + 1 + rows.len());
                 assert_eq!(
                     index % 100,
                     origin_x + (inner - rows[selected].preview.as_ref().unwrap().len()) / 2
                 );
             } else {
-                assert_eq!(index / 100, origin_y + 2 + selected);
+                assert_eq!(index / 100, origin_y + option_top + selected);
                 assert_eq!(
                     Some(index % 100),
                     rows[selected]

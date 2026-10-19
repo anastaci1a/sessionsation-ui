@@ -106,7 +106,8 @@ impl TextInput {
             ..Cell::default()
         };
         let before = &self.value[..self.cursor];
-        let skip = UnicodeWidthStr::width(before).saturating_sub(width - 3);
+        let elided = usize::from(width > 3 && UnicodeWidthStr::width(before) > width - 3);
+        let skip = UnicodeWidthStr::width(before).saturating_sub(width - 3 - elided);
         let mut removed = 0;
         let visible: String = self
             .value
@@ -121,11 +122,17 @@ impl TextInput {
             })
             .scan(0, |used, g| {
                 *used += UnicodeWidthStr::width(g);
-                (*used <= width - 2).then_some(g)
+                (*used <= width - 2 - elided).then_some(g)
             })
             .collect();
-        canvas.text(x, y, &format!("> {visible}"), style.clone(), true);
-        let cursor = x + 2 + UnicodeWidthStr::width(before).saturating_sub(removed);
+        canvas.text(
+            x,
+            y,
+            &format!("> {}{visible}", if elided > 0 { "…" } else { "" }),
+            style.clone(),
+            true,
+        );
+        let cursor = x + 2 + elided + UnicodeWidthStr::width(before).saturating_sub(removed);
         if focused && cursor < x + width && cursor < canvas.width && y < canvas.height {
             let glyph = self.value[self.cursor..]
                 .graphemes(true)
@@ -810,6 +817,24 @@ mod tests {
     use crossterm::event::{KeyEvent, KeyEventKind};
     use std::time::{Duration, Instant};
     #[test]
+    fn overflowing_input_shows_an_ellipsis_and_keeps_the_full_value() {
+        let mut input = TextInput::new("/projects/deeper/path".into());
+        for suffix in ["", "/child", "/grandchild"] {
+            input.insert(suffix);
+            let mut canvas = Canvas::new(14, 1);
+            input.paint(&mut canvas, 0, 0, 14, true);
+            assert_eq!(canvas.cells[2].glyph, "…");
+            assert!(canvas.cursor.is_some_and(|(x, y)| x < 14 && y == 0));
+            assert!(input.value.starts_with("/projects/deeper/path"));
+        }
+        input.edit(KeyCode::Home);
+        let mut canvas = Canvas::new(14, 1);
+        input.paint(&mut canvas, 0, 0, 14, true);
+        assert_eq!(canvas.cells[2].glyph, "/");
+        assert_eq!(canvas.cursor, Some((2, 0)));
+        input.paint(&mut Canvas::new(3, 1), 0, 0, 3, true);
+    }
+    #[test]
     fn pinned_header_survives_six_rows_but_five_scrolls_everything() {
         let mut rows = vec![Row::yes("Action"), Row::yes("Cancel"), Row::separator()];
         rows.extend((0..20).map(|i| Row::yes(format!("Child {i}"))));
@@ -1158,7 +1183,8 @@ mod tests {
         let input = TextInput::new("界界界界界".into());
         let mut canvas = Canvas::new(10, 1);
         input.paint(&mut canvas, 0, 0, 9, true);
-        assert_eq!(canvas.cursor, Some((8, 0)));
+        assert_eq!(canvas.cursor, Some((7, 0)));
+        assert_eq!(canvas.cells[2].glyph, "…");
         assert!(canvas.cells.iter().all(|c| c.bg.is_none()));
         assert_eq!(canvas.cells[9], Cell::default());
     }

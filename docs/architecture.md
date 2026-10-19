@@ -52,9 +52,11 @@ Its reusable components are:
 - `popup`: shared frame, measured size and choice-list template (optional boxed
   editor, pinned action group including Cancel, selected preview and status). Callers supply
   content and handle actions; they do not duplicate layout. Pickers preserve the
-  opening screen and cache geometry until terminal resize. Natural widths fit
-  known content up to a readable maximum; selected account statuses share a
-  list-wide inline/detached fit rule. Compositing translates
+  opening screen and cache geometry/detail budgets until terminal resize. Labels
+  and known statuses determine opening width; descriptions wrap and path editors
+  scroll with a leading ellipsis. Polling cannot grow the frame for hidden details.
+  A hovered detail may increase the cached budget, retaining that space until
+  close. Account statuses keep the shared inline/detached fit rule. Compositing translates
   the native cursor and keeps background star lifetimes independent.
 - `dialog`: shared one/multiple-field forms, confirmations, information and
   progress. The same boxed editor paints session/account names and directory

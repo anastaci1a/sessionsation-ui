@@ -215,6 +215,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
                 None,
             );
             app.page = sessionsation_ui::app::Page::Accounts;
+            app.options.selected = 2;
             app.accounts = accounts.clone();
             c = app.paint(&mut f, 4060, width, height);
             c.cells[..width].fill(sessionsation_ui::render::Cell::default());

@@ -64,9 +64,13 @@ prefix closes the popup directly from any screen or dialog, without stopping an
 agent or cancelling a backend operation. Prefixes are read from the same HERDR
 configuration as the theme when opening the popup; absent/invalid bindings use
 HERDR’s default Ctrl-B. Nested directory/Space creation
-remains staged until Start. Popup dimensions are measured on opening and remain
-stable through navigation, loading and status changes; terminal resize refits them.
-Popup widths fit their title, text, fields and choices up to a readable maximum.
+remains staged until Start. Choice popups measure their labels and currently known
+details on opening; explanatory text wraps within that width. Polling alone does
+not enlarge them for unseen details. Hovering a newly longer account status, Space
+ID or directory name grows the frame only as needed, up to the terminal/readable
+maximum; it retains that space until close or terminal resize. Other dialogs keep
+their opening dimensions through live updates. Long directory paths scroll inside
+the editor with a leading `…` for hidden characters; they never widen the popup.
 Fixed-choice heights fit their description, choices and Cancel button exactly.
 Forms share the boxed account-name editor; all popup choices are left aligned,
 with descriptive text followed by one blank line before fields or choices.
@@ -75,6 +79,9 @@ that action and all bottom controls; Enter/Esc dismisses them. Progress and load
 reserve a fixed body viewport and scroll updates within it. Long lists scroll
 and selected previews can move below them. Action groups use sentence case and a
 blank bullet spacer. Where top actions exist, Cancel belongs to that same group.
+Account selection puts Cancel first, followed by a bullet separator. It opens on
+the current selection (including a prefilled default), or the first account when
+there is no matching selection; refreshed lists retain the hovered account by ID.
 
 ## Capabilities and limits
 
@@ -361,7 +368,7 @@ Use this directory, Leave unset (for defaults), Create subdirectory and Cancel s
 subdirectory list and its range counter, separated from it by a blank bullet row
 even when empty. Left on `(none)` navigates to the parent; Enter does nothing.
 If at most five rows fit, the whole list
-scrolls instead. Directory popup dimensions stay fixed; pending navigation clears
+scrolls instead. Directory popup height stays fixed; a newly hovered longer name may widen it. Pending navigation clears
 old child rows and shows Loading… one blank line below the actions. Right browses
 child rows only; Left returns to their parent and does nothing on action rows.
 Only child rows show the Parent/Open hint. Tab and Ctrl-U have no directory-picker

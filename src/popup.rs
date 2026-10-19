@@ -56,12 +56,14 @@ impl Panel {
         );
     }
 }
-/// Measured once per opened picker and remeasured only on terminal resize.
+/// Opening geometry and detail budget. Visible selections may grow it;
+/// terminal resize measures it afresh. Polling alone never changes geometry.
 #[derive(Clone, Copy, Debug)]
 pub struct Size {
     pub viewport: (usize, usize),
     pub width: usize,
     pub height: usize,
+    pub note_width: usize,
 }
 impl Size {
     pub fn fit(viewport: (usize, usize), width: usize, height: usize) -> Self {
@@ -69,6 +71,7 @@ impl Size {
             viewport,
             width: width.min(viewport.0.saturating_sub(4)),
             height: height.min(viewport.1.saturating_sub(4)),
+            note_width: 0,
         }
     }
 }
@@ -116,22 +119,31 @@ impl Choices<'_> {
             })
     }
     pub fn measure(&self, viewport: (usize, usize)) -> Size {
+        self.measure_selected(viewport, usize::MAX)
+    }
+    pub fn measure_selected(&self, viewport: (usize, usize), selected: usize) -> Size {
         use unicode_width::UnicodeWidthStr;
         let natural = self.rows.iter().map(|r| {
-            Self::row_end(r, usize::MAX / 2)
-                + 2
-                + usize::from(self.inline_note_width > 0) * (1 + self.inline_note_width)
+            let end = if r.preview_selected_only {
+                2 + UnicodeWidthStr::width(r.label.as_str())
+            } else {
+                Self::row_end(r, usize::MAX / 2)
+            };
+            end + 2 + usize::from(self.inline_note_width > 0) * (1 + self.inline_note_width)
         });
+        let detail = self
+            .rows
+            .get(selected)
+            .and_then(|r| r.preview.as_ref().filter(|_| r.preview_selected_only))
+            .map(|s| UnicodeWidthStr::width(s.as_str()) + 2);
         let width = content_width(
             viewport.0,
             self.title,
-            natural
-                .chain([UnicodeWidthStr::width(self.description)])
-                .chain(
-                    self.editor
-                        .map(|f| UnicodeWidthStr::width(f.input.value.as_str()).max(24)),
-                ),
+            natural.chain(self.editor.map(|_| 24)).chain(detail),
         );
+        self.fit_width(viewport, width)
+    }
+    fn fit_width(&self, viewport: (usize, usize), width: usize) -> Size {
         let inner = width.saturating_sub(4);
         let description = crate::dialog::wrap(self.description, inner).len();
         let preview = usize::from(crate::widgets::Options::previews_detached(inner, self.rows)) * 2;
@@ -143,9 +155,42 @@ impl Choices<'_> {
         } else {
             description + 1 + self.rows.len().max(1) + preview + note + 2
         };
-        Size::fit(viewport, width, height)
+        let mut size = Size::fit(viewport, width, height);
+        size.note_width = self.inline_note_width;
+        size
+    }
+    /// Polling never changes geometry. Only the selected, visible detail may
+    /// increase the opening budget; keep this growth until close or resize.
+    pub fn grow_for_selection(&mut self, opened: Size, selected: usize) -> Size {
+        use unicode_width::UnicodeWidthStr;
+        self.inline_note_width = opened.note_width;
+        let note = UnicodeWidthStr::width(self.note);
+        let mut required = opened.width;
+        if self.reserve_note && note > opened.note_width {
+            self.inline_note_width = note;
+            if let Some(row) = self.rows.get(selected) {
+                required = required.max(Self::row_end(row, usize::MAX / 2) + 1 + note + 4);
+            }
+        }
+        if let Some(row) = self.rows.get(selected) {
+            required = required.max(UnicodeWidthStr::width(row.label.as_str()) + 6);
+            if row.preview_selected_only
+                && let Some(text) = &row.preview
+            {
+                required = required.max(UnicodeWidthStr::width(text.as_str()) + 6);
+            }
+        }
+        let width = required.min(76).min(opened.viewport.0.saturating_sub(4));
+        if width > opened.width || self.inline_note_width > opened.note_width {
+            let mut next = self.fit_width(opened.viewport, width);
+            next.height = next.height.max(opened.height);
+            next
+        } else {
+            opened
+        }
     }
 }
+
 pub fn paint_choices(
     canvas: &mut Canvas,
     palette: &Palette,
@@ -202,18 +247,21 @@ pub fn paint_choices(
             options.paint_menu(local, view.rows, top, bottom, bottom + 1)
         };
         if !view.note.is_empty() {
-            let selected_y = if view.pinned > 0
-                && capacity > 5
-                && view.rows.len() > capacity
-                && options.selected < view.pinned
-            {
+            let available = bottom.saturating_sub(top);
+            let pinned_active = view.pinned > 0
+                && view.rows.len() > available
+                && available.saturating_sub(1) > 5
+                && view.pinned < view.rows.len();
+            let selected_y = if pinned_active && options.selected < view.pinned {
                 Some(top + options.selected)
             } else {
                 options
                     .selected
                     .checked_sub(options.scroll)
-                    .filter(|i| *i < capacity)
-                    .map(|i| top + i)
+                    .filter(|i| {
+                        *i < capacity.saturating_sub(if pinned_active { view.pinned } else { 0 })
+                    })
+                    .map(|i| top + i + if pinned_active { view.pinned } else { 0 })
             };
             let (x, y) = if inline {
                 view.rows
@@ -312,6 +360,66 @@ mod tests {
         render::{Accent, Field},
         widgets::TextInput,
     };
+    #[test]
+    fn hidden_space_ids_do_not_expand_the_frame_until_selected() {
+        use crate::widgets::Row;
+        let rows = vec![
+            Row::yes("One").with_selected_preview("(a)"),
+            Row::yes("Two").with_selected_preview("(b)"),
+        ];
+        let mut view = Choices {
+            title: "Choose Space",
+            description: "A long description wraps instead of making the popup wide.",
+            rows: &rows,
+            editor: None,
+            note: "",
+            note_accent: false,
+            reserve_note: false,
+            inline_note_width: 0,
+            large: false,
+            pinned: 0,
+            browse_hint: false,
+        };
+        let opened = view.measure_selected((100, 30), 0);
+        assert_eq!(opened.width, 24);
+        let updated = vec![
+            rows[0].clone(),
+            Row::yes("Two")
+                .with_selected_preview("A newly observed Space identifier that is longer"),
+        ];
+        view.rows = &updated;
+        assert_eq!(view.grow_for_selection(opened, 0).width, opened.width);
+        assert!(view.grow_for_selection(opened, 1).width > opened.width);
+    }
+    #[test]
+    fn directory_path_length_does_not_control_popup_width() {
+        use crate::widgets::Row;
+        let rows = vec![
+            Row::yes("Use this directory"),
+            Row::yes("Create subdirectory"),
+            Row::yes("Cancel"),
+            Row::separator(),
+            Row::placeholder("(none)"),
+        ];
+        let editor =
+            crate::dialog::Field::new("Directory", format!("/{}", "long-component/".repeat(30)));
+        let mut view = Choices {
+            title: "Start directory",
+            description: "Choose a directory. Directories are only created during Start.",
+            rows: &rows,
+            editor: Some(&editor),
+            note: "",
+            note_accent: false,
+            reserve_note: false,
+            inline_note_width: 0,
+            large: true,
+            pinned: 4,
+            browse_hint: false,
+        };
+        let opened = view.measure_selected((100, 30), 4);
+        assert!(opened.width < 40);
+        assert_eq!(view.grow_for_selection(opened, 4).width, opened.width);
+    }
     #[test]
     fn choices_fit_exactly_and_keep_cancel_visible_with_detached_details() {
         let palette = Palette::default();
