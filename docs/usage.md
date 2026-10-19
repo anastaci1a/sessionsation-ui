@@ -99,6 +99,14 @@ failed cleanup offers Recover only when the backend reports it safe to request.
 Operation menus respect explicit cancellation/recovery capabilities, rather than
 assuming every failed operation supports the same recovery command.
 
+Manage Sessions lists sessions, then a dot separator and Operations. Archived
+Sessions appears above Operations only when archives exist. With neither saved/live
+sessions nor archives, the list contains only Operations, without a separator.
+New Session remains on the home menu. Archive, Restore and permanent Delete call
+the public CLI with stable identity, generation and request ID after confirmation.
+Delete requires typing the displayed session name. Archive storage and restoration
+belong to the backend; restoration does not start an agent or send a message.
+
 Session Details opens from cached state immediately and refreshes on the one-second
 read-only state poll, retaining the last details during discovery failures. It shows
 the native creation timestamp and saved rollout size when reported; older or

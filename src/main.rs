@@ -409,7 +409,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     session_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut receipt = tokio::time::interval(Duration::from_secs(1));
     let mut inventory_pending = false;
-    let mut receipt_pending = false;
+    let mut receipt_pending: Option<String> = None;
     let mut term_signal =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut hup_signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
@@ -431,7 +431,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
          _=frame.tick()=>{app.dirty=true;},
          _=refresh.tick(),if !inventory_pending=>{inventory_pending=true;effects.inventory();let intents=app.manager.refresh();next=app.management(intents);},
          _=session_refresh.tick()=>{let intents=app.manager.refresh_live();next=app.management(intents);},
-         _=receipt.tick(),if app.request.is_some()&&!app.success&&!receipt_pending=>{receipt_pending=true;effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
+         _=receipt.tick(),if app.request.is_some()&&!app.success&&receipt_pending.as_deref()!=app.request.as_ref().and_then(|r|r["request_id"].as_str())=>{receipt_pending=app.request.as_ref().and_then(|r|r["request_id"].as_str()).map(str::to_owned);effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
          message=rx.recv()=>match message.context("Input channel closed")? {
          Message::Background(color)=>{app.terminal_background=color;app.dirty=true;},
          Message::Input(Event::Key(k))=>{next=app.key(k);},
@@ -446,10 +446,11 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           Message::Theme(result)=>{match result{Ok((palette,note))=>{app.manager.palette=palette;if let Some(note)=note{app.manager.note=note;}},Err(e)=>app.manager.note=e}app.dirty=true;},
           Message::Directory(revision,result)=>app.listing(revision,result),
           Message::Validation(revision,result)=>app.validation(revision,result),
-          Message::Receipt(id,result)=>{if app.request.as_ref().and_then(|r|r["request_id"].as_str()) != Some(id.as_str()) { continue; } receipt_pending=false;match result {
+          Message::Receipt(id,result)=>{if receipt_pending.as_deref()==Some(id.as_str()){receipt_pending=None;}
+          if app.request.as_ref().and_then(|r|r["request_id"].as_str()) != Some(id.as_str()) { continue; } match result {
            Ok(r)=>match r["phase"].as_str().unwrap_or("uncertain") {
             "running" if !app.success=>{app.success=true;if app.launch_background {app.manager.note="Session is running; open Operations or Focus tab when ready.".into();app.prefs.last_account=app.request.as_ref().and_then(|r|r["account_id"].as_str().map(str::to_owned));next.push(Effect::Save);}else if let Some(tab)=r["tab_id"].as_str(){effects.focus(tab.into());}else{app.error="Session running; receipt has no tab identity. Esc closes.".into();}},
-            "failed"=>{app.request=None;app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",r["detail"].as_str().unwrap_or("inspect launch status"));},
+            "failed" | "cancelled" | "recovered"=>{app.request=None;app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",r["detail"].as_str().unwrap_or("inspect launch status"));},
             phase=>{app.error=format!("{phase}: {}",r["detail"].as_str().unwrap_or("waiting for confirmed handoff"));},
            },Err(e)=>{app.error=format!("{e}; reconciling original request");}
           }if app.launch_dialog&&let Some(d)=&mut app.manager.dialog{d.body=vec![app.error.clone()];if app.success || app.error.starts_with("Launch failed:"){d.finish();}}app.dirty=true;},

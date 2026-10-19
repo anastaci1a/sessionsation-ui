@@ -15,10 +15,27 @@ pub enum Action {
     Switch,
     Restart,
     Stop,
+    Archive,
+    Delete,
+    Restore,
     Unavailable,
 }
 pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     let c = &s["capabilities"];
+    if s["availability"] == "archived" {
+        return vec![
+            (
+                Row::gate("Restore Session", c["restore"] == true),
+                Action::Restore,
+            ),
+            (Row::yes("Session Details"), Action::Details),
+            (Row::separator(), Action::Unavailable),
+            (
+                Row::gate("Delete Session", c["delete"] == true),
+                Action::Delete,
+            ),
+        ];
+    }
     let inactive = s["availability"] != "running";
     let focus = Row::gate(
         "Focus Session",
@@ -58,11 +75,11 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
             (Row::separator(), Action::Unavailable),
             (
                 Row::gate("Archive Session", c["archive"] == true),
-                Action::Unavailable,
+                Action::Archive,
             ),
             (
                 Row::gate("Delete Session", c["delete"] == true),
-                Action::Unavailable,
+                Action::Delete,
             ),
         ]);
         return rows;
@@ -135,14 +152,22 @@ fn busy(session: &Value) -> bool {
     session["availability"] == "running" && session["activity"] == "busy"
 }
 pub fn rows(sessions: &[Value], known: bool) -> Vec<Row> {
-    let mut rows = vec![Row::yes("[new session]")];
+    rows_with_archives(sessions, known, false)
+}
+pub fn rows_with_archives(sessions: &[Value], known: bool, archives: bool) -> Vec<Row> {
+    let mut rows = vec![];
     let _ = known;
     rows.extend(
         sessions
             .iter()
             .map(|s| Row::yes(display_name(s["name"].as_str().unwrap_or("Unnamed")))),
     );
-    rows.push(Row::separator());
+    if !sessions.is_empty() {
+        rows.push(Row::separator());
+    }
+    if archives {
+        rows.push(Row::yes("Archived Sessions"));
+    }
     rows.push(Row::yes("Operations"));
     rows
 }
@@ -155,7 +180,29 @@ pub fn paint(
     now: i64,
     controls_start: usize,
 ) -> (usize, usize) {
-    let mut rows = rows(sessions, known);
+    paint_with_archives(
+        canvas,
+        options,
+        sessions,
+        known,
+        bottom,
+        now,
+        controls_start,
+        false,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+pub fn paint_with_archives(
+    canvas: &mut Canvas,
+    options: &mut Options,
+    sessions: &[Value],
+    known: bool,
+    bottom: usize,
+    now: i64,
+    controls_start: usize,
+    archives: bool,
+) -> (usize, usize) {
+    let mut rows = rows_with_archives(sessions, known, archives);
     let account_width = sessions
         .iter()
         .map(|s| {
@@ -178,7 +225,7 @@ pub fn paint(
             canvas.width.saturating_sub(8)
         });
     let table_width = name_width + if show_accounts { account_width } else { 0 };
-    let prefix = 1;
+    let prefix = 0;
     for (i, session) in sessions.iter().enumerate() {
         rows[prefix + i].label = ellipsize(
             &display_name(session["name"].as_str().unwrap_or("Unnamed")),
@@ -310,6 +357,29 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn empty_session_menu_has_only_operations_and_archives_are_conditional() {
+        assert_eq!(
+            rows(&[], true)
+                .iter()
+                .map(|r| r.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Operations"]
+        );
+        assert_eq!(
+            rows_with_archives(&[], true, true)
+                .iter()
+                .map(|r| r.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Archived Sessions", "Operations"]
+        );
+        let rows = rows_with_archives(&[json!({"name":"Saved"})], true, true);
+        assert_eq!(
+            rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(),
+            vec!["Saved", "", "Archived Sessions", "Operations"]
+        );
+        assert!(rows[1].separator);
+    }
+    #[test]
     fn inactive_actions_start_with_history_and_hide_live_controls() {
         let rows = actions(
             &serde_json::json!({"availability":"saved","capabilities":{"resume":true,"rename":true}}),
@@ -394,7 +464,7 @@ mod tests {
             json!({"name":"Busy", "account_id":"codex:work", "availability":"running", "activity":"busy", "active_since":1}),
         ];
         let mut field = crate::render::Field::new(100, 20, 1967);
-        for selected in [0, 1] {
+        for selected in [2, 0] {
             let mut c = field.paint(4100);
             paint(
                 &mut c,
@@ -408,11 +478,11 @@ mod tests {
                 62,
                 19,
             );
-            let row = &c.cells[400..500];
+            let row = &c.cells[300..400];
             let bracket = row.iter().position(|c| c.glyph == "]").unwrap();
             assert_eq!(row[bracket + 2].glyph, "⠙");
             assert_eq!(row[bracket + 2].fg, row[bracket].fg);
-            if selected == 1 {
+            if selected == 0 {
                 assert_eq!(row[bracket + 4].glyph, "(");
                 assert!(!row[bracket + 4].bold);
             }
@@ -447,7 +517,7 @@ mod tests {
                 100,
                 19,
             );
-            let row = c.cells[4 * width..5 * width]
+            let row = c.cells[3 * width..4 * width]
                 .iter()
                 .map(|c| c.glyph.as_str())
                 .collect::<String>();
@@ -462,7 +532,7 @@ mod tests {
             json!({"name":"Saved", "account_id":"codex:work", "availability":"saved"}),
         ];
         let mut options = Options {
-            selected: 1,
+            selected: 0,
             ..Options::default()
         };
         let mut c = Canvas::new(38, 20);
@@ -476,15 +546,15 @@ mod tests {
         let y = (0..20)
             .find(|y| text(&c, *y).contains("(1:01:01:01)"))
             .unwrap();
-        assert!(y > 7);
+        assert!(y > 6);
         assert!(
             c.cells[y * 38..(y + 1) * 38]
                 .iter()
                 .all(|c| !c.bold && c.fg == crate::widgets::SECONDARY)
         );
-        assert!(text(&c, 5).contains("[work]"));
-        assert!(!text(&c, 5).contains("[work]*"));
-        options.selected = 2;
+        assert!(text(&c, 4).contains("[work]"));
+        assert!(!text(&c, 4).contains("[work]*"));
+        options.selected = 1;
         let mut c = Canvas::new(38, 20);
         paint(&mut c, &mut options, &sessions, true, 16, 90062, 19);
         let y = (0..20)
@@ -517,7 +587,7 @@ mod tests {
             let mut field = crate::render::Field::new(80, 20, 1967);
             let base = field.paint(4200);
             for (selected, back, active_brightness) in
-                [(0, false, 600), (1, false, 1000), (1, true, 600)]
+                [(2, false, 600), (0, false, 1000), (0, true, 600)]
             {
                 let brightness = if availability == "running" {
                     active_brightness
@@ -538,27 +608,27 @@ mod tests {
                     100,
                     19,
                 );
-                let x = c.cells[320..400]
+                let x = c.cells[240..320]
                     .iter()
                     .position(|c| c.glyph == "[")
                     .unwrap();
                 let mut expected = base.clone();
                 expected.accent_text(
                     x,
-                    4,
+                    3,
                     "[personal]",
                     Accent {
                         brightness,
-                        bold: selected == 1 && !back,
+                        bold: selected == 0 && !back,
                         flash: false,
                         ..Accent::default()
                     },
                 );
-                assert_eq!(c.cells[320 + x].fg, expected.cells[320 + x].fg);
-                assert_eq!(c.cells[320 + x].bold, selected == 1 && !back);
-                if availability == "saved" && (selected != 1 || back) {
-                    assert_eq!(c.cells[320 + x + 10].glyph, " ");
-                    let marker = &c.cells[320 + x + 11];
+                assert_eq!(c.cells[240 + x].fg, expected.cells[240 + x].fg);
+                assert_eq!(c.cells[240 + x].bold, selected == 0 && !back);
+                if availability == "saved" && (selected != 0 || back) {
+                    assert_eq!(c.cells[240 + x + 10].glyph, " ");
+                    let marker = &c.cells[240 + x + 11];
                     assert_eq!(marker.glyph, "*");
                     assert_eq!(marker.fg, crate::widgets::MUTED);
                     assert!(!marker.bold);
@@ -571,7 +641,7 @@ mod tests {
         let sessions =
             vec![json!({"name":"Saved","account_id":"codex:personal","availability":"saved"})];
         for width in [30, 80] {
-            for (selected, back) in [(0, false), (1, false), (1, true)] {
+            for (selected, back) in [(2, false), (0, false), (0, true)] {
                 let mut c = Canvas::new(width, 20);
                 let mut options = Options {
                     selected,
@@ -580,13 +650,13 @@ mod tests {
                 };
                 paint(&mut c, &mut options, &sessions, true, 16, 100, 19);
                 let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
-                let parenthetical = selected == 1 && !back;
+                let parenthetical = selected == 0 && !back;
                 assert_eq!(
                     text.contains("(inactive)"),
                     parenthetical,
                     "{width}: {text}"
                 );
-                let row = c.cells[4 * width..5 * width]
+                let row = c.cells[3 * width..4 * width]
                     .iter()
                     .map(|c| c.glyph.as_str())
                     .collect::<String>();
@@ -609,7 +679,7 @@ mod tests {
             paint(
                 &mut c,
                 &mut Options {
-                    selected: 1,
+                    selected: 0,
                     ..Options::default()
                 },
                 &sessions,
@@ -618,7 +688,7 @@ mod tests {
                 62,
                 17,
             );
-            let lines: Vec<_> = (4..6)
+            let lines: Vec<_> = (3..5)
                 .map(|r| {
                     c.cells[r * width..(r + 1) * width]
                         .iter()
@@ -632,11 +702,11 @@ mod tests {
             );
             assert!(lines[0].contains("[a]"));
             assert!(lines[1].contains("[personal]"));
-            let selected_account = c.cells[4 * width..5 * width]
+            let selected_account = c.cells[3 * width..4 * width]
                 .iter()
                 .find(|c| c.glyph == "[")
                 .unwrap();
-            let other_account = c.cells[5 * width..6 * width]
+            let other_account = c.cells[4 * width..5 * width]
                 .iter()
                 .find(|c| c.glyph == "[")
                 .unwrap();

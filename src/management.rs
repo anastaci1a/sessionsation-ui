@@ -15,6 +15,7 @@ pub enum Page {
     Accounts,
     Account(String),
     Sessions,
+    Archives,
     Session(String),
     Operations,
     Operation(String),
@@ -33,6 +34,7 @@ pub enum Intent {
 #[derive(Clone, Debug)]
 enum Purpose {
     State,
+    Archives,
     Operations,
     Resume(String),
     Launches(&'static str),
@@ -54,6 +56,7 @@ enum Form {
     Delete(Value),
     ResumeWarning(Value),
     Rename(Value),
+    SessionMutation(Value, &'static str),
     SessionDetails(String),
     Confirm(Vec<String>),
     Progress,
@@ -64,6 +67,7 @@ pub struct Manager {
     pub options: Options,
     pub accounts: Vec<Account>,
     pub sessions: Vec<Value>,
+    pub archives: Vec<Value>,
     pub operations: Vec<Value>,
     pub launches: BTreeMap<&'static str, Vec<Value>>,
     pub capabilities: Value,
@@ -90,6 +94,7 @@ impl Default for Manager {
             options: Options::default(),
             accounts: vec![],
             sessions: vec![],
+            archives: vec![],
             operations: vec![],
             launches: BTreeMap::new(),
             capabilities: json!({}),
@@ -142,7 +147,10 @@ impl Manager {
         self.accounts.iter().find(|a| a.id == id)
     }
     fn session(&self, key: &str) -> Option<&Value> {
-        self.sessions.iter().find(|s| id(s) == key)
+        self.sessions
+            .iter()
+            .chain(self.archives.iter())
+            .find(|s| id(s) == key)
     }
     fn provider_cap(&self, key: &str) -> bool {
         self.capabilities["providers"]
@@ -275,6 +283,7 @@ impl Manager {
             Page::Accounts => "Manage Accounts",
             Page::Account(_) => "Account",
             Page::Sessions => "Manage Sessions",
+            Page::Archives => "Archived Sessions",
             Page::Session(_) => "Session",
             Page::Operations => "Operations",
             Page::Launch(..) => "Launch progress",
@@ -395,7 +404,20 @@ impl Manager {
                 }
                 rows
             }
-            Page::Sessions => crate::session_list::rows(&self.sessions, self.sessions_known),
+            Page::Sessions => crate::session_list::rows_with_archives(
+                &self.sessions,
+                self.sessions_known,
+                !self.archives.is_empty(),
+            ),
+            Page::Archives => self
+                .archives
+                .iter()
+                .map(|s| {
+                    Row::yes(crate::usage::display_name(
+                        s["name"].as_str().unwrap_or("Unnamed"),
+                    ))
+                })
+                .collect(),
             Page::Session(key) => crate::session_list::actions(
                 self.session(key).unwrap_or(&Value::Null),
                 self.capabilities["resume"]["version"] == 1,
@@ -552,6 +574,15 @@ impl Manager {
     }
     pub fn refresh(&mut self) -> Vec<Intent> {
         let mut out = vec![];
+        if (matches!(self.page, Page::Archives | Page::Sessions)
+            || matches!(&self.page, Page::Session(key) if self.archives.iter().any(|s|id(s)==key)))
+            && !self
+                .pending
+                .values()
+                .any(|p| matches!(p, Purpose::Archives))
+        {
+            out.extend(self.request(strings(&["archives"]), Purpose::Archives));
+        }
         if matches!(self.page, Page::Operations | Page::Launch(..)) {
             for kind in ["launch", "resume-launch"] {
                 let cap = if kind == "launch" { "launch" } else { "resume" };
@@ -777,16 +808,18 @@ impl Manager {
             Page::Home => return vec![Intent::Exit],
             Page::Account(key) => self.account_back(&key),
             Page::Session(key) => {
+                if self.archives.iter().any(|s| id(s) == key) {
+                    self.go(Page::Archives);
+                    self.options.selected =
+                        self.archives.iter().position(|s| id(s) == key).unwrap_or(0);
+                    return self.refresh();
+                }
                 self.go(Page::Sessions);
-                self.options.selected = self
-                    .sessions
-                    .iter()
-                    .position(|s| id(s) == key)
-                    .map(|i| i + 1)
-                    .unwrap_or(0)
+                self.options.selected = self.sessions.iter().position(|s| id(s) == key).unwrap_or(0)
             }
             Page::Operation(_) | Page::Launch(..) => self.go(Page::Operations),
             Page::Operations => self.go(Page::Sessions),
+            Page::Archives => self.go(Page::Sessions),
             _ => self.go(Page::Home),
         }
         vec![]
@@ -894,17 +927,21 @@ impl Manager {
                 }
             }
             Page::Sessions => {
-                if index == 0 {
-                    return vec![Intent::New];
+                if !self.archives.is_empty() && index == self.rows().len().saturating_sub(2) {
+                    self.go(Page::Archives);
+                    return self.refresh();
                 }
-                let offset = if self.sessions_known { 1 } else { 2 };
-                if let Some(session) = index.checked_sub(offset).and_then(|i| self.sessions.get(i))
-                {
+                if let Some(session) = self.sessions.get(index) {
                     self.go(Page::Session(id(session).into()));
                 } else {
                     self.go(Page::Operations);
                 }
                 return self.refresh();
+            }
+            Page::Archives => {
+                if let Some(s) = self.archives.get(index) {
+                    self.go(Page::Session(id(s).to_owned()));
+                }
             }
             Page::Session(key) => {
                 let Some(s) = self.session(&key).cloned() else {
@@ -915,6 +952,45 @@ impl Manager {
                         .get(index)
                         .map(|(_, a)| *a);
                 match action.unwrap_or(crate::session_list::Action::Unavailable) {
+                    crate::session_list::Action::Archive
+                    | crate::session_list::Action::Delete
+                    | crate::session_list::Action::Restore => {
+                        let (command, title, text) = match action.unwrap() {
+                            crate::session_list::Action::Archive => (
+                                "archive",
+                                "Archive Session",
+                                "Compress and move saved conversation history to sessionsation-managed Archived Sessions. No agent is started; project files and account credentials stay in place.",
+                            ),
+                            crate::session_list::Action::Restore => (
+                                "restore-session",
+                                "Restore Session",
+                                "Restore the saved conversation for later resume. This does not start an agent or send a message.",
+                            ),
+                            _ => (
+                                "delete-session",
+                                "Delete Session",
+                                "Permanently delete this conversation and its archived data. This cannot be undone. Project files and account credentials are unaffected.",
+                            ),
+                        };
+                        let name = s["name"].as_str().unwrap_or("").to_owned();
+                        let mut body = vec![text.into()];
+                        if command == "delete-session" {
+                            body.push(format!("Type {name} to confirm."));
+                        }
+                        self.show(
+                            title,
+                            body,
+                            &["Confirm", "Cancel"],
+                            Form::SessionMutation(s, command),
+                        );
+                        if command == "delete-session" {
+                            self.dialog
+                                .as_mut()
+                                .unwrap()
+                                .fields
+                                .push(Field::new("Session name", "").validated(Rule::Exact(name)));
+                        }
+                    }
                     crate::session_list::Action::Focus => return vec![Intent::Focus(s)],
                     crate::session_list::Action::Details => {
                         self.show(
@@ -1166,6 +1242,19 @@ impl Manager {
                 args.extend(strings(&["--name", value(0)]));
                 args
             }
+            Form::SessionMutation(s, command) => {
+                if command == "delete-session" && value(0) != s["name"].as_str().unwrap_or("") {
+                    return vec![];
+                }
+                let mut args = Self::target(&s, command);
+                args.extend(strings(&[
+                    "--request-id",
+                    &uuid::Uuid::new_v4().to_string(),
+                    "--confirm",
+                    id(&s),
+                ]));
+                args
+            }
         };
         self.mutate(args)
     }
@@ -1201,15 +1290,25 @@ impl Manager {
             }
         };
         match purpose {
+            Purpose::Archives => {
+                self.archives = value.as_array().cloned().unwrap_or_default();
+                self.options.selected = self
+                    .options
+                    .selected
+                    .min(self.rows().len().saturating_sub(1));
+                if self.page == Page::Archives && self.archives.is_empty() {
+                    self.note = "No archived sessions".into();
+                }
+            }
             Purpose::State => {
+                let archives_selected = self.page == Page::Sessions
+                    && !self.archives.is_empty()
+                    && self.options.selected == self.rows().len().saturating_sub(2);
                 let operations_selected = self.page == Page::Sessions
                     && self.options.selected == self.rows().len().saturating_sub(1);
-                let chosen = if self.page == Page::Sessions
-                    && self.sessions_known
-                    && self.options.selected >= 1
-                {
+                let chosen = if self.page == Page::Sessions && self.sessions_known {
                     self.sessions
-                        .get(self.options.selected.saturating_sub(1))
+                        .get(self.options.selected)
                         .map(|s| id(s).to_owned())
                 } else {
                     None
@@ -1235,12 +1334,11 @@ impl Manager {
                         .then_with(|| id(a).cmp(id(b)))
                 });
                 if let Some(key) = chosen {
-                    self.options.selected = self
-                        .sessions
-                        .iter()
-                        .position(|s| id(s) == key)
-                        .map(|i| i + 1)
-                        .unwrap_or(0);
+                    self.options.selected =
+                        self.sessions.iter().position(|s| id(s) == key).unwrap_or(0);
+                }
+                if archives_selected {
+                    self.options.selected = self.rows().len().saturating_sub(2);
                 }
                 if operations_selected {
                     self.options.selected = self.rows().len().saturating_sub(1);
@@ -1558,7 +1656,7 @@ impl Manager {
             };
             let bottom = menu_controls.saturating_sub(1);
             let (left, capacity) = if self.page == Page::Sessions {
-                crate::session_list::paint(
+                crate::session_list::paint_with_archives(
                     canvas,
                     &mut self.options,
                     &self.sessions,
@@ -1566,6 +1664,7 @@ impl Manager {
                     bottom,
                     now,
                     menu_controls,
+                    !self.archives.is_empty(),
                 )
             } else {
                 self.options
@@ -1619,6 +1718,45 @@ impl Manager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn archive_restore_delete_delegate_confirmed_identity_to_cli_only() {
+        let saved = serde_json::json!({"id":"stable","name":"Saved","generation":"g1","availability":"saved","capabilities":{"archive":true,"delete":true}});
+        let mut m = super::Manager {
+            page: super::Page::Session("stable".into()),
+            sessions: vec![saved.clone()],
+            ..Default::default()
+        };
+        m.options.selected = 4;
+        assert!(m.activate().is_empty());
+        assert!(m.submit(1, vec![]).is_empty(), "cancel emits no mutation");
+        m.activate();
+        let calls = m.submit(0, vec![]);
+        let super::Intent::Api(_, args) = &calls[0] else {
+            panic!("CLI action required")
+        };
+        assert_eq!(args[0], "archive");
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--expected-generation", "g1"])
+        );
+        assert!(args.windows(2).any(|w| w == ["--confirm", "stable"]));
+        m.dialog = None;
+        m.options.selected = 5;
+        m.activate();
+        assert!(m.submit(0, vec!["wrong".into()]).is_empty());
+        let calls = m.submit(0, vec!["Saved".into()]);
+        assert!(matches!(&calls[0], super::Intent::Api(_,args) if args[0]=="delete-session"));
+        let mut archived = saved;
+        archived["availability"] = serde_json::json!("archived");
+        archived["capabilities"]["restore"] = serde_json::json!(true);
+        m.sessions.clear();
+        m.archives = vec![archived];
+        m.dialog = None;
+        m.options.selected = 0;
+        m.activate();
+        let calls = m.submit(0, vec![]);
+        assert!(matches!(&calls[0], super::Intent::Api(_,args) if args[0]=="restore-session"));
+    }
     #[test]
     fn deletion_reservation_routes_to_original_operation_and_recovery_capabilities() {
         let mut m = super::Manager { accounts: vec![serde_json::from_value(serde_json::json!({"id":"codex:fixture","selectable":false,"enabled":false,"usage":{},"deletion":{"id":"original","kind":"account_delete","phase":"failed","can_recover":true,"can_cancel":false}})).unwrap()], page: super::Page::Account("codex:fixture".into()), ..Default::default() };
@@ -1826,7 +1964,7 @@ mod tests {
         m.page = Page::Sessions;
         m.sessions_known = true;
         m.sessions = vec![json!({"id":"saved","name":"Saved","availability":"saved"})];
-        m.options.selected = 1;
+        m.options.selected = 0;
         let sent = m.refresh_sessions();
         let Intent::Api(token, _) = sent[0] else {
             panic!()
@@ -1851,7 +1989,7 @@ mod tests {
                 "saved-old"
             ]
         );
-        assert_eq!(m.sessions[m.options.selected - 1]["id"], "saved");
+        assert_eq!(m.sessions[m.options.selected]["id"], "saved");
     }
     #[test]
     fn stale_target_uses_centered_status_lane_and_reserves_menu_space() {
@@ -1926,7 +2064,7 @@ mod tests {
                 .iter()
                 .map(|r| r.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["[new session]", "", "Operations"]
+            vec!["Operations"]
         );
         let mut c = Canvas::new(60, 18);
         m.paint_at(&mut c, 17, 100);
@@ -1936,8 +2074,8 @@ mod tests {
                 .map(|c| c.glyph.as_str())
                 .collect::<String>()
         };
-        assert!(text(7).contains("Loading…"));
-        assert!(text(6).trim().is_empty());
+        assert!(text(5).contains("Loading…"));
+        assert!(text(4).trim().is_empty());
         m.page = Page::Operation("done".into());
         m.operations = vec![json!({"id":"done","phase":"complete"})];
         m.options.selected = 0;

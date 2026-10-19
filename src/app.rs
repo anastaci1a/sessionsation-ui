@@ -32,6 +32,7 @@ fn resume_invalid(error: &str) -> bool {
         "WORKSPACE_NOT_FOUND",
         "WORKSPACE_NAME_EXISTS",
         "UNFINISHED_HISTORY_CONFIRMATION_REQUIRED",
+        "SESSION_OPERATION_IN_PROGRESS",
     ]
     .iter()
     .any(|code| error.starts_with(code))
@@ -42,6 +43,8 @@ fn resume_explanation(error: &str) -> String {
             "recheck needed"
         } else if error.starts_with("SESSION_SOURCE_CHANGED") {
             "source changed"
+        } else if error.starts_with("SESSION_OPERATION_IN_PROGRESS") {
+            "operation active"
         } else if error.starts_with("SESSION_ALREADY_RUNNING") {
             "already running"
         } else if error.starts_with("SESSION_NAME_EXISTS") {
