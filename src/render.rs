@@ -30,6 +30,7 @@ pub struct Canvas {
     pub theme: Option<Theme>,
     /// Native terminal cursor, in zero-based cells; no shape/color override.
     pub cursor: Option<(usize, usize)>,
+    pub static_accent: Option<[u8; 3]>,
     background: Option<[u8; 3]>,
     transient: Vec<bool>,
     baseline_blocked: Vec<bool>,
@@ -43,6 +44,7 @@ impl Canvas {
             cells: vec![Cell::default(); w * h],
             theme: None,
             cursor: None,
+            static_accent: None,
             background: None,
             transient: vec![false; w * h],
             baseline_blocked: vec![false; w * h],
@@ -104,7 +106,18 @@ impl Canvas {
                 .as_ref()
                 .map(|t| t.accent(x, y, &accent))
                 .unwrap_or_else(|| Cell {
-                    fg: [215, 135, 255],
+                    fg: self
+                        .static_accent
+                        .map(|color| {
+                            if accent.soft {
+                                Cell::default().fg
+                            } else {
+                                color.map(|v| {
+                                    (i64::from(v) * accent.brightness / 1000).clamp(0, 255) as u8
+                                })
+                            }
+                        })
+                        .unwrap_or([215, 135, 255]),
                     bold: accent.bold,
                     strike: accent.strike,
                     ..Cell::default()

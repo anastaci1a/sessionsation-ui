@@ -285,32 +285,13 @@ impl Dialog {
             bg: Some(palette.panel),
             ..Cell::default()
         };
-        let border = Cell {
-            fg: palette.accent,
-            ..style.clone()
-        };
-        for row in y..y + height {
-            canvas.text(x, row, &" ".repeat(width), style.clone(), false);
-        }
-        for row in y + 1..y + height - 1 {
-            canvas.text(x, row, "│", border.clone(), false);
-            canvas.text(x + width - 1, row, "│", border.clone(), false);
-        }
-        canvas.text(
+        crate::popup::Panel {
             x,
             y,
-            &format!("┌{}┐", "─".repeat(width - 2)),
-            border.clone(),
-            false,
-        );
-        canvas.text(
-            x,
-            y + height - 1,
-            &format!("└{}┘", "─".repeat(width - 2)),
-            border.clone(),
-            false,
-        );
-        canvas.text(x + 1, y, &clip(&self.title, width - 2), border, false);
+            width,
+            height,
+        }
+        .frame(canvas, &self.title, palette);
         for (i, line) in lines.iter().skip(self.offset).take(body_height).enumerate() {
             canvas.text(x + 2, y + 1 + i, line, style.clone(), false);
         }

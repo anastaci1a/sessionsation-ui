@@ -19,6 +19,9 @@ pub fn describe(text: &str) -> String {
         "SESSION_NOT_FOUND" => {
             "This session is no longer in the current list. Return to Manage Sessions to refresh it."
         }
+        "SESSION_NOT_ATTACHED" | "SESSION_ATTACHMENT_UNAVAILABLE" => {
+            "This session no longer has a verified live terminal attachment. Refresh Manage Sessions; use Start Session if the agent has exited."
+        }
         "SESSION_UNAVAILABLE" => {
             "The session's process or saved history could not be located. Refresh the session list before trying again."
         }

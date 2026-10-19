@@ -55,6 +55,15 @@ Rollback restores original config bytes/modes/ownership and refuses conflicting
 later edits. Keep receipts and binaries outside public Git; a client update is
 not a supervisor upgrade or data-root migration.
 
+## Editing fields
+
+Name, account, Space and directory choices open flat themed popups over the current
+configuration screen. Back/Esc restores the opening option and picker position;
+only the current editor owns the terminal cursor. Nested directory/Space creation
+remains staged until Start. Directory actions are separated from subdirectories
+by a blank bullet row. Empty directories offer `[parent dir]`; only hovering a
+subdirectory enables the `◀/▶: Parent/Open` shortcuts and their hint.
+
 ## Capabilities and limits
 
 - The popup uses public backend API v1 only: accounts/usage/limits, new/resume,

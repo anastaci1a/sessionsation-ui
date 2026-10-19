@@ -47,6 +47,9 @@ Its reusable components are:
   input editing/painting. Start uses the same row control as the pickers.
 - `usage`: one measurement/rendering system for remaining-allowance bars, limit
   markers, status-only accounts and shared columns across responsive layouts.
+- `popup`: centered flat surfaces, local option/editor layout and translated native
+  cursor positions; compositing keeps background star lifetimes independent.
+  Pickers preserve the opening configuration screen beneath nested editors.
 - `dialog` / `host_theme`: shared paginated confirmations and forms, preserving
   input across resize and reading HERDR theme colors without changing host config.
 - `management`: stable-ID list focus, account action groups and lifecycle menus;

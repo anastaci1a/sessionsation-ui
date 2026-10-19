@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  try:
   t.wait('New Session');t.drain();assert not t.screen.cursor_visible
   t.send(b'\r');t.wait('Account:');t.send(b'\x1b[B\x1b[B\r');t.wait('Session name');t.drain()
-  assert t.screen.cursor_visible
+  assert t.screen.cursor_visible and t.screen.contains('Account:'), 'editor must overlay the unchanged summary'
   before=t.screen.x;t.send('界'.encode());time.sleep(.06);t.drain()
   assert t.screen.cursor_visible and t.screen.x==before+2
   t.send(b'\x1b');t.wait('Account:');t.drain();assert not t.screen.cursor_visible
@@ -42,6 +42,17 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
    fcntl.ioctl(t.slave,termios.TIOCSWINSZ,struct.pack('HHHH',12,40,0,0));os.kill(t.process.pid,signal.SIGWINCH)
   finally:t.close()
  assert not (root/'start.json').exists();assert list((root/'projects').iterdir())==[]
+ # Empty directory escape is a selectable action; browse shortcuts belong only to children.
+ t=Terminal(root)
+ try:
+  t.wait('New Session');t.drain();t.send(b'\r');t.wait('Account:')
+  t.send(b'\x1b[B'*3+b'\r');t.wait('Start directory');t.wait('[parent dir]');t.drain()
+  assert not t.screen.contains('Parent/Open')
+  t.send(b'\x1b[B'*2+b'\r');t.wait('projects/');t.drain()
+  assert t.screen.contains('Parent/Open')
+  t.send(b'\x1b[H');time.sleep(.06);t.drain();assert not t.screen.contains('Parent/Open')
+  t.send(b'\x1b');t.wait('Account:');assert not (root/'start.json').exists()
+ finally:t.close()
  # Complete the inert handoff through the summary's separated Start action.
  t=Terminal(root)
  try:

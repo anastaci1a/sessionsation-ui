@@ -356,7 +356,7 @@ impl Manager {
             }
             Page::Sessions => "Manage Sessions",
             Page::Archives => "Archived Sessions",
-            Page::Session(key) => {
+            Page::Session(key) | Page::Spaces(key) => {
                 return format!(
                     "Session: {}",
                     self.session(key)
@@ -364,7 +364,6 @@ impl Manager {
                         .unwrap_or("Unnamed")
                 );
             }
-            Page::Spaces(_) => "Choose Space",
             Page::Operations => "Operations",
             Page::Launch(..) => "Launch progress",
             Page::Operation(_) => "Operation",
@@ -1889,6 +1888,42 @@ impl Manager {
         self.paint_at(canvas, footer, now);
     }
     pub fn paint_at(&mut self, canvas: &mut Canvas, footer: usize, now: i64) {
+        if let Page::Spaces(key) = self.page.clone() {
+            let options = self.options.clone();
+            let dialog = self.dialog.take();
+            let note = std::mem::take(&mut self.note);
+            self.page = Page::Session(key.clone());
+            self.options = self
+                .history
+                .last()
+                .map(|p| p.options.clone())
+                .unwrap_or_default();
+            self.paint_at(canvas, footer, now);
+            self.page = Page::Spaces(key);
+            self.options = options;
+            self.dialog = dialog;
+            self.note = note;
+            let rows = self.rows();
+            let palette = self.palette.clone();
+            let inner = canvas.width.saturating_sub(4).min(76).saturating_sub(4);
+            let hints = hint_lines(
+                &["▲/▼/◀/▶: Move", "Enter/Space: Select", "Esc: Back"],
+                inner,
+            );
+            let desired = rows.len() + hints.len() + 4 + usize::from(!self.note.is_empty()) * 2;
+            crate::popup::paint(canvas, "Choose Space", &palette, desired, |local| {
+                let controls = local.height.saturating_sub(hints.len());
+                let bottom = controls.saturating_sub(if self.note.is_empty() { 1 } else { 3 });
+                let (left, _) = self.options.paint_menu(local, &rows, 0, bottom, controls);
+                self.options.paint_back(local, left, 0, "Back");
+                crate::widgets::paint_status(local, controls, &self.note);
+                crate::widgets::paint_hints(local, &hints);
+            });
+            if let Some(dialog) = &mut self.dialog {
+                dialog.paint(canvas, &self.palette);
+            }
+            return;
+        }
         let hints = hint_lines(
             &[
                 "▲/▼/◀/▶: Move",
