@@ -6,12 +6,12 @@ platforms = ["linux"]
 
 [[actions]]
 id = "launcher"
-title = "New Session"
+title = "Sessionsation"
 command = ["./bin/sessionsation-popup", "open"]
 
 [[panes]]
 id = "launcher"
-title = "New Session"
+title = "Sessionsation"
 placement = "popup"
 width = "90%"
 height = "65%"

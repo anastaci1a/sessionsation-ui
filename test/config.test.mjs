@@ -38,6 +38,6 @@ test('popup installer refuses occupied keys and only updates its own binding',()
   const occupied='[[keys.command]]\nkey="prefix+shift+l"\ntype="shell"\ncommand="other"\n';
   assert.throws(()=>updatePopup(occupied,'prefix+shift+l'),/already belongs/);
   assert.throws(()=>updatePopup('',''),/explicit/);
-  const once=updatePopup('','prefix+shift+l');const twice=updatePopup(once,'prefix+alt+n');
+  const once=updatePopup('','prefix+shift+l');assert.match(once,/description = "Sessionsation"/);const twice=updatePopup(once,'prefix+alt+n');
   assert.equal((twice.match(/\[\[keys.command\]\]/g)||[]).length,1);assert.match(twice,/prefix\+alt\+n/);assert.doesNotMatch(twice,/prefix\+shift\+l/);
 });

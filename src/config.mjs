@@ -48,7 +48,7 @@ export function updatePopup(text,key,shell) {
     if(command==='sessionsation.launcher') owned.push({start,end});
   }
   if(owned.length>1) throw new Error('Ambiguous launcher bindings');
-  const entry=`[[keys.command]]\nkey = ${JSON.stringify(key)}\ntype = "plugin_action"\ncommand = "sessionsation.launcher"\ndescription = "New session"\n`;
+  const entry=`[[keys.command]]\nkey = ${JSON.stringify(key)}\ntype = "plugin_action"\ncommand = "sessionsation.launcher"\ndescription = "Sessionsation"\n`;
   let result=owned.length?text.slice(0,owned[0].start)+entry+text.slice(owned[0].end):text.replace(/\n?$/,'\n')+'\n'+entry;
   if(shell) result=updateShell(result,shell);
   return result;

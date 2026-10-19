@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-popup-host-') as tmp:
  (root/'backend').write_text(backend); (root/'backend').chmod(0o700)
  probe=plugin/'entry.py'
  probe.write_text('import os,json,pathlib\npathlib.Path('+repr(str(root/'popup.json'))+').write_text(json.dumps({"size":list(os.get_terminal_size()),"pid":os.getpid(),"pane":os.environ.get("HERDR_PANE_ID"),"context":json.loads(os.environ["HERDR_PLUGIN_CONTEXT_JSON"])}))\nos.execv('+repr(binary)+','+repr([binary,'--preferences',str(prefs),'popup'])+')\n')
- (plugin/'herdr-plugin.toml').write_text('id="sessionsation"\nname="sessionsation"\nversion="0.2.0"\nmin_herdr_version="0.9.5"\nplatforms=["linux"]\n[[actions]]\nid="launcher"\ntitle="New Session"\ncommand='+json.dumps([binary,'open'])+'\n[[panes]]\nid="launcher"\ntitle="New Session"\nplacement="popup"\nwidth="90%"\nheight="65%"\ncommand='+json.dumps(['python3',str(probe)])+'\n')
+ (plugin/'herdr-plugin.toml').write_text('id="sessionsation"\nname="sessionsation"\nversion="0.2.0"\nmin_herdr_version="0.9.5"\nplatforms=["linux"]\n[[actions]]\nid="launcher"\ntitle="Sessionsation"\ncommand='+json.dumps([binary,'open'])+'\n[[panes]]\nid="launcher"\ntitle="Sessionsation"\nplacement="popup"\nwidth="90%"\nheight="65%"\ncommand='+json.dumps(['python3',str(probe)])+'\n')
  def host(*argv):
   p=subprocess.run(['herdr','--session','fixture',*argv],env=env,capture_output=True,text=True,timeout=10)
   assert p.returncode==0,(argv,p.stderr)

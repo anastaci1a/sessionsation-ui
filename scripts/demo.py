@@ -53,7 +53,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
     plugin.mkdir()
     manifest = (repo/'herdr-plugin.toml').read_text().split('[[panes]]')[0]
     manifest = manifest.replace('["./bin/sessionsation-popup", "open"]', json.dumps([str(binary), 'open']))
-    manifest += '\n[[panes]]\nid="launcher"\ntitle="New Session"\nplacement="popup"\nwidth="90%"\nheight="65%"\ncommand='+json.dumps([str(binary), '--preferences', str(prefs), 'popup'])+'\n'
+    manifest += '\n[[panes]]\nid="launcher"\ntitle="Sessionsation"\nplacement="popup"\nwidth="90%"\nheight="65%"\ncommand='+json.dumps([str(binary), '--preferences', str(prefs), 'popup'])+'\n'
     (plugin/'herdr-plugin.toml').write_text(manifest)
     def host(*args):
         r = subprocess.run(['herdr', '--session', 'sessionsation-demo', *args], env=env, capture_output=True, text=True, timeout=10)
