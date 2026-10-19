@@ -2,14 +2,15 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "6c5c9e08e3a091881266472d3f52764404bca141",
-    "backend": "5ae42ae483db99279c1623a16c01c39e620eee19"
+    "ui": "07a1ad88ecec713810bd6319375c79ec11144180",
+    "backend": "e4b821f88965cea18180a9b3f157c4950b04d239",
+    "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
   "checks": {
     "rust": {
-      "unit_passed": 62,
+      "unit_passed": 91,
       "visual_snapshot_test_passed": 2,
-      "golden_frames": 12,
+      "golden_frames": 21,
       "failed": 0,
       "command": "scripts/check-rust.sh"
     },
@@ -23,13 +24,13 @@
       "command": "npm run check"
     },
     "backend": {
-      "standard_tests_passed": 238,
-      "installed_herdr_test_passed": 2,
+      "standard_tests_passed": 239,
+      "installed_herdr_test_passed": 3,
       "failed": 0,
       "standard_command": "scripts/check.sh",
-      "standard_source": "5ae42ae483db99279c1623a16c01c39e620eee19",
+      "standard_source": "e4b821f88965cea18180a9b3f157c4950b04d239",
       "tests": {
-        "unit": 126,
+        "unit": 127,
         "cli": 8,
         "external_move": 58,
         "external_move_ignored": 3,
@@ -70,24 +71,25 @@
       "installed_acceptance": {
         "passed": 3,
         "failed": 0,
-        "seconds": 12.35,
+        "seconds": 10.95,
         "command": "cargo test --offline --locked --test external_move installed_ -- --ignored --nocapture",
-        "models": 0
+        "models": 0,
+        "source": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
       }
     }
   },
   "pty": {
     "startup": {
       "samples": 20,
-      "p50_ms": 5.920411087572575,
-      "p95_ms": 7.154111051931977,
-      "max_ms": 7.154111051931977
+      "p50_ms": 5.246543907560408,
+      "p95_ms": 5.929715000092983,
+      "max_ms": 5.929715000092983
     },
     "input": {
       "samples": 238,
-      "p50_ms": 0.5207330686971545,
-      "p95_ms": 0.8886120049282908,
-      "max_ms": 1.0496400063857436
+      "p50_ms": 0.34160097129642963,
+      "p95_ms": 0.47849398106336594,
+      "max_ms": 0.5881160032004118
     },
     "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
     "models": 0
@@ -95,12 +97,12 @@
   "herdr": {
     "keybind_startup": {
       "samples": 20,
-      "p50_ms": 161.18683002423495,
-      "p95_ms": 183.61190403811634,
-      "max_ms": 183.61190403811634
+      "p50_ms": 174.63497503194958,
+      "p95_ms": 178.48960706032813,
+      "max_ms": 178.48960706032813
     },
     "installed_herdr": "0.9.5",
-    "plugin_to_first_paint_ms": 282.4352598981932,
+    "plugin_to_first_paint_ms": 289.1963020665571,
     "popup_size": [
       117,
       28
@@ -109,6 +111,7 @@
       "origin context without pane ID",
       "90% width / 65% height popup",
       "ui_busy refusal",
+      "held arrows and release/press wrap through installed HERDR",
       "real host resize preserves draft",
       "selected destination normal tab",
       "staged directory",
@@ -117,8 +120,7 @@
       "second popup cancel preserves new terminal",
       "origin shell unchanged"
     ],
-    "models": 0,
-    "source_ui": "8809571e0d7970479750b922337e84b012ac95e2"
+    "models": 0
   },
   "frames": [
     {
@@ -147,14 +149,14 @@
     "model_sessions_started": 0,
     "protected_backend_hashes": "original switcher and Agent DM pin unchanged",
     "data_root": "/mnt/user/appdata/codex-switcher",
-    "supervisor": "approved selected immutable sole owner; see deployment.json",
+    "supervisor": "Unchanged sole existing-root owner 528d3696b43ba34b28a408d5e328841e5f52ccc4",
     "owner_upgrade": {
-      "preserved_native_process_identities": 22,
-      "missing_native_process_identities": 0,
-      "initial_handoff": "Five previously observed processes exited during initial graceful owner shutdown (four codex-switcher, one codex). The final selected-owner update retained all 22 captured non-owner process identities. No agent stop API or direct process signal was invoked.",
+      "preserved_native_process_identities": 26,
+      "missing_native_process_identities": 1,
+      "initial_handoff": "The latest owner update retained 26/27 captured native process identities. One codex process exited during the interval; cause not established. No agent-stop API or direct signal was invoked.",
       "wait": "Registry lock release checked separately from socket disappearance"
     },
-    "backend_client": "/mnt/user/live/packages/sessionsation/popup/5ae42ae483db99279c1623a16c01c39e620eee19/sessionsation"
+    "backend_client": "/mnt/user/live/packages/sessionsation/popup/e4b821f88965cea18180a9b3f157c4950b04d239/sessionsation"
   },
   "layout_regressions": [
     "Configuration labels and complete-fit optional directory previews",
@@ -167,8 +169,14 @@
     "selected-only gray operation ID below centered range counter with explicit blank-line gaps",
     "reference hint palette/fade shared by creation, management, dialogs and range counters",
     "Manage Accounts aligned Enabled/Disabled column and selected usage one blank line below options/range",
-    "duplicate names invalidate confirmation; 12-character account/session input limits; only active multi-field editor has cursor",
-    "disabled/unconfigured/missing usage displays an explicit state instead of permanent loading"
+    "duplicate names invalidate confirmation; 24-character account/session input limits; account display 12 cells, session display 16 cells; only active multi-field editor has cursor",
+    "disabled/unconfigured/missing usage displays an explicit state instead of permanent loading",
+    "Home usage focus: white triangle after one space, selected colors retained, other bars darkened without desaturation",
+    "Default Dir global/per-Space pickers offer leave unset; three action rows focus Back on Left",
+    "Unavailable options can receive focus without activation; separators skipped",
+    "All session account tags permanently dim/unbolded, no triangle marker",
+    "Menu hints/ranges use reference soft accent; dialog hints readable gray",
+    "Inherited popup background unchanged; nonblocking OSC 11 reply filters without typed-input corruption"
   ],
   "management": {
     "passed": true,
@@ -192,5 +200,23 @@
     "Dynamic/terminal HERDR themes use explicit configured-base approximation",
     "External CLI plugin invocation measured 282.44ms; configured keybind p95 was 183.61ms",
     "Original startup configuration is preserved; an old owner started after reboot gates deletion until selected owner activation"
-  ]
+  ],
+  "activity": {
+    "passed": true,
+    "models": 0,
+    "checks": [
+      "nonselectable loading below unchanged skeleton",
+      "persistent ten-frame spinner",
+      "live busy/idle/exit/failure changes without input",
+      "held arrows clamp both edges; release/press rearms wrap",
+      "only read-only APIs",
+      "TTY restoration"
+    ],
+    "transition_ms": {
+      "idle": 1009.63,
+      "busy": 41.01,
+      "saved": 1002.71,
+      "failure": 969.07
+    }
+  }
 }

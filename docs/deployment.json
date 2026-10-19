@@ -3,22 +3,27 @@
   "kind": "Rust account/session popup; preserved original switcher and Agent DM selection",
   "artifacts": {
     "ui": {
-      "source_commit": "6c5c9e08e3a091881266472d3f52764404bca141",
-      "path": "/mnt/user/live/packages/sessionsation-ui/releases/6c5c9e08e3a091881266472d3f52764404bca141/sessionsation-ui",
-      "sha256": "6b798e4a2e17468d1f29f57cbb6a9f8d7b5beffe2f61e2452a5b62ebc44f2980",
+      "source_commit": "07a1ad88ecec713810bd6319375c79ec11144180",
+      "path": "/mnt/user/live/packages/sessionsation-ui/releases/07a1ad88ecec713810bd6319375c79ec11144180/sessionsation-ui",
+      "sha256": "523279534cd204669cf2e151404e8160f2872effa110d73ec52a943c3b7f1d6a",
       "cargo_lock_sha256": "91cbb0257cb3f9aca0b38fbfe5adb67af0f7e24510eadc232c9a39585f1e5e08",
       "profile": "release",
       "rust_version": "1.95.0",
       "minimum_rust_version": "1.88"
     },
     "backend": {
-      "source_commit": "5ae42ae483db99279c1623a16c01c39e620eee19",
-      "path": "/mnt/user/live/packages/sessionsation/popup/5ae42ae483db99279c1623a16c01c39e620eee19/sessionsation",
-      "sha256": "5a5f1fe7847ec6a735027c08e9762d3d821096f2fd692b19c729f729eaeb6fc9",
+      "source_commit": "e4b821f88965cea18180a9b3f157c4950b04d239",
+      "path": "/mnt/user/live/packages/sessionsation/popup/e4b821f88965cea18180a9b3f157c4950b04d239/sessionsation",
+      "sha256": "c7e22ecae04d182b4bf62f825a47c9069a26b00ab0121e2c00011d6f63be497f",
       "cargo_lock_sha256": "13959dc2de624ff7f6bc4a7fed537b01b6d89572b61e8bb9238cb748afc17265",
       "profile": "release",
       "rust_version": "1.95.0",
       "minimum_rust_version": "1.85"
+    },
+    "supervisor": {
+      "source_commit": "528d3696b43ba34b28a408d5e328841e5f52ccc4",
+      "path": "/mnt/user/live/packages/sessionsation/popup/528d3696b43ba34b28a408d5e328841e5f52ccc4/sessionsation",
+      "sha256": "4744096661623444688d13eb26dd5e02b2d9b620b03919d369b141569255f92e"
     }
   },
   "build": {
@@ -43,14 +48,14 @@
     "preferences": "/mnt/user/appdata/sessionsation-ui/preferences.json",
     "initial_global_projects_root": "/mnt/user/live/projects",
     "data_root": "/mnt/user/appdata/codex-switcher",
-    "credential_supervisor": "selected immutable backend; sole owner of the existing explicit root; approved stop/lock-release/start handoff",
+    "credential_supervisor": "Sole existing-root supervisor uses artifacts.supervisor; updating the client selection does not replace that owner.",
     "rollback_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/launcher-d8b0999e-90a4-48a0-8ad6-e024a966b8bb.json",
     "rollback_command": "node scripts/configure.mjs rollback /mnt/user/appdata/sessionsation-ui/config-backups/launcher-d8b0999e-90a4-48a0-8ad6-e024a966b8bb.json",
     "reload_command": "herdr --session default server reload-config",
     "rollback_restores": "pre-popup default numbered launcher and exact HERDR configuration; removes popup client config; installed artifacts and UI preferences retained",
     "runtime_update": {
-      "ui_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/ui-f62b339f-5b98-456b-9e03-3a23c5cbfc37.json",
-      "backend_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/backend-9596023a-3a69-435f-82bc-6c1e1b07c3b4.json",
+      "ui_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/ui-62c618e1-2f9c-4e03-8cc8-5c709cbf1acf.json",
+      "backend_backup_receipt": "/mnt/user/appdata/sessionsation-ui/config-backups/client-2e457a35-3710-4e3f-8e33-71c0ff368fce.json",
       "rollback": "Restore the corresponding client config/UI symlink receipt. Owner rollback additionally requires public daemon stop, registry-lock release and previous immutable daemon start against the same root; never stop native agents."
     },
     "account_deletion": {
@@ -59,18 +64,20 @@
       "installed_client_preview": {
         "milliseconds": 30.736172,
         "file_scanning": false,
-        "owner_upgrade_required": false
+        "owner_upgrade_required": false,
+        "source_commit": "5ae42ae483db99279c1623a16c01c39e620eee19"
       },
       "owner_activation": {
-        "source_commit": "5ae42ae483db99279c1623a16c01c39e620eee19",
-        "artifact_sha256": "5a5f1fe7847ec6a735027c08e9762d3d821096f2fd692b19c729f729eaeb6fc9",
+        "source_commit": "528d3696b43ba34b28a408d5e328841e5f52ccc4",
+        "artifact_sha256": "4744096661623444688d13eb26dd5e02b2d9b620b03919d369b141569255f92e",
         "accounts": 4,
         "managed_sessions": 0,
-        "preserved_native_process_identities": 22,
-        "missing_native_process_identities": 0,
+        "preserved_native_process_identities": 26,
+        "missing_native_process_identities": 1,
         "registry_backup": "private corresponding backend receipt .registry.db",
         "initial_owner_rollback": "/mnt/user/appdata/sessionsation-ui/config-backups/owner-live-ccb423d0",
-        "original_startup_config": "unchanged; if it starts the old owner after reboot, deletion remains gated until approved owner activation is repeated"
+        "original_startup_config": "unchanged; if it starts the old owner after reboot, deletion remains gated until approved owner activation is repeated",
+        "note": "One codex process exited during the owner update interval; cause not established. No agent-stop API or direct signal was invoked."
       }
     }
   },

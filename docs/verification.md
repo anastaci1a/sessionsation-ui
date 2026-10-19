@@ -2,7 +2,7 @@
 
 ## Rust popup
 
-The expanded popup passes **84 Rust tests** (82 unit tests and two tests covering
+The expanded popup passes **93 Rust tests** (91 unit tests and two tests covering
 21 complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
 regressions**. Syntax, manifest fields and documentation links pass. The goldens
 exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,
@@ -24,14 +24,15 @@ at the next ESC when HERDR interrupts an output sequence during popup teardown.
 network-disabled container, with separate config/socket/state and a synthetic public
 backend. It verifies the requested percentage popup geometry, origin context without a pane ID,
 selection of a different Space, normal-tab handoff, focus before exit, second-popup
-cancellation and unchanged origin shell. Twenty actual prefix+uppercase-L openings
+cancellation, held-arrow clamping/release-and-press wrapping through the actual
+HERDR pane encoder, and unchanged origin shell. Twenty actual prefix+uppercase-L openings
 passed. Separate backend fixtures cover exact account/UUID/socket handoff, normal exit,
 preserved-history resume after local account deletion and the pinned-original
 supervisor handoff. Their details and limits belong to the backend guidance.
 No acceptance test starts a model or changes production accounts/Agent DM state;
 production capability/status previews are read-only.
 
-Current release p95: first responsive PTY paint **6.37 ms**, key feedback **0.52 ms**.
+Current release p95: first responsive PTY paint **5.93 ms**, key feedback **0.48 ms**.
 The earlier popup-core host/frame measurement (source `8809571`, recorded in the
 machine-readable results) measured keybind-to-popup paint **183.61 ms**,
 frame computation/diff **0.105 ms** at 80×24 and
