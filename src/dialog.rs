@@ -310,13 +310,7 @@ impl Dialog {
             border.clone(),
             false,
         );
-        canvas.text(
-            x + 2,
-            y,
-            &clip(&format!(" {} ", self.title), width - 4),
-            border,
-            false,
-        );
+        canvas.text(x + 1, y, &clip(&self.title, width - 2), border, false);
         for (i, line) in lines.iter().skip(self.offset).take(body_height).enumerate() {
             canvas.text(x + 2, y + 1 + i, line, style.clone(), false);
         }
@@ -454,6 +448,27 @@ mod tests {
     use super::*;
     fn enter() -> KeyEvent {
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+    }
+    #[test]
+    fn title_touches_herdr_corner_without_padding_and_keeps_right_corner() {
+        for title in [
+            "Popup Title",
+            "A deliberately long title ".repeat(6).as_str(),
+        ] {
+            let mut d = Dialog::new(title, vec!["Body".into()], &["Close"]);
+            let mut canvas = Canvas::new(60, 24);
+            d.paint(&mut canvas, &Palette::default());
+            let start = canvas.cells.iter().position(|c| c.glyph == "┌").unwrap();
+            let row = canvas.cells[start..start + 56]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>();
+            assert!(row.starts_with(&format!("┌{}", clip(title, 54))));
+            assert!(row.ends_with('┐'));
+            if title == "Popup Title" {
+                assert!(row.starts_with("┌Popup Title──"));
+            }
+        }
     }
     #[test]
     fn limited_editors_and_only_focused_field_has_a_cursor() {

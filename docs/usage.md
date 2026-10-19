@@ -288,11 +288,13 @@ range/detail rows reserve space only when required. Unavailable options accept
 hover/keyboard focus but cannot be activated; separators are skipped. They strike
 only their text, never the bullet, and their text never becomes bold.
 
-Dialogs hide their sole Esc/Close hint and shrink to their content; action buttons remain.
-scrolling dialogs retain scroll hints. Dialog items have at most one blank line
+Dialogs use HERDR's `┌Title──…┐` border style without title padding. They hide their
+sole Esc/Close hint and shrink to their content; action buttons remain.
+Scrolling dialogs retain scroll hints. Dialog items have at most one blank line
 between them. Stars never appear within text or its spaces. Fades and the vertical
 gradient blend from the terminal’s OSC 11 background reply without changing that
-background; unanswered queries use a dark fallback.
+background. Star colors never fall below that background in any RGB channel;
+unanswered queries use a dark fallback.
 
 Dialogs use read-only HERDR theme configuration and bundled attributed palette
 tokens. Configured built-ins and RGB overrides are supported; dynamic/terminal

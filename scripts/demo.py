@@ -3,7 +3,8 @@
 Run in the documented network-disabled demo container. Output is a review
 artifact; this script never updates the README, commits, or deploys anything.
 """
-import argparse, codecs, fcntl, hashlib, json, os, pathlib, pty, select, shutil, signal, struct, subprocess, tempfile, termios, time
+import argparse, codecs, fcntl, hashlib, json, os, pathlib, pty, re, select, shutil, signal, struct, subprocess, tempfile, termios, time
+from collections import Counter
 from terminal_fixture import Screen
 
 p = argparse.ArgumentParser()
@@ -18,6 +19,8 @@ for tool in ['herdr', 'agg']:
 preload = pathlib.Path('/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1')
 if not preload.exists(): raise SystemExit('Install libfaketime; see docs/verification.md')
 width, height = 128, 40
+terminal_background = [40, 42, 54]
+terminal_foreground = [248, 248, 242]
 repo = pathlib.Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
     root = pathlib.Path(tmp)
@@ -30,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
     shell = root/'demo-shell'
     shell.write_text("#!/bin/sh\nexport PS1='demo $ '\nprintf '\\033[2J\\033[H  sessionsation demo\\n\\n  Synthetic workspace; no provider is running.\\n\\n'\nexec /bin/bash --noprofile --norc\n")
     shell.chmod(0o700)
-    config.write_text('onboarding=false\n[terminal]\ndefault_shell='+json.dumps(str(shell))+'\n[[keys.command]]\nkey="prefix+shift+l"\ntype="plugin_action"\ncommand="sessionsation.launcher"\ndescription="Sessionsation"\n')
+    config.write_text('onboarding=false\n[theme.custom]\npanel_bg="#282a36"\n[terminal]\ndefault_shell='+json.dumps(str(shell))+'\n[[keys.command]]\nkey="prefix+shift+l"\ntype="plugin_action"\ncommand="sessionsation.launcher"\ndescription="Sessionsation"\n')
     backend = root/'synthetic-cli'
     backend.write_bytes((repo/'scripts/demo-backend.py').read_bytes())
     backend.chmod(0o700)
@@ -58,6 +61,8 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', height, width, 0, 0))
     screen, events = Screen(), []
     decoder = codecs.getincrementaldecoder('utf8')('replace')
+    color_query_tail = bytearray()
+    color_replies = {10: 0, 11: 0}
     start = time.monotonic()
     def pump(duration):
         until = time.monotonic()+duration
@@ -66,6 +71,19 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
                 try: data = os.read(master, 65536)
                 except OSError: return
                 if not data: return
+                # Act as the outer terminal, including its real default colors.
+                # A PTY alone cannot answer HERDR's OSC queries; without these
+                # replies Ghostty assumes black while agg renders blue-gray.
+                color_query_tail.extend(data)
+                queries = list(re.finditer(rb'\x1b\](10|11);\?(?:\x1b\\|\x07)', color_query_tail))
+                for query in queries:
+                    kind = int(query[1])
+                    rgb = terminal_background if kind == 11 else terminal_foreground
+                    reply = '\x1b]'+str(kind)+';rgb:'+'/'.join(f'{v:02x}{v:02x}' for v in rgb)+'\x1b\\'
+                    os.write(master, reply.encode())
+                    color_replies[kind] += 1
+                if queries: del color_query_tail[:queries[-1].end()]
+                if len(color_query_tail) > 64: del color_query_tail[:-64]
                 screen.feed(data)
                 events.append([round(time.monotonic()-start, 5), 'o', decoder.decode(data)])
     def wait(text, timeout=6):
@@ -99,6 +117,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
         host('tab', 'focus', origin['tab']['tab_id'])
         client = subprocess.Popen(['herdr', '--session', 'sessionsation-demo'], env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
         pump(.6)
+        assert color_replies[11] > 0, 'Owned HERDR did not query the outer terminal background'
         os.write(master, b'\x02L')
         wait('personal'); wait('Settings'); pump(.4)
         # Move setup output to time zero; the first visible frame is the actual popup.
@@ -136,7 +155,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
         cast = output/'demo.cast'
         header = {'version': 2, 'width': width, 'height': height, 'timestamp': 1767268800, 'env': {'TERM': 'xterm-256color', 'SHELL': '/bin/bash'}, 'title': 'Synthetic sessionsation-ui in HERDR'}
         cast.write_text('\n'.join(json.dumps(e) for e in [header, *events])+'\n')
-        subprocess.run(['agg', '--text-font-family', 'DejaVu Sans Mono', '--font-size', '14', '--line-height', '1.25', '--fps-cap', '10', '--last-frame-duration', '1', str(cast), str(output/'demo.gif')], check=True)
+        subprocess.run(['agg', '--theme', 'dracula', '--text-font-family', 'DejaVu Sans Mono', '--font-size', '14', '--line-height', '1.25', '--fps-cap', '10', '--last-frame-duration', '1', str(cast), str(output/'demo.gif')], check=True)
         from PIL import Image, ImageOps, ImageDraw
         gif = Image.open(output/'demo.gif')
         frames = []
@@ -145,6 +164,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
             gif.seek(i)
             frames.append((duration_ms, gif.convert('RGB')))
             duration_ms += gif.info.get('duration', 0)
+        assert Counter(frames[0][1].getdata()).most_common(1)[0][0] == tuple(terminal_background), 'Rendered background differs from OSC reply'
         assert gif.info.get('loop') == 0 and 30000 <= duration_ms <= 75000
         assert (output/'demo.gif').stat().st_size <= 3_000_000, 'Review GIF size budget'
         sheet = Image.new('RGB', (1280, 1200), '#111111')
@@ -158,6 +178,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
         assert sum(call[:2] == ['launch', 'start'] for call in calls) == 1
         assert not any(call[0] in ['send', 'switch', 'stop', 'restart'] for call in calls)
         evidence = {'synthetic_only': True, 'provider_calls': 0, 'models': 0, 'size': [width, height], 'markers': markers, 'gif_bytes': (output/'demo.gif').stat().st_size, 'gif_frames': gif.n_frames, 'gif_duration_ms': duration_ms, 'pacing': {'key_pause_ms': 450, 'typing_ms_per_character': 100, 'reading_pauses_seconds': '1.2–3'}, 'handoff_verified': True, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'tools': json.loads((repo/'scripts/demo-tools.json').read_text()), 'loop': 'Actual initial terminal stream repeated; no replacement UI drawn'}
+        evidence['terminal_colors'] = {'background': terminal_background, 'foreground': terminal_foreground, 'osc_replies': color_replies, 'renderer_theme': 'dracula', 'herdr_panel_bg': '#282a36'}
         (output/'demo-evidence.json').write_text(json.dumps(evidence, indent=2)+'\n')
         print(json.dumps(evidence, indent=2))
     except Exception:

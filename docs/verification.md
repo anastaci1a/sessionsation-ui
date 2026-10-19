@@ -39,6 +39,10 @@ Regeneration uses a dedicated container, separate HOME/XDG/config/socket/state,
 no real config/accounts/agents, and no network at capture time. HERDR and agg are
 version/checksum-pinned public downloads. agg renders the actual terminal stream;
 no substitute UI is drawn. No desktop, display server or GPU is needed.
+The virtual outer terminal answers HERDR's OSC 10/11 color queries with the same
+Dracula foreground/background used by agg. The isolated HERDR panel override also
+uses that background. This avoids a black emulator default being blended against
+a blue-gray rendered surface; the evidence records the colors and reply counts.
 
 From a clean checkout with Docker:
 
@@ -86,7 +90,7 @@ cp .demo/output/demo.gif docs/assets/demo.gif
 npm run check
 ```
 
-The checked-in demo is about 1.2 MiB, 46 seconds and 319 frames at a 10 FPS cap;
+The checked-in demo is about 1.2 MiB, 46 seconds and 317 frames at a 10 FPS cap;
 its 128×40 terminal renders to 1096×718 pixels. It shows bars/limits, session
 activity/details, the staged directory picker and an inert normal-tab handoff.
 The contact sheet and loop seam were inspected before README promotion. No real
@@ -102,18 +106,19 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 ## Verification record and limits
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **142 Rust tests** (140 unit and two visual tests covering
+passed formatting, Clippy, **143 Rust tests** (141 unit and two visual tests covering
 21 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
 disabled. Regressions cover Back history, stable selection across refreshed lists,
 active/inactive grouping, unbolded Ready styling and delayed inventory without
-an Add/Manage Account button flash. The isolated
+an Add/Manage Account button flash, HERDR-style title borders and star fades over
+neutral, blue-gray and purple backgrounds. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
 The current release built from these Rust sources, at
 `target-ui/release/sessionsation-ui`, has SHA-256
-`8e510c16bbf6cce8ad4ef70271c45ed52c65c99985cf89be360a3fb298458fb4`.
+`c140f86487e5a91fc480f6f862ac4c0fc08ab048ee9e18b231ca83bbe5400176`.
 The three PTY scripts and owned
 HERDR popup test passed against this artifact, including Space lookup cancellation,
 confirmation, one captured-generation mutation and return to the selected session.

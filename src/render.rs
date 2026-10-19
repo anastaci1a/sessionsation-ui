@@ -582,9 +582,16 @@ impl Field {
                 .birth
                 .map(|b| smooth(now.saturating_sub(b) as i64 * 1000 / 500))
                 .unwrap_or(1000);
+            let background = self.background.unwrap_or([0; 3]);
+            let mut target = mix(color, [255; 3], white_mix);
+            // A star adds light: saturated hues must not dip below a colored
+            // terminal background in any channel during gradient/birth/death fades.
+            for (channel, base) in target.iter_mut().zip(background) {
+                *channel = (*channel).max(base);
+            }
             let fg = mix(
-                self.background.unwrap_or([0; 3]),
-                mix(color, [255; 3], white_mix),
+                background,
+                target,
                 brightness * intensity / 1000 * replacement / 1000,
             );
             let glyph = if twinkle.is_some() {
@@ -672,17 +679,20 @@ mod tests {
     }
     #[test]
     fn star_gradient_and_all_fades_blend_from_the_painted_background() {
-        let mut f = Field::new(80, 24, 1967);
-        f.background = Some([26; 3]);
-        for now in (0..10000).step_by(20) {
-            let c = f.paint(now);
-            for cell in &c.cells {
-                assert_eq!(cell.bg, None);
-                if matches!(cell.glyph.as_str(), "*" | "." | "+") {
-                    assert!(cell.fg.iter().all(|v| *v >= 26));
+        for background in [[26; 3], [40, 42, 54], [90, 35, 110]] {
+            let mut f = Field::new(80, 24, 1967);
+            f.background = Some(background);
+            for now in (0..10000).step_by(20) {
+                let c = f.paint(now);
+                for cell in &c.cells {
+                    assert_eq!(cell.bg, None);
+                    if matches!(cell.glyph.as_str(), "*" | "." | "+") {
+                        assert!(cell.fg.iter().zip(background).all(|(v, base)| *v >= base));
+                    }
                 }
             }
         }
+        let mut f = Field::new(80, 24, 1967);
         let mut c = f.paint(10001);
         c.text(2, 3, "Login required", Cell::default(), false);
         assert_eq!(c.cells[3 * 80 + 7].bg, None);
