@@ -187,9 +187,9 @@ impl Manager {
     }
     fn show_login(&mut self, key: &str) {
         self.show(
-            "Log in",
+            "Login",
             vec![format!("Start provider login for {key}?")],
-            &["Log in", "Cancel"],
+            &["Login", "Cancel"],
             Form::Login(key.into()),
         );
     }
@@ -355,7 +355,7 @@ impl Manager {
                     Row::yes("Usage details"),
                     Row::gate("Limits", !removed && self.provider_cap("account_limits")),
                     Row::separator(),
-                    Row::gate("Log in", !removed && self.provider_cap("enrollment")),
+                    Row::gate("Login", !removed && self.provider_cap("enrollment")),
                     Row::gate(
                         if a.is_some_and(|a| a.details.get("enabled").is_some_and(|v| v == false)) {
                             "Enable"
@@ -1974,7 +1974,7 @@ mod tests {
                 "Login required",
                 "auth_required",
                 json!(true),
-                "Log in",
+                "Login",
                 "login",
             ),
             (

@@ -253,13 +253,15 @@ pub fn paint(
                 },
             );
             let end = x + 2 + UnicodeWidthStr::width(account.as_str());
-            if session["availability"] != "running" {
+            if session["availability"] != "running"
+                && !(options.selected == index && options.preview_visible)
+            {
                 canvas.text(
                     end,
                     y,
                     " *",
                     crate::render::Cell {
-                        fg: crate::widgets::SECONDARY,
+                        fg: crate::widgets::MUTED,
                         bold: false,
                         ..crate::render::Cell::default()
                     },
@@ -487,12 +489,40 @@ mod tests {
                 );
                 assert_eq!(c.cells[320 + x].fg, expected.cells[320 + x].fg);
                 assert!(!c.cells[320 + x].bold);
-                if availability == "saved" {
+                if availability == "saved" && (selected != 1 || back) {
                     assert_eq!(c.cells[320 + x + 10].glyph, " ");
                     let marker = &c.cells[320 + x + 11];
                     assert_eq!(marker.glyph, "*");
-                    assert_eq!(marker.fg, crate::widgets::SECONDARY);
+                    assert_eq!(marker.fg, crate::widgets::MUTED);
                     assert!(!marker.bold);
+                }
+            }
+        }
+    }
+    #[test]
+    fn inactive_marker_exchanges_with_visible_parenthetical() {
+        let sessions =
+            vec![json!({"name":"Saved","account_id":"codex:personal","availability":"saved"})];
+        for width in [30, 80] {
+            for (selected, back) in [(0, false), (1, false), (1, true)] {
+                let mut c = Canvas::new(width, 20);
+                let mut options = Options {
+                    selected,
+                    back,
+                    ..Options::default()
+                };
+                paint(&mut c, &mut options, &sessions, true, 16, 100, 19);
+                let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+                let parenthetical = selected == 1 && !back;
+                assert_eq!(
+                    text.contains("(inactive)"),
+                    parenthetical,
+                    "{width}: {text}"
+                );
+                assert_eq!(text.contains('*'), !parenthetical);
+                for cell in c.cells.iter().filter(|c| c.glyph == "*") {
+                    assert_eq!(cell.fg, crate::widgets::MUTED);
+                    assert!(!cell.bold);
                 }
             }
         }

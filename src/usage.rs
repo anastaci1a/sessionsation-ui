@@ -387,7 +387,8 @@ impl AccountsLayout {
         back: bool,
         usage_focus: bool,
     ) {
-        let name_focus = !back && !usage_focus && selected.is_some_and(|i| i < accounts.len());
+        let depressed = back || selected.is_none_or(|i| i >= accounts.len());
+        let name_focus = !depressed && !usage_focus;
         let mut y = top;
         for (index, account) in accounts.iter().enumerate() {
             let active = selected == Some(index) && !back;
@@ -399,7 +400,7 @@ impl AccountsLayout {
                 y,
                 &short_name(&account.id),
                 Accent {
-                    brightness: if back || name_focus && !active {
+                    brightness: if depressed || name_focus && !active {
                         600
                     } else {
                         1000
@@ -411,7 +412,7 @@ impl AccountsLayout {
             let usage = Usage::account(account);
             if active && usage_focus {
                 usage.paint_focused(canvas, self.bars, y, self.bar_width, self.digits);
-            } else if back || usage_focus {
+            } else if depressed || usage_focus {
                 usage.paint_deemphasized(canvas, self.bars, y, self.bar_width, self.digits);
             } else {
                 usage.paint_selected(
@@ -461,7 +462,7 @@ mod tests {
                 let mut y = 3;
                 for (i, a) in accounts.iter().enumerate() {
                     let active = selected == Some(i) && !back;
-                    let dim_name = back || selected.is_some() && !usage_focus && !active;
+                    let dim_name = back || selected.is_none() || !usage_focus && !active;
                     let mut expected = base.clone();
                     expected.accent_text(
                         layout.left + 2,
@@ -477,7 +478,7 @@ mod tests {
                     assert_eq!(c.cells[cell], expected.cells[cell]);
                     let usage = Usage::account(a);
                     if usage.status_only() {
-                        let brightness = if back || usage_focus && !active {
+                        let brightness = if back || selected.is_none() || usage_focus && !active {
                             600
                         } else {
                             1000
@@ -490,7 +491,7 @@ mod tests {
                             assert!(!c.cells[y * 100 + x].bold);
                         }
                     }
-                    if back && !usage.status_only() {
+                    if (back || selected.is_none()) && !usage.status_only() {
                         let mut plain = base.clone();
                         usage.paint(&mut plain, layout.bars, y, layout.bar_width, layout.digits);
                         for row in y..y + usage.height() {

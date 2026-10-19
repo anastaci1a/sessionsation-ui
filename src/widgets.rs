@@ -12,7 +12,6 @@ pub const SELECTED: [u8; 3] = [238; 3];
 #[derive(Default)]
 pub struct Navigation {
     last: Option<(KeyCode, Instant)>,
-    event_types: bool,
 }
 impl Navigation {
     pub fn key(&mut self, key: KeyEvent) -> bool {
@@ -20,23 +19,19 @@ impl Navigation {
     }
     fn key_at(&mut self, key: KeyEvent, now: Instant) -> bool {
         if key.kind == KeyEventKind::Release {
-            self.event_types = true;
-            self.last = None;
+            if self.last.is_some_and(|(code, _)| code == key.code) {
+                self.last = None;
+            }
             return false;
-        }
-        if key.kind == KeyEventKind::Repeat {
-            self.event_types = true;
         }
         if !matches!(key.code, KeyCode::Up | KeyCode::Down) {
             self.last = None;
             return true;
         }
         let fresh = key.kind == KeyEventKind::Press
-            && (self.event_types
-                || self.last.is_none_or(|(last, at)| {
-                    last != key.code
-                        || now.saturating_duration_since(at) >= Duration::from_millis(750)
-                }));
+            && self.last.is_none_or(|(last, at)| {
+                last != key.code || now.saturating_duration_since(at) >= Duration::from_millis(750)
+            });
         self.last = Some((key.code, now));
         fresh
     }
@@ -468,6 +463,8 @@ pub struct Options {
     pub back: bool,
     pub scroll: usize,
     pub navigation: SelectionNavigation,
+    /// Whether the highlighted row's preview was rendered by the last menu paint.
+    pub preview_visible: bool,
 }
 
 /// Shared bottom hints: token wrapping never changes the star-field geometry.
@@ -630,6 +627,7 @@ impl Options {
         bottom: usize,
         controls_start: usize,
     ) -> (usize, usize) {
+        self.preview_visible = false;
         let detached = Self::previews_detached(canvas.width, rows);
         let bottom = bottom.min(controls_start.saturating_sub(if detached { 3 } else { 1 }));
         // Reserve a range counter only after the options stop fitting.
@@ -639,6 +637,13 @@ impl Options {
             bottom
         };
         let result = self.paint(canvas, rows, top, bottom);
+        self.preview_visible = !detached
+            && !self.back
+            && self.selected >= self.scroll
+            && self.selected < self.scroll + result.1
+            && rows
+                .get(self.selected)
+                .is_some_and(|r| r.preview_position(canvas.width, result.0).is_some());
         self.paint_range(canvas, rows.len(), result.1, bottom);
         if detached
             && !self.back
@@ -659,6 +664,7 @@ impl Options {
                 } else {
                     preview.to_owned()
                 };
+                self.preview_visible = true;
                 row.paint_preview(
                     canvas,
                     canvas
@@ -790,18 +796,56 @@ mod tests {
             nav.key_at(repeated_up, start + Duration::from_millis(2100)),
         );
         assert_eq!(options.selected, 0);
-        options.step_with_wrap(
-            &rows,
-            false,
-            true,
-            nav.key_at(up, start + Duration::from_millis(2200)),
-        );
+        options.step_with_wrap(&rows, false, true, {
+            let mut release = up;
+            release.kind = KeyEventKind::Release;
+            nav.key_at(release, start + Duration::from_millis(2199));
+            nav.key_at(up, start + Duration::from_millis(2200))
+        });
         assert_eq!(options.selected, 2);
         let mut legacy = Navigation::default();
         assert!(legacy.key_at(down, start));
         assert!(!legacy.key_at(down, start + Duration::from_millis(500)));
         assert!(!legacy.key_at(down, start + Duration::from_millis(530)));
         assert!(legacy.key_at(down, start + Duration::from_millis(1300)));
+    }
+    #[test]
+    fn mixed_legacy_arrows_after_enhanced_events_remain_one_hold() {
+        let start = Instant::now();
+        let rows = vec![Row::yes("First"), Row::yes("Middle"), Row::yes("Last")];
+        for previous in [false, true] {
+            let key = KeyEvent::new(
+                if previous { KeyCode::Up } else { KeyCode::Down },
+                crossterm::event::KeyModifiers::NONE,
+            );
+            let mut nav = Navigation::default();
+            let mut unrelated =
+                KeyEvent::new(KeyCode::Char('x'), crossterm::event::KeyModifiers::NONE);
+            unrelated.kind = KeyEventKind::Release;
+            nav.key_at(unrelated, start);
+            let mut options = Options {
+                selected: 1,
+                ..Options::default()
+            };
+            for i in 1..30 {
+                if i == 10 {
+                    nav.key_at(unrelated, start + Duration::from_millis(i * 30 - 1));
+                }
+                let fresh = nav.key_at(key, start + Duration::from_millis(i * 30));
+                options.step_with_wrap(&rows, false, previous, fresh);
+                assert_eq!(options.selected, if previous { 0 } else { 2 });
+            }
+            let mut released = key;
+            released.kind = KeyEventKind::Release;
+            nav.key_at(released, start + Duration::from_millis(901));
+            options.step_with_wrap(
+                &rows,
+                false,
+                previous,
+                nav.key_at(key, start + Duration::from_millis(902)),
+            );
+            assert_eq!(options.selected, if previous { 2 } else { 0 });
+        }
     }
     #[test]
     fn boundaries_skip_separators_and_include_unavailable_or_bottom_actions() {

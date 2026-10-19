@@ -166,7 +166,7 @@ displayed number. Weekly-only rows align with the weekly column. Unknown values
 use `?`; freshness and the shortened account name appear in the selected-account note,
 hidden while Back is focused.
 
-Account action groups use dot/blank separators: Usage details and Limits; Log in
+Account action groups use dot/blank separators: Usage details and Limits; Login
 and Enable/Disable; Deregister/Restore/Delete. Limits edit minimum remaining percentages with
 explicit Save/Cancel; the backend converts/stores existing used thresholds through
 the sole owner, preserving plan review and leaving automation unchanged. Impactful

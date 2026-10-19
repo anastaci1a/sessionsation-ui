@@ -29,7 +29,7 @@ the appropriate current layout without losing their account selection.
 
 On Home, the name selector uses `▶`. While a name is selected, other account names
 use the darker bullet hue. Focus on any account name or usage/status also dims
-the top-option bullets, just like Close focus. Close focus dims all account names,
+the top-option bullets, just like Close focus. Selecting a top option or Close dims all account names,
 bars and text statuses; normal deselected gray-white labels/percentages retain
 their brightness and are unbolded. Moving focus away restores the appropriate hue. Right from an account with available usage selects its bars; Enter/Space
 opens Limits directly. Left returns to the name. Cancel, close and save retain the
@@ -116,8 +116,10 @@ spinner, advancing every 100 ms after one space following the account. The timer
 follows after another space when it fits inline, otherwise uses the shared hover
 panel. Read-only state refreshes once per second, one request at a time; idle, exit,
 unknown activity or discovery failure removes the spinner. Active session account tags use the normal bullet hue on row hover and the dimmer
-hue otherwise. Inactive tags stay dim and show `[account] *`, with a deselected-gray
-asterisk separated by one space. Tags and asterisks are never bold. Inactive hover markers stay muted and unbolded. Timers use normal deselected gray.
+hue otherwise. Inactive tags stay dim and show `[account] *`, with an
+asterisk separated by one space. The asterisk uses the same muted gray as
+`(inactive)` and disappears while that parenthetical is visible inline or below the
+list. Tags and asterisks are never bold. Inactive hover markers stay muted and unbolded. Timers use normal deselected gray.
 
 Errors and status notices use a centered bottom line, separated from controls by
 one blank line. Menus reserve the status lane before calculating scroll capacity.
@@ -130,7 +132,8 @@ top, Down at the bottom). Holds begun elsewhere stop at the edge; release and
 press again there to wrap. Home, management menus, directory pickers and dialog
 buttons share this selection-navigation implementation. Terminals
 without repeat/release events use a 750 ms quiet gap to distinguish gestures for
-wrapping. The first press always moves immediately; repeat timing comes from the
+wrapping. Mixed ordinary and enhanced key events never turn repeated presses
+into new holds; only the held arrow's release clears it. The first press always moves immediately; repeat timing comes from the
 terminal, with no UI hold-delay timer. Home/End jump to the first/last list option
 (including directory lists); text editors retain cursor Home/End. These shortcuts
 do not add footer hints.
