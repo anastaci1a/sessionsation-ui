@@ -130,6 +130,18 @@ fn id(v: &Value) -> &str {
 fn account_label(id: &str) -> String {
     id.replacen(':', "-", 1)
 }
+fn operation_status(record: &Value) -> &str {
+    match record["phase"].as_str().unwrap_or("unknown") {
+        "complete" => "complete",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        "recovered" => "recovered",
+        "queued" => "queued",
+        "unknown" => "checking",
+        p if p.starts_with("awaiting_") => "confirmation",
+        _ => "running",
+    }
+}
 fn launch_status(record: &Value) -> &str {
     match record["phase"].as_str().unwrap_or("unknown") {
         "running" => "complete",
@@ -501,7 +513,7 @@ impl Manager {
                         let row = Row::yes(format!(
                             "{label:<width$} {}",
                             if kind == "operation" {
-                                record["phase"].as_str().unwrap_or("unknown")
+                                operation_status(record)
                             } else {
                                 launch_status(record)
                             }
@@ -1181,7 +1193,7 @@ impl Manager {
                                 "Operation progress"
                             },
                             vec![
-                                o["phase"].as_str().unwrap_or("unknown").into(),
+                                crate::messages::phase(o["phase"].as_str().unwrap_or("unknown")),
                                 o["detail"].as_str().unwrap_or("").into(),
                             ],
                             &[if terminal(o["phase"].as_str().unwrap_or("")) {
@@ -1501,7 +1513,7 @@ impl Manager {
                     && let Some(d) = &mut self.dialog
                 {
                     d.body = vec![
-                        o["phase"].as_str().unwrap_or("unknown").into(),
+                        crate::messages::phase(o["phase"].as_str().unwrap_or("unknown")),
                         o["detail"].as_str().unwrap_or("").into(),
                     ];
                     if terminal(o["phase"].as_str().unwrap_or("")) {

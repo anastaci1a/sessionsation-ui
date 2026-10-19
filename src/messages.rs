@@ -108,6 +108,21 @@ pub fn describe(text: &str) -> String {
     };
     message.into()
 }
+/// Phase labels are presentation only; reducers continue matching raw API values.
+pub fn phase(value: &str) -> String {
+    if matches!(value, "" | "unknown") {
+        return "Checking operation state".into();
+    }
+    let described = describe(value);
+    if described != value {
+        return described;
+    }
+    let words = value.replace('_', " ");
+    let mut chars = words.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + chars.as_str()
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +138,10 @@ mod tests {
             "retained explanatory detail"
         );
         assert!(describe("RECEIPT_NOT_FOUND").contains("not confirmed"));
+        assert_eq!(
+            phase("awaiting_risk_confirmation"),
+            "Awaiting risk confirmation"
+        );
+        assert_eq!(phase("unknown"), "Checking operation state");
     }
 }

@@ -128,7 +128,8 @@ actions carry the captured backend ID/generation. Stop, Restart, Switch, Disable
 and account deregistration/deletion require confirmation. New Session labels and values use aligned columns with space padding and the
 short label Dir. Internal modal dialogs preserve their underlying
 page; Continue in background dismisses progress without cancelling backend work.
-Session mutations return to Manage Sessions with the affected session selected; Archive/Delete return to the top. Views opened through Operations retain their submenu return. Switching confirms the latest polled session snapshot, then binds its generation through submission. Changed targets require a fresh choice, never an automatic retry. Raw backend freshness/receipt errors are described in plain language in dialogs and bottom status lines; missing receipts remain unconfirmed.
+Session mutations return to Manage Sessions with the affected session selected; Archive/Delete return to the top. Views opened through Operations retain their submenu return. Switching confirms the latest polled session snapshot, then binds its generation through submission. Changed targets require a fresh choice, never an automatic retry. Operation lists show outcome/confirmation/running states; details show readable phase descriptions rather than wire-format identifiers.
+Raw backend freshness/receipt errors are described in plain language in dialogs and bottom status lines; missing receipts remain unconfirmed.
 Operations shows progress, fresh confirmation prompts and supported recovery.
 Hover details are selected-only and disappear on Back/Close. Fit is decided for
 the whole list: if any detail cannot fit inline, the selected detail moves below
