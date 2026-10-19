@@ -17,7 +17,7 @@ elif args==['state']:
  mode=(root/'mode').read_text()
  if mode=='failure': print(json.dumps({'api_version':1,'ok':False,'error':{'code':'DISCOVERY_UNAVAILABLE','message':'fixture failure'}}),file=sys.stderr);sys.exit(1)
  result={'sessions':[{'id':'working','name':'Working','account_id':'codex:work','generation':'same','availability':'saved' if mode=='saved' else 'running','activity':'busy' if mode=='busy' else 'idle','active_since':int(time.time())-70,'capabilities':{}}]}
-elif args==['operations']: result=[]
+elif args in [['operations'],['archives']]: result=[]
 else: raise Exception(args)
 print(json.dumps({'api_version':1,'ok':True,'result':result}))
 '''
@@ -41,7 +41,6 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-activity-') as tmp:
         t.wait('Manage Sessions')
         t.send(b'\x1b[B\r')
         t.wait('Loading…')
-        t.wait('[new session]')
         t.wait('Operations')
         loading = next(''.join(row[:80]) for row in t.screen.grid if 'Loading…' in ''.join(row))
         assert '●' not in loading and '○' not in loading
@@ -63,13 +62,13 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-activity-') as tmp:
         t.send(b'\x1b[1;1:1B'+b'\x1b[1;1:2B'*20)
         t.wait('Operations',selected=True);time.sleep(.1);t.drain()
         assert t.screen.contains('Operations',selected=True)
-        t.send(b'\x1b[1;1:3B\x1b[1;1:1B');t.wait('[new session]',selected=True)
+        t.send(b'\x1b[1;1:3B\x1b[1;1:1B');t.wait('Working',selected=True)
         t.send(b'\x1b[1;1:2A'*20);time.sleep(.1);t.drain()
-        assert t.screen.contains('[new session]',selected=True)
+        assert t.screen.contains('Working',selected=True)
         t.send(b'\x1b[1;1:3A\x1b[1;1:1A');t.wait('Operations',selected=True)
         t.send(b'\x1b');t.wait('New Session')
     finally:
         t.close()
     calls=[json.loads(line) for line in (root/'calls').read_text().splitlines()]
-    assert all(call in [['state'],['capabilities'],['account','list']] for call in calls), calls
+    assert all(call in [['state'],['capabilities'],['account','list'],['archives']] for call in calls), calls
     print(json.dumps({'passed':True,'models':0,'checks':['nonselectable loading below unchanged skeleton','persistent ten-frame spinner','live busy/idle/exit/failure changes without input','held arrows clamp both edges; release/press rearms wrap','only read-only APIs','TTY restoration'],'transition_ms':durations},indent=2))
