@@ -340,7 +340,7 @@ impl App {
             p.map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|| UNSET.into())
         };
-        match &self.page {
+        let mut rows: Vec<Row> = match &self.page {
             Page::Home | Page::Management => self.manager.rows(),
             Page::Summary => {
                 let fields = [
@@ -481,7 +481,12 @@ impl App {
                 }))
                 .collect(),
             Page::Launching => vec![Row::gate("Starting session…", false)],
+        };
+        if Self::is_popup(&self.page) {
+            rows = rows.into_iter().map(Row::left_aligned).collect();
+            rows.push(Row::yes("Cancel").left_aligned());
         }
+        rows
     }
     fn push(&mut self, page: Page, text: String) -> Vec<Effect> {
         self.stack.push(Saved {
@@ -892,6 +897,9 @@ impl App {
         vec![]
     }
     fn activate(&mut self) -> Vec<Effect> {
+        if Self::is_popup(&self.page) && self.options.selected + 1 == self.rows().len() {
+            return self.pop();
+        }
         if self.options.back {
             return self.pop();
         }
@@ -1271,25 +1279,20 @@ impl App {
                 }
             }
             KeyCode::Left if matches!(self.page, Page::Directory(_)) => {
-                if self.options.selected < self.directory_children_offset()
+                if self.options.selected + 1 == self.rows().len()
+                    || self.options.selected < self.directory_children_offset()
                     || self.directory_parent_option()
                     || self.listing.path.as_deref() == Some(Path::new("/"))
                 {
-                    self.options.back = true;
                     return vec![];
                 }
                 self.directory_parent()
             }
             KeyCode::Left | KeyCode::Right if self.is_form() => {
-                if self.options.back && key.code == KeyCode::Right {
-                    self.options.back = false;
-                } else if key.code == KeyCode::Left && self.input.cursor == 0 {
-                    self.options.back = true;
-                } else {
-                    self.input.edit(key.code);
-                }
+                self.input.edit(key.code);
                 vec![]
             }
+            KeyCode::Left | KeyCode::Right if Self::is_popup(&self.page) => vec![],
             KeyCode::Left => {
                 self.options.back = true;
                 vec![]
@@ -1344,56 +1347,115 @@ impl App {
         self.pending = pending;
         self.popup_size = popup_size;
     }
+    fn popup_description(&self) -> &'static str {
+        match self.page {
+            Page::Accounts => "Choose an account for this session.",
+            Page::Spaces => "Choose a destination Space.",
+            Page::Roots => "Choose a Space to set its default directory.",
+            Page::Name => "Choose a name for this session.",
+            Page::SpaceName => "Choose a name for the new Space.",
+            Page::Directory(_) => {
+                "Choose a directory. New directories are created only when the session starts."
+            }
+            Page::NewDirectory(..) => {
+                "Choose a directory name. Creation is deferred until the session starts."
+            }
+            _ => "",
+        }
+    }
+    fn popup_field(&self, label: &str) -> crate::dialog::Field {
+        let mut field = crate::dialog::Field::new(label, &self.input.value);
+        field.input = self.input.clone();
+        let valid = if matches!(self.page, Page::Directory(_)) {
+            self.listing_pending || self.listing.existing || self.listing.creatable
+        } else if matches!(self.page, Page::NewDirectory(..)) && self.listing_pending {
+            true
+        } else {
+            self.rows().first().is_some_and(|r| r.enabled)
+        };
+        if !valid {
+            field.excluded.push(self.input.value.clone());
+        }
+        field
+    }
     fn paint_page(&mut self, canvas: &mut Canvas, width: usize, height: usize) {
-        if Self::is_popup(&self.page) {
-            let rows = self.rows();
-            let directory = matches!(self.page, Page::Directory(_));
-            let preferred_width = if self.is_form() {
-                76
+        if !Self::is_popup(&self.page) {
+            self.paint_screen(canvas, width, height);
+            return;
+        }
+        let rows = self.rows();
+        if matches!(
+            self.page,
+            Page::Name | Page::SpaceName | Page::NewDirectory(..)
+        ) {
+            let label = if self.page == Page::SpaceName {
+                "Space name"
+            } else if self.page == Page::Name {
+                "Name"
             } else {
-                crate::popup::picker_width(&rows)
+                "Directory name"
             };
-            let inner_width = preferred_width
-                .min(width.saturating_sub(4))
-                .saturating_sub(4);
-            let hints = crate::widgets::hint_lines(self.control_tokens(), inner_width);
-            let top = if self.is_form() { 2 } else { 0 };
-            if self
+            let mut dialog = crate::dialog::Dialog::new(
+                self.popup_title(),
+                vec![self.popup_description().into()],
+                &[],
+            );
+            dialog.buttons = rows;
+            dialog.fields.push(self.popup_field(label));
+            dialog.selected = self.options.selected;
+            dialog.size = self
                 .popup_size
                 .as_ref()
-                .is_none_or(|(page, size)| *page != self.page || size.viewport != (width, height))
-            {
-                let extra = usize::from(Options::previews_detached(inner_width, &rows)) * 2;
-                let row_count = if self.page == Page::Accounts
-                    && self.accounts.is_empty()
-                    && !self.manager.inventory_known
-                {
-                    8
-                } else {
-                    rows.len()
-                };
-                let desired = if directory {
-                    height.saturating_sub(4)
-                } else {
-                    2 + top + row_count + hints.len() + 4 + extra
-                };
-                self.popup_size = Some((
-                    self.page.clone(),
-                    crate::popup::Size::fit((width, height), preferred_width, desired),
-                ));
-            }
-            let size = self.popup_size.as_ref().unwrap().1;
-            let hints =
-                crate::widgets::hint_lines(self.control_tokens(), size.width.saturating_sub(4));
-            let palette = self.manager.palette.clone();
-            let title = self.popup_title();
-            crate::popup::paint_sized(canvas, title, &palette, size, |local| {
-                let footer = local.height.saturating_sub(hints.len());
-                self.paint_choices(local, top, footer, local.width, &hints);
-            });
-        } else {
-            self.paint_screen(canvas, width, height);
+                .filter(|(page, _)| *page == self.page)
+                .map(|(_, size)| *size);
+            dialog.paint(canvas, &self.manager.palette);
+            self.popup_size = dialog.size.map(|size| (self.page.clone(), size));
+            return;
         }
+        let editor = matches!(self.page, Page::Directory(_)).then(|| self.popup_field("Directory"));
+        let note = if self.listing_pending && editor.is_some() {
+            "Loading…".into()
+        } else if !self.error.is_empty() {
+            crate::messages::describe(&self.error)
+        } else if self.page == Page::Accounts {
+            self.accounts
+                .get(self.options.selected)
+                .map(|a| crate::usage::Usage::account(a).status)
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let description = self.popup_description();
+        let presentation = crate::popup::Choices {
+            title: self.popup_title(),
+            description,
+            rows: &rows[..rows.len() - 1],
+            editor: editor.as_ref(),
+            note: &note,
+            note_accent: note == "Ready",
+            reserve_note: self.page == Page::Accounts,
+            large: editor.is_some(),
+            pinned: if editor.is_some() {
+                self.directory_children_offset()
+            } else {
+                0
+            },
+            browse_hint: editor.is_some() && self.control_tokens().contains(&"◀/▶: Parent/Open"),
+        };
+        if self
+            .popup_size
+            .as_ref()
+            .is_none_or(|(page, size)| *page != self.page || size.viewport != (width, height))
+        {
+            self.popup_size = Some((self.page.clone(), presentation.measure((width, height))));
+        }
+        crate::popup::paint_choices(
+            canvas,
+            &self.manager.palette,
+            &presentation,
+            &mut self.options,
+            self.popup_size.as_ref().unwrap().1,
+        );
     }
     pub fn paint(&mut self, field: &mut Field, now: u64, width: usize, height: usize) -> Canvas {
         field.resize(width, height);
@@ -1535,19 +1597,11 @@ impl App {
         }
 
         let top = if self.is_form() { 5 } else { 3 };
-        self.paint_choices(canvas, top, footer, width, &hints);
+        self.paint_choices(canvas, top, footer, &hints);
     }
-    fn paint_choices(
-        &mut self,
-        canvas: &mut Canvas,
-        top: usize,
-        footer: usize,
-        width: usize,
-        hints: &[String],
-    ) {
+    fn paint_choices(&mut self, canvas: &mut Canvas, top: usize, footer: usize, hints: &[String]) {
         let rows = self.rows();
-        let has_note = Self::is_popup(&self.page)
-            || !self.error.is_empty()
+        let has_note = !self.error.is_empty()
             || self.pending
             || self.page == Page::Launching
             || self.page == Page::Summary && self.resume.is_none() && !self.manager.sessions_known
@@ -1558,41 +1612,11 @@ impl App {
             footer
         };
         let bottom = menu_controls.saturating_sub(if self.page == Page::Summary { 3 } else { 1 });
-        let (left, capacity) = if matches!(self.page, Page::Directory(_)) {
-            self.options.paint_pinned_menu(
-                canvas,
-                &rows,
-                self.directory_children_offset(),
-                top,
-                bottom,
-                menu_controls,
-            )
-        } else {
-            self.options
-                .paint_menu(canvas, &rows, top, bottom, menu_controls)
-        };
+        let (left, capacity) = self
+            .options
+            .paint_menu(canvas, &rows, top, bottom, menu_controls);
         if self.page != Page::Launching {
-            self.options.paint_back(
-                canvas,
-                left,
-                top,
-                if self.page == Page::Home {
-                    "Close"
-                } else {
-                    "Back"
-                },
-            );
-        }
-        if self.is_form() {
-            let valid = if matches!(self.page, Page::Directory(_)) {
-                self.listing_pending || self.listing.existing || self.listing.creatable
-            } else if matches!(self.page, Page::NewDirectory(..)) && self.listing_pending {
-                true
-            } else {
-                rows.first().is_some_and(|r| r.enabled)
-            };
-            self.input
-                .paint(canvas, 2, top.saturating_sub(2), width - 4, valid);
+            self.options.paint_back(canvas, left, top, "Back");
         }
         if self.page == Page::Summary {
             let enabled = self.start_ready();
@@ -1634,17 +1658,8 @@ impl App {
             );
         }
 
-        let loading_directory = matches!(self.page, Page::Directory(_)) && self.listing_pending;
-        let note = if loading_directory {
-            "Loading…".into()
-        } else if !self.error.is_empty() {
+        let note = if !self.error.is_empty() {
             self.error.clone()
-        } else if self.page == Page::Accounts {
-            self.accounts
-                .get(self.options.selected)
-                .filter(|_| !self.options.back)
-                .map(|a| crate::usage::Usage::account(a).status)
-                .unwrap_or_default()
         } else if self.page == Page::Summary
             && self.resume.is_none()
             && !self.manager.sessions_known
@@ -1665,19 +1680,7 @@ impl App {
         } else {
             String::new()
         };
-        if loading_directory {
-            let y = top + rows.len().min(capacity) + 1;
-            if y < footer {
-                crate::widgets::paint_status(canvas, y + 2, &note);
-            }
-        } else if self.page == Page::Accounts && self.error.is_empty() {
-            let y = top + rows.len().min(capacity) + usize::from(rows.len() > capacity) + 1;
-            if y + 1 < footer {
-                crate::widgets::paint_status_colored(canvas, y + 2, &note, note == "Ready");
-            }
-        } else {
-            crate::widgets::paint_status(canvas, footer, &note);
-        }
+        crate::widgets::paint_status(canvas, footer, &note);
         crate::widgets::paint_hints(canvas, hints);
         if let Some((dialog, _)) = &mut self.start_confirmation {
             dialog.paint(canvas, &self.manager.palette);
@@ -1738,13 +1741,13 @@ mod tests {
         a.error.clear();
         a.popup_size = None;
         let c = a.paint(&mut Field::new(100, 30, 1), 0, 100, 30);
-        assert!(a.popup_size.as_ref().unwrap().1.width < 76);
+        assert!(a.popup_size.as_ref().unwrap().1.width <= 76);
         assert!(
             c.cells
                 .iter()
                 .map(|c| c.glyph.as_str())
                 .collect::<String>()
-                .contains("◀— Back")
+                .contains("Cancel")
         );
     }
     #[test]
@@ -1840,7 +1843,7 @@ mod tests {
             );
             assert_eq!(a.input.value, "/projects/empty");
             a.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-            assert!(a.options.back);
+            assert!(!a.options.back);
             a.options.back = false;
             assert!(matches!(&a.activate()[..], [Effect::Inspect(_, p)] if p == "/projects"));
             assert_eq!(
@@ -1914,7 +1917,7 @@ mod tests {
         assert_eq!(a.page, Page::Directory(Target::Draft));
         assert_eq!(a.options.selected, 1);
         assert_eq!(a.options.scroll, 7);
-        a.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        a.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         a.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(a.page, Page::Summary);
         assert_eq!(a.options.selected, 3);
@@ -2173,7 +2176,7 @@ mod tests {
         let range = lines.iter().position(|l| l.contains(" of 30")).unwrap();
         assert!(!lines[range + 1].chars().any(char::is_alphanumeric));
         assert!(lines[range + 2].contains("Ready"));
-        a.options.back = true;
+        a.options.selected = a.rows().len() - 1;
         let c = a.paint(&mut Field::new(60, 18, 1), 0, 60, 18);
         assert!(
             !c.cells
@@ -2407,7 +2410,7 @@ mod tests {
                 );
                 assert_eq!(a.input.value, "/tmp");
                 a.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-                assert!(a.options.back);
+                assert!(!a.options.back);
             }
             a.options.back = false;
             a.options.selected = 1;
@@ -2474,6 +2477,7 @@ mod tests {
         let rows = a.rows();
         assert!(Options::previews_detached(36, &rows));
         for width in [36, 120] {
+            a.options.selected = 0;
             let mut field = Field::new(width, 24, 1);
             let c = a.paint(&mut field, 1000, width, 24);
             let start = 3 * width
@@ -2514,7 +2518,7 @@ mod tests {
                     (width - panel_width) / 2 + 2 + left + 2 + "Alpha".len() + 1
                 );
             }
-            a.options.back = true;
+            a.options.selected = a.rows().len() - 1;
             let c = a.paint(&mut field, 1050, width, 24);
             assert!(
                 !c.cells
@@ -2556,13 +2560,13 @@ mod tests {
             let origin_x = (100 - size.width) / 2 + 2;
             let origin_y = (24 - size.height) / 2 + 1;
             if Options::previews_detached(inner, &rows) {
-                assert_eq!(index / 100, origin_y + rows.len() + 1);
+                assert_eq!(index / 100, origin_y + 2 + rows.len());
                 assert_eq!(
                     index % 100,
                     origin_x + (inner - rows[selected].preview.as_ref().unwrap().len()) / 2
                 );
             } else {
-                assert_eq!(index / 100, origin_y + selected);
+                assert_eq!(index / 100, origin_y + 2 + selected);
                 assert_eq!(
                     Some(index % 100),
                     rows[selected]
@@ -2589,9 +2593,9 @@ mod tests {
                     .contains("Create New Space")
             })
             .unwrap();
-        assert_eq!(index / 36, first_row + rows.len() + 1);
+        assert_eq!(index / 36, first_row + rows.len());
         assert_eq!(index % 36, (36 - "(w1)".len()) / 2);
-        a.options.back = true;
+        a.options.selected = a.rows().len() - 1;
         let c = a.paint(&mut field, 1050, 36, 24);
         assert!(c.cells.iter().all(|c| c.glyph != "("));
         a.options.back = false;

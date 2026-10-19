@@ -58,7 +58,7 @@ not a supervisor upgrade or data-root migration.
 ## Editing fields
 
 Name, account, Space and directory choices open flat themed popups over the current
-configuration screen. Back/Esc restores the opening option and picker position;
+configuration screen. Cancel/Esc restores the opening option and picker position;
 only the current editor owns the terminal cursor. Pressing any configured HERDR
 prefix closes the popup directly from any screen or dialog, without stopping an
 agent or cancelling a backend operation. Prefixes are read from the same HERDR
@@ -66,9 +66,13 @@ configuration as the theme when opening the popup; absent/invalid bindings use
 HERDR’s default Ctrl-B. Nested directory/Space creation
 remains staged until Start. Popup dimensions are measured on opening and remain
 stable through navigation, loading and status changes; terminal resize refits them.
-Short pickers fit their contents with room for expanded Back when possible; long
-lists scroll and selected previews can move below them. Action groups use title
-case and a blank bullet spacer.
+Fixed-choice popups fit their description, choices and Cancel button exactly.
+Forms share the boxed account-name editor; all popup choices are left aligned,
+with descriptive text followed by one blank line before fields or choices.
+Information-only dialogs dismiss with Enter/Esc. Progress and loading dialogs
+reserve a fixed body viewport and scroll updates within it. Long lists scroll
+and selected previews can move below them. Action groups use title case and a
+blank bullet spacer.
 
 ## Capabilities and limits
 
@@ -348,29 +352,29 @@ launch flow. The UI never creates directories or starts an agent before confirma
 
 The default Space is
 the one currently focused in HERDR; no focus leaves it unset. Pickers preserve the
-draft on Back. Existing automatic paths require explicit selection. Directory Enter
+draft on Cancel/Esc. Existing automatic paths require explicit selection. Directory Enter
 selects the current option. In an unfamiliar directory, focus starts on the first
 subdirectory, or Go to Parent when empty; revisiting restores its selection.
 Use This Dir, Leave Unset (for defaults) and Create Dir stay above the scrolling
 subdirectory list and its range counter. If at most six rows fit, the whole list
 scrolls instead. Directory popup dimensions stay fixed; pending navigation clears
 old child rows and shows Loading… one blank line below the actions. Right browses
-child rows only; Left returns to their parent or focuses Back on action rows.
+child rows only; Left returns to their parent and does nothing on action rows.
 Only child rows show the Parent/Open hint. Tab and Ctrl-U have no directory-picker
 action. Typing and paste edit the path. Create stages
-intent and never calls mkdir. Configuration uses the same picker and saves on Back.
+intent and never calls mkdir. Configuration uses the same picker; Use This Dir applies a directory and Cancel/Esc returns without applying the edited field.
 Missing per-Space roots remain unset, without a global fallback. Last-account prefill
 initially requires fresh usage within existing limits. Once selected, the account remains
 visible during refreshes and stale usage; only confirmed unavailability clears it.
 Launch validation remains authoritative. Manually selecting a backend-permitted
 account does not rewrite its limits.
 
-The Back arrow is beside the top visible option. Left selects and expands it only
+On full-screen menus, the Back arrow is beside the top visible option. Left selects and expands it only
 when the expanded label retains a left padding cell;
 Right returns to the option. On the main page its expanded label is **Close**.
 Settings’ **Default Dir:** chooses global or per-Space defaults. In either default-directory
-picker, `[leave unset]` clears that default and its pending creation plan. Left from
-any of its top three actions focuses Back; Right does nothing on those actions.
+picker, Leave Unset clears that default and its pending creation plan. Left/Right
+do nothing on its top actions.
 The session-directory picker retains its two top actions. Configuration uses short
 labels; path previews follow the shared hover-only, list-wide fit rule.
 

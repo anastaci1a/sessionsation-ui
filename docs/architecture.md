@@ -49,11 +49,20 @@ Its reusable components are:
   preview groups retain a list-wide fit decision within each group.
 - `usage`: one measurement/rendering system for remaining-allowance bars, limit
   markers, status-only accounts and shared columns across responsive layouts.
-- `popup`: centered flat surfaces, local option/editor layout and translated native
-  cursor positions; compositing keeps background star lifetimes independent.
-  Pickers preserve the opening configuration screen beneath nested editors.
-- `dialog` / `host_theme`: shared paginated confirmations and forms, preserving
-  input across resize and reading HERDR theme colors without changing host config.
+- `popup`: shared frame, measured size and choice-list template (optional boxed
+  editor, pinned action group, selected preview, status and Cancel). Callers supply
+  content and handle actions; they do not duplicate layout. Pickers preserve the
+  opening screen and cache geometry until terminal resize. Compositing translates
+  the native cursor and keeps background star lifetimes independent.
+- `dialog`: shared one/multiple-field forms, confirmations, information and
+  progress. The same boxed editor paints session/account names and directory
+  paths. One-field forms remain editable while buttons are focused; multiple-field
+  forms expose only the focused native cursor. Information accepts Enter/Esc.
+  Geometry is measured once per open dialog; live body/status updates and progress
+  completion scroll inside it. Async loading reserves its result viewport before
+  the request completes. Options are left aligned below descriptive text and a
+  blank line. Controllers own validation, cancellation and CLI effects.
+- `host_theme`: reads HERDR colors without changing host configuration.
 - `management`: stable-ID list focus, account action groups and lifecycle menus;
   navigation history restores opener identity and scroll position, and shared
   session-row mapping keeps group separators outside the session identity space.

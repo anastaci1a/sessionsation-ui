@@ -605,9 +605,11 @@ impl Manager {
                                 row
                             }
                         })
+                        .map(Row::left_aligned)
+                        .chain(std::iter::once(Row::yes("Cancel").left_aligned()))
                         .collect()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_else(|| vec![Row::yes("Cancel").left_aligned()]),
             Page::Session(key) => crate::session_list::actions(
                 self.session(key).unwrap_or(&Value::Null),
                 self.capabilities["resume"]["version"] == 1,
@@ -908,6 +910,10 @@ impl Manager {
         let mut dialog = Dialog::new(title, body, buttons);
         dialog.compact =
             buttons == ["Close"] && matches!(form, Form::None | Form::SessionDetails(_));
+        dialog.size = self.dialog.as_ref().and_then(|d| d.size);
+        if matches!(form, Form::Loading) {
+            dialog.minimum_height = 16;
+        }
         self.dialog = Some(dialog);
         self.form = form;
     }
@@ -923,7 +929,9 @@ impl Manager {
             }
         });
         self.details_open = false;
-        self.dialog = Some(Dialog::progress("Operation progress"));
+        let mut progress = Dialog::progress("Operation progress");
+        progress.size = self.dialog.as_ref().and_then(|d| d.size);
+        self.dialog = Some(progress);
         self.form = Form::Progress;
         let request = self.request(args, Purpose::Mutation);
         self.foreground = Some(self.sequence);
@@ -1018,6 +1026,7 @@ impl Manager {
                 }
                 vec![]
             }
+            KeyCode::Left if matches!(self.page, Page::Spaces(_)) => vec![],
             KeyCode::Left => {
                 if self.usage_focus {
                     self.usage_focus = false;
@@ -1099,6 +1108,9 @@ impl Manager {
         self.validate_dialog_names();
     }
     fn activate(&mut self) -> Vec<Intent> {
+        if matches!(self.page, Page::Spaces(_)) && self.options.selected + 1 == self.rows().len() {
+            return self.back();
+        }
         if !self
             .rows()
             .get(self.options.selected)
@@ -1909,31 +1921,31 @@ impl Manager {
             self.note = note;
             let rows = self.rows();
             let palette = self.palette.clone();
-            let width = crate::popup::picker_width(&rows).min(canvas.width.saturating_sub(4));
-            let inner = width.saturating_sub(4);
-            let hints = hint_lines(
-                &["▲/▼/◀/▶: Move", "Enter/Space: Select", "Esc: Back"],
-                inner,
-            );
+            let view = crate::popup::Choices {
+                title: "Choose Space",
+                description: "Choose a destination Space for this session.",
+                rows: &rows[..rows.len() - 1],
+                editor: None,
+                note: &self.note,
+                note_accent: false,
+                reserve_note: false,
+                large: false,
+                pinned: 0,
+                browse_hint: false,
+            };
             if self
                 .popup_size
                 .is_none_or(|s| s.viewport != (canvas.width, canvas.height))
             {
-                self.popup_size = Some(crate::popup::Size::fit(
-                    (canvas.width, canvas.height),
-                    width,
-                    rows.len() + hints.len() + 6,
-                ));
+                self.popup_size = Some(view.measure((canvas.width, canvas.height)));
             }
-            let size = self.popup_size.unwrap();
-            crate::popup::paint_sized(canvas, "Choose Space", &palette, size, |local| {
-                let controls = local.height.saturating_sub(hints.len());
-                let bottom = controls.saturating_sub(3);
-                let (left, _) = self.options.paint_menu(local, &rows, 0, bottom, controls);
-                self.options.paint_back(local, left, 0, "Back");
-                crate::widgets::paint_status(local, controls, &self.note);
-                crate::widgets::paint_hints(local, &hints);
-            });
+            crate::popup::paint_choices(
+                canvas,
+                &palette,
+                &view,
+                &mut self.options,
+                self.popup_size.unwrap(),
+            );
             if let Some(dialog) = &mut self.dialog {
                 dialog.paint(canvas, &self.palette);
             }
@@ -2092,6 +2104,56 @@ impl Manager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn loading_confirmation_and_operation_share_the_opened_frame() {
+        use super::*;
+        let mut m = setup();
+        let palette = m.palette.clone();
+        m.show(
+            "Preview",
+            vec!["Loading…".into()],
+            &["Cancel"],
+            Form::Loading,
+        );
+        m.dialog
+            .as_mut()
+            .unwrap()
+            .paint(&mut Canvas::new(80, 24), &palette);
+        let size = m.dialog.as_ref().unwrap().size.unwrap();
+        m.show(
+            "Confirm",
+            vec!["Review this action.".into()],
+            &["Confirm", "Cancel"],
+            Form::None,
+        );
+        m.dialog
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(Field::new("Name", "example"));
+        let mut c = Canvas::new(80, 24);
+        m.dialog.as_mut().unwrap().paint(&mut c, &palette);
+        assert_eq!(m.dialog.as_ref().unwrap().size.unwrap().height, size.height);
+        assert!(
+            c.cells
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+                .contains("Confirm")
+        );
+        m.mutate(strings(&["fixture-only"]));
+        m.dialog
+            .as_mut()
+            .unwrap()
+            .paint(&mut Canvas::new(80, 24), &palette);
+        assert_eq!(m.dialog.as_ref().unwrap().size.unwrap().height, size.height);
+        m.dialog.as_mut().unwrap().finish();
+        m.dialog
+            .as_mut()
+            .unwrap()
+            .paint(&mut Canvas::new(80, 24), &palette);
+        assert_eq!(m.dialog.as_ref().unwrap().size.unwrap().height, size.height);
+    }
     #[test]
     fn grouped_sessions_keep_enter_and_back_bound_to_the_same_session() {
         use super::*;

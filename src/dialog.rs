@@ -55,6 +55,62 @@ impl Field {
         self.rule = rule;
         self
     }
+    pub fn paint_box(
+        &self,
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        width: usize,
+        palette: &Palette,
+        focused: bool,
+    ) {
+        if width < 6 || y + 2 >= canvas.height {
+            return;
+        }
+        let style = Cell {
+            fg: palette.text,
+            bg: Some(palette.panel),
+            ..Cell::default()
+        };
+        let field_style = Cell {
+            fg: if self.valid() { palette.text } else { INVALID },
+            ..style.clone()
+        };
+        let label = clip(&format!(" {} ", self.label), width - 4);
+        let label_width = UnicodeWidthStr::width(label.as_str());
+        canvas.text(
+            x,
+            y,
+            &format!(
+                "┌─{}{}┐",
+                label,
+                "─".repeat((width - 3).saturating_sub(label_width))
+            ),
+            field_style.clone(),
+            false,
+        );
+        canvas.text(x, y + 1, "│", field_style.clone(), false);
+        canvas.text(x + width - 1, y + 1, "│", field_style.clone(), false);
+        self.input
+            .paint_focused(canvas, x + 1, y + 1, width - 3, self.valid(), focused);
+        canvas.text(
+            x,
+            y + 2,
+            &format!("└{}┘", "─".repeat(width - 2)),
+            field_style.clone(),
+            false,
+        );
+        if !self.valid() {
+            for col in x..x + width {
+                let cell = &mut canvas.cells[(y + 1) * canvas.width + col];
+                if cell.bg.is_some_and(|bg| bg != palette.panel) {
+                    cell.bg = Some(INVALID);
+                } else {
+                    cell.fg = INVALID;
+                }
+            }
+        }
+    }
     pub fn valid(&self) -> bool {
         let v = &self.input.value;
         if matches!(&self.rule, Rule::Rename(original) if v == original) {
@@ -98,6 +154,8 @@ pub struct Dialog {
     pub busy: bool,
     pub compact: bool,
     pub status: Option<String>,
+    pub size: Option<crate::popup::Size>,
+    pub minimum_height: usize,
     navigation: crate::widgets::SelectionNavigation,
 }
 pub enum Event {
@@ -119,12 +177,15 @@ impl Dialog {
             busy: false,
             compact: false,
             status: None,
+            size: None,
+            minimum_height: 0,
             navigation: crate::widgets::SelectionNavigation::default(),
         }
     }
     pub fn progress(title: &str) -> Self {
         let mut d = Self::new(title, vec!["Loading…".into()], &["Continue in background"]);
         d.busy = true;
+        d.minimum_height = 16;
         d
     }
     pub fn finish(&mut self) {
@@ -175,6 +236,9 @@ impl Dialog {
         self.selected = self.selected.min(count.saturating_sub(1));
         match key.code {
             KeyCode::Esc => return Event::Dismiss,
+            KeyCode::Enter if self.buttons.is_empty() && self.fields.is_empty() => {
+                return Event::Dismiss;
+            }
             KeyCode::PageDown if self.wrapped > self.visible => {
                 self.offset = (self.offset + self.visible.max(1))
                     .min(self.wrapped.saturating_sub(self.visible))
@@ -254,13 +318,31 @@ impl Dialog {
             normalized.pop();
         }
         let lines = normalized;
-        let base_reserved = if self.compact {
+        let base_reserved = if self.compact || self.buttons.is_empty() && self.fields.is_empty() {
             2
         } else {
             self.fields.len() * 3 + self.buttons.len() + if self.fields.is_empty() { 3 } else { 4 }
         };
-        let scroll_hint = lines.len() > max_height.saturating_sub(base_reserved);
-        let reserved = base_reserved + if scroll_hint { 2 } else { 0 };
+        let viewport = (canvas.width, canvas.height);
+        if self.size.is_none_or(|s| s.viewport != viewport) {
+            let scroll = lines.len() > max_height.saturating_sub(base_reserved);
+            self.size = Some(crate::popup::Size::fit(
+                viewport,
+                width,
+                (lines.len().max(1) + base_reserved + usize::from(scroll) * 2)
+                    .max(self.minimum_height),
+            ));
+        }
+        let height = self.size.unwrap().height;
+        let scroll_hint = lines.len() > height.saturating_sub(base_reserved);
+        // The footer already owns one blank row; use it for a scroll hint after
+        // a live update instead of growing the frame or removing the sole body row.
+        let extra = if scroll_hint {
+            2.min(height.saturating_sub(base_reserved + 1))
+        } else {
+            0
+        };
+        let reserved = base_reserved + extra;
         if width < 20 || max_height < reserved + 1 {
             self.visible = 0;
             self.wrapped = 1;
@@ -274,9 +356,8 @@ impl Dialog {
             return;
         }
         let x = (canvas.width - width) / 2;
-        let height = max_height.min(lines.len().max(1) + reserved);
         let y = (canvas.height - height) / 2;
-        let body_height = height - reserved;
+        let body_height = height.saturating_sub(reserved).max(1);
         self.visible = body_height;
         self.wrapped = lines.len();
         self.offset = self.offset.min(lines.len().saturating_sub(body_height));
@@ -298,50 +379,14 @@ impl Dialog {
         if !self.compact {
             let mut row = y + 1 + body_height + usize::from(!self.fields.is_empty());
             for (index, field) in self.fields.iter().enumerate() {
-                let field_style = Cell {
-                    fg: if field.valid() { palette.text } else { INVALID },
-                    ..style.clone()
-                };
-                let label = clip(&format!(" {} ", field.label), width - 8);
-                let label_width = UnicodeWidthStr::width(label.as_str());
-                canvas.text(
+                field.paint_box(
+                    canvas,
                     x + 2,
                     row,
-                    &format!(
-                        "┌─{}{}┐",
-                        label,
-                        "─".repeat((width - 7).saturating_sub(label_width))
-                    ),
-                    field_style.clone(),
-                    false,
-                );
-                canvas.text(x + 2, row + 1, "│", field_style.clone(), false);
-                canvas.text(x + width - 3, row + 1, "│", field_style.clone(), false);
-                field.input.paint_focused(
-                    canvas,
-                    x + 3,
-                    row + 1,
-                    width - 7,
-                    field.valid(),
+                    width - 4,
+                    palette,
                     self.editor() == Some(index),
                 );
-                canvas.text(
-                    x + 2,
-                    row + 2,
-                    &format!("└{}┘", "─".repeat(width - 6)),
-                    field_style.clone(),
-                    false,
-                );
-                if !field.valid() {
-                    for col in x + 2..x + width - 2 {
-                        let cell = &mut canvas.cells[(row + 1) * canvas.width + col];
-                        if cell.bg.is_some_and(|bg| bg != palette.panel) {
-                            cell.bg = Some(INVALID);
-                        } else {
-                            cell.fg = INVALID;
-                        }
-                    }
-                }
                 row += 3;
             }
             row += 1;
@@ -361,14 +406,18 @@ impl Dialog {
             }
         }
         let hint = if self.wrapped > self.visible {
-            "Esc: Back   PgUp/PgDn: Scroll"
+            "PgUp/PgDn: Scroll"
         } else {
             "Esc: Back"
         };
-        if scroll_hint {
+        if scroll_hint && (extra > 0 || !self.compact && !self.buttons.is_empty()) {
             canvas.text(
                 x + 2,
-                y + height - 2,
+                if extra > 0 {
+                    y + height - 2
+                } else {
+                    y + body_height + 1
+                },
                 &clip(hint, width - 4),
                 Cell {
                     fg: crate::widgets::SECONDARY,
@@ -385,9 +434,7 @@ impl Dialog {
                 }
                 if matches!(cell.glyph.as_str(), "○" | "●") {
                     cell.fg = palette.accent;
-                } else if cell.fg == [238; 3]
-                    || cell.fg == [188; 3] && (!scroll_hint || row != y + height - 2)
-                {
+                } else if cell.fg == [238; 3] {
                     cell.fg = palette.text;
                 }
             }
@@ -395,7 +442,7 @@ impl Dialog {
     }
 }
 /// Prefer a space or dash; split a token only when the token exceeds the viewport.
-fn wrap(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut out = vec![];
     for paragraph in text.split('\n') {
         let mut remaining = paragraph;
@@ -429,6 +476,43 @@ mod tests {
     use super::*;
     fn enter() -> KeyEvent {
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+    }
+    #[test]
+    fn live_content_and_completion_never_resize_an_open_dialog() {
+        let mut d = Dialog::progress("Work");
+        let palette = Palette::default();
+        d.paint(&mut Canvas::new(90, 30), &palette);
+        let initial = d.size.unwrap();
+        d.body = (0..50).map(|i| format!("Update {i}")).collect();
+        d.status = Some("Latest status".into());
+        let mut canvas = Canvas::new(90, 30);
+        d.paint(&mut canvas, &palette);
+        assert_eq!(d.size.unwrap().height, initial.height);
+        assert!(d.visible > 0 && d.wrapped > d.visible);
+        assert!(
+            canvas
+                .cells
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+                .contains("Continue in background")
+        );
+        d.finish();
+        d.paint(&mut Canvas::new(90, 30), &palette);
+        assert_eq!(d.size.unwrap().height, initial.height);
+        d.paint(&mut Canvas::new(40, 20), &palette);
+        assert_eq!(d.size.unwrap().viewport, (40, 20));
+    }
+    #[test]
+    fn information_template_has_no_options_and_enter_or_escape_dismisses() {
+        let mut d = Dialog::new("Information", vec!["Explanation".into()], &[]);
+        d.paint(&mut Canvas::new(80, 24), &Palette::default());
+        assert_eq!(d.size.unwrap().height, 3);
+        assert!(matches!(d.key(enter()), Event::Dismiss));
+        assert!(matches!(
+            d.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Event::Dismiss
+        ));
     }
     #[test]
     fn title_touches_herdr_corner_without_padding_and_keeps_right_corner() {
@@ -505,7 +589,7 @@ mod tests {
         for now in [0, 1467, 4700] {
             let mut c = field.paint(now);
             d.paint(&mut c, &Palette::default());
-            let cell = c.cells.iter().find(|cell| cell.glyph == "E").unwrap();
+            let cell = c.cells.iter().find(|cell| cell.glyph == "P").unwrap();
             assert_eq!(cell.fg, crate::widgets::SECONDARY);
             assert!(!cell.bold);
         }

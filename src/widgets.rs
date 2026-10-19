@@ -150,6 +150,7 @@ pub struct Row {
     pub account: bool,
     pub preview_gap: usize,
     pub separator: bool,
+    left_aligned: bool,
     preview_group: u8,
     field_padding: Option<std::ops::Range<usize>>,
 }
@@ -179,6 +180,7 @@ impl Row {
             account: false,
             preview_gap: 2,
             separator: false,
+            left_aligned: false,
             preview_group: 0,
             field_padding: None,
         }
@@ -190,6 +192,10 @@ impl Row {
     }
     pub fn account(mut self) -> Self {
         self.account = true;
+        self
+    }
+    pub fn left_aligned(mut self) -> Self {
+        self.left_aligned = true;
         self
     }
     pub fn with_preview_group(mut self, group: u8) -> Self {
@@ -254,6 +260,7 @@ impl Row {
             account: false,
             preview_gap: 2,
             separator: true,
+            left_aligned: false,
             preview_group: 0,
             field_padding: None,
         }
@@ -540,6 +547,9 @@ impl Options {
         );
     }
     pub fn left(width: usize, rows: &[Row]) -> usize {
+        if rows.iter().any(|r| r.left_aligned) {
+            return 0;
+        }
         let longest = rows
             .iter()
             .map(|r| {
