@@ -4,7 +4,7 @@ use crossterm::{
     cursor::{Hide, Show},
     event::{
         self, DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
-        Event, KeyEventKind,
+        Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{self, DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen},
@@ -58,6 +58,10 @@ impl Terminal {
             Hide,
             EnableBracketedPaste,
             EnableFocusChange,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+            ),
             DisableLineWrap
         )?;
         Ok(t)
@@ -70,6 +74,7 @@ impl Drop for Terminal {
             std::io::stderr(),
             DisableBracketedPaste,
             DisableFocusChange,
+            PopKeyboardEnhancementFlags,
             EnableLineWrap,
             Show,
             LeaveAlternateScreen
@@ -372,6 +377,8 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     let mut frame = tokio::time::interval(Duration::from_millis(50));
     frame.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut refresh = tokio::time::interval(Duration::from_secs(5));
+    let mut session_refresh = tokio::time::interval(Duration::from_secs(1));
+    session_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut receipt = tokio::time::interval(Duration::from_secs(1));
     let mut inventory_pending = false;
     let mut receipt_pending = false;
@@ -395,9 +402,10 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
          _=term_signal.recv()=>{app.exit=true;},_ = hup_signal.recv()=>{app.exit=true;},
          _=frame.tick()=>{app.dirty=true;},
          _=refresh.tick(),if !inventory_pending=>{inventory_pending=true;effects.inventory();let intents=app.manager.refresh();next=app.management(intents);},
+         _=session_refresh.tick()=>{let intents=app.manager.refresh_live();next=app.management(intents);},
          _=receipt.tick(),if app.request.is_some()&&!app.success&&!receipt_pending=>{receipt_pending=true;effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
          message=rx.recv()=>match message.context("Input channel closed")? {
-          Message::Input(Event::Key(k))if k.kind!=KeyEventKind::Release=>{next=app.key(k);},
+         Message::Input(Event::Key(k))=>{next=app.key(k);},
           Message::Input(Event::Paste(s))=>{next=app.paste(&s);},
           Message::Input(Event::Resize(w,h))=>{dimensions=(w as usize,h as usize);app.dirty=true;},
           Message::Input(Event::FocusGained)=>{app.dirty=true;},Message::Input(_)=>{},
@@ -415,7 +423,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
             "failed"=>{app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",r["detail"].as_str().unwrap_or("inspect launch status"));},
             phase=>{app.error=format!("{phase}: {}",r["detail"].as_str().unwrap_or("waiting for confirmed handoff"));},
            },Err(e)=>{app.error=format!("{e}; reconciling original request");}
-          }if app.launch_dialog&&let Some(d)=&mut app.manager.dialog{d.body=vec![app.error.clone()];}app.dirty=true;},
+          }if app.launch_dialog&&let Some(d)=&mut app.manager.dialog{d.body=vec![app.error.clone()];if app.success || app.error.starts_with("Launch failed:"){d.finish();}}app.dirty=true;},
           Message::Focused(result)=>{match result { Ok(())=>{app.prefs.last_account=app.draft.account.clone();next.push(Effect::Save);},Err(e)=>{app.error=format!("Session is running; tab focus failed: {e}. Esc closes.");}}app.dirty=true;},
           Message::Saved(result)=>{if let Err(e)=result{app.error=format!("Preferences were not saved: {e}");if !app.success{app.page=Page::Config;}app.dirty=true;}else if app.success && !app.launch_background {app.exit=true;}},
          }

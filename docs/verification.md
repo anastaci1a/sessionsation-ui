@@ -2,12 +2,12 @@
 
 ## Rust popup
 
-The expanded popup passes **64 Rust tests** (62 unit tests and two tests covering
-12 complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
+The expanded popup passes **78 Rust tests** (76 unit tests and two tests covering
+21 complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
 regressions**. Syntax, manifest fields and documentation links pass. The goldens
 exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,
 shared palette/shimmer, reference Back/Close placement and fixed field geometry.
-Management goldens cover inline/compact accounts, limit markers, action separators,
+Management goldens cover name/bar focus, inline/compact accounts, limit markers, action separators,
 aligned mixed-window picker usage and themed confirmation dialogs. The rendered
 [summary preview](assets/popup-summary.png) was inspected against the reference;
 random star coordinates intentionally use a deterministic Rust generator.
@@ -31,13 +31,18 @@ supervisor handoff. Their details and limits belong to the backend guidance.
 No acceptance test starts a model or changes production accounts/Agent DM state;
 production capability/status previews are read-only.
 
-Current release p95: first responsive PTY paint **7.15 ms**, key feedback **0.89 ms**.
+Current release p95: first responsive PTY paint **6.37 ms**, key feedback **0.52 ms**.
 The earlier popup-core host/frame measurement (source `8809571`, recorded in the
 machine-readable results) measured keybind-to-popup paint **183.61 ms**,
 frame computation/diff **0.105 ms** at 80×24 and
 **0.412 ms** at 160×48 (600 frames each). These exclude provider startup/model response.
 CLI-triggered plugin invocation additionally pays the external command round trip;
 the measured invocation was 282.44 ms, whereas the configured key path met 250 ms.
+
+`scripts/test-session-activity.py --binary PATH` verifies the cold loading skeleton,
+persistent spinner, live busy/idle/exit/error changes, held-arrow boundaries and
+release/press wrapping with synthetic APIs. Refresh visibility is approximately
+one second. No model is started.
 
 Run `scripts/check-rust.sh`, `npm test` and `npm run check`. The PTY/host scripts
 require Python 3; use the existing offline build container, mount only this checkout

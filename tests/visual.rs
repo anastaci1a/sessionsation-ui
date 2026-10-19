@@ -1,7 +1,7 @@
 //! Reviewed cell snapshots cover motion, common controls and terminal-bottom masks.
 //! UPDATE_GOLDENS=1 is an explicit developer operation, never enabled by CI.
 use sessionsation_ui::{
-    render::{Accent, Field},
+    render::Field,
     widgets::{Options, Row, TextInput},
 };
 
@@ -22,17 +22,7 @@ fn fixed_seed_time_and_geometry_match_cell_goldens() {
             let (left, _) = options.paint(&mut c, &rows, 5, height - 5);
             TextInput::new("界e\u{301}".into()).paint(&mut c, 2, 3, width - 4, true);
             options.paint_back(&mut c, left, 5, "Back");
-            c.accent_text(
-                2,
-                height - 1,
-                "Esc: Back",
-                Accent {
-                    soft: true,
-                    brightness: 550,
-                    flash: false,
-                    ..Accent::default()
-                },
-            );
+            sessionsation_ui::widgets::paint_hint(&mut c, 2, height - 1, "Esc: Back");
             field.apply_masks(&c);
             frame = Some(c);
         }
@@ -57,7 +47,11 @@ fn fixed_seed_time_and_geometry_match_cell_goldens() {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, &actual).unwrap();
         }
-        assert_eq!(std::fs::read_to_string(path).unwrap(), actual);
+        assert!(
+            std::fs::read_to_string(&path).unwrap() == actual,
+            "cell snapshot differs: {}",
+            path.display()
+        );
     }
 }
 
@@ -72,6 +66,15 @@ fn management_geometry_usage_markers_and_picker_columns() {
     let accounts:Vec<Account>=(0..3).map(|n|serde_json::from_value(serde_json::json!({"id":format!("codex:fixture{n}"),"selectable":true,"usage_fresh":true,"enabled":true,"usage":{"observed_at":100,"short":if n==2{serde_json::Value::Null}else{serde_json::json!({"duration_minutes":300,"used_percent":if n==0{95}else{0}})},"weekly":{"duration_minutes":10080,"used_percent":20}},"switch_thresholds":{"customized":true,"short_percent":80,"weekly_percent":90}})).unwrap()).collect();
     for (name, width, height) in [
         ("inline", 100, 30),
+        ("inline-selected", 100, 30),
+        ("inline-usage-focus", 100, 30),
+        ("attention", 100, 30),
+        ("sessions-wide", 110, 24),
+        ("sessions-loading", 60, 18),
+        ("sessions-compact", 40, 18),
+        ("settings-wide", 140, 24),
+        ("settings-compact", 50, 18),
+        ("roots-compact", 50, 18),
         ("compact", 60, 16),
         ("actions", 80, 24),
         ("picker", 60, 20),
@@ -86,6 +89,32 @@ fn management_geometry_usage_markers_and_picker_columns() {
         let mut f = Field::new(width, height, 1967);
         let mut c = f.paint(4060);
         match name {
+            "inline-selected" => m.options.selected = 5,
+            "inline-usage-focus" => {
+                m.options.selected = 5;
+                m.usage_focus = true;
+            }
+            "attention" => {
+                m.accounts[0]
+                    .details
+                    .insert("enabled".into(), serde_json::json!(false));
+                m.accounts[1]
+                    .details
+                    .insert("auth_required".into(), serde_json::json!(true));
+                m.options.selected = 6;
+            }
+            "sessions-loading" => {
+                m.page = Page::Sessions;
+            }
+            "sessions-wide" | "sessions-compact" => {
+                m.page = Page::Sessions;
+                m.sessions_known = true;
+                m.options.selected = 1;
+                m.sessions = vec![
+                    serde_json::json!({"name":"A name longer than twelve","id":"a","account_id":"codex:personal","availability":"running","activity":"busy","active_since":1}),
+                    serde_json::json!({"name":"Saved","id":"b","account_id":"codex:work","availability":"saved"}),
+                ];
+            }
             "operations-wide" | "operations-compact" | "operations-tiny" => {
                 m.page = Page::Operations;
                 m.operations = vec![
@@ -110,17 +139,66 @@ fn management_geometry_usage_markers_and_picker_columns() {
             }
             _ => {}
         }
-        if name == "picker" {
+        if name.starts_with("settings-") || name == "roots-compact" {
+            use sessionsation_ui::{
+                app::{App, Page as AppPage},
+                client::Workspace,
+                preferences::{Mode, Preferences},
+            };
+            let prefs = Preferences {
+                global_root: Some("/projects/a/long/path/that/needs/a/detached/preview".into()),
+                ..Preferences::default()
+            };
+            let mut app = App::new(
+                prefs,
+                "/tmp".into(),
+                "fixture".into(),
+                serde_json::json!({"session":"fixture","socket":"/tmp/fixture"}),
+                None,
+            );
+            app.page = AppPage::Config;
+            app.options.selected = 1;
+            if name == "roots-compact" {
+                app.page = AppPage::Roots;
+                app.options.selected = 0;
+                app.prefs.mode = Mode::PerSpace;
+                app.spaces = vec![
+                    Workspace {
+                        workspace_id: "w1".into(),
+                        label: "Alpha".into(),
+                        focused: true,
+                    },
+                    Workspace {
+                        workspace_id: "w2".into(),
+                        label: "Beta".into(),
+                        focused: false,
+                    },
+                ];
+                app.prefs
+                    .space_roots
+                    .insert(Preferences::key("fixture", "w1"), "/short".into());
+                app.prefs.space_roots.insert(
+                    Preferences::key("fixture", "w2"),
+                    "/projects/a/very/long/path/that/cannot/fit".into(),
+                );
+            }
+            c = app.paint(&mut f, 4060, width, height);
+            c.cells[..width].fill(sessionsation_ui::render::Cell::default());
+        } else if name == "picker" {
             let rows: Vec<_> = accounts
                 .iter()
                 .zip(picker_labels(&accounts))
-                .map(|(a, label)| Row::yes(&a.id).with_right_preview(label))
+                .map(|(a, label)| {
+                    Row::yes(sessionsation_ui::usage::short_name(&a.id))
+                        .with_right_preview(label)
+                        .account()
+                })
                 .collect();
             let mut options = Options::default();
             let (left, _) = options.paint(&mut c, &rows, 3, height - 3);
             options.paint_back(&mut c, left, 3, "Back");
         } else {
-            m.paint(&mut c, height - 1);
+            m.paint_at(&mut c, height - 1, 90062);
         }
         let cells: Vec<_> = c
             .cells

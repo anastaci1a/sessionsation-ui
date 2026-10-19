@@ -16,27 +16,35 @@ Home orders New Session, Manage Sessions, Add Account/Manage Accounts, a dot
 separator and Settings. If every account fits above the bottom controls, accounts
 appear inline without selector circles and Add Account is available. The account/bar
 block is centered, caps bar width at 24 cells and shrinks to fit narrower popups.
-Otherwise Manage Accounts provides a scrolling list with `<add account>` first.
-Enabled/Disabled values share a left-aligned column; Enabled uses the selected or dimmed accent.
-Its highlighted account's usage starts one blank line below the list, or below
+Otherwise Manage Accounts provides a scrolling list with `[add account]` first.
+Enabled/Disabled values share a left-aligned column. Enabled uses the selected or
+dimmed accent; Enabled* needs attention. Disabled is muted gray and has no hover
+usage panel.
+Its highlighted enabled account's usage uses the selected Home style and starts one blank line below the list, or below
 the visible-range counter when scrolling.
 Growing the screen returns that list to Home; forms remain open and Back chooses
 the appropriate current layout without losing their account selection.
+
+On Home, Right from an account with available usage selects its bars; Enter/Space
+opens Limits directly. Left returns to the name. Cancel, close and save retain the
+same account and bar focus. Focus slightly reduces accent saturation, brightens the
+gray segment and bolds the line characters, without adding another selector.
+Disabled, signed-out and unavailable-usage accounts do not offer this shortcut.
 
 Bars show remaining allowance for the periods the backend reports: 5h/weekly or
 weekly only. Capped accent lines deplete into visible gray; custom limits appear
 inside the bar. Percentages precede period labels in aligned columns. Missing
 observations show Disabled, Login required or Usage unavailable as appropriate;
 stale observations are marked. The account picker uses
-a separate right-aligned `x% 5h / x% wkly` column, omitting the short period and
-slash for weekly-only accounts. Account names accept at most 12 ASCII characters;
+a separate right-aligned `x% 5h / x% wk` column, omitting the short period and
+slash for weekly-only accounts. Account names accept at most 24 ASCII characters;
 typing and paste stop at the limit.
 Duplicate names immediately invalidate the editor and disable confirmation.
-Session creation/resume/rename accepts at most 12 Unicode scalar values, also
+Session creation/resume/rename accepts at most 24 Unicode scalar values, also
 enforced by the CLI.
 Only the focused input shows a cursor in multi-input dialogs; single-input dialogs
-stay editable while navigating buttons. Existing longer account names are shortened
-only in display. See the
+stay editable while navigating buttons. Menu account/session names are ellipsized to 12 display cells; full values remain
+editable and exact confirmation IDs remain intact. See the
 [rendering specification](cli-specification/architecture.md#account-and-session-management)
 for the precise glyph, alignment and motion rules.
 
@@ -59,17 +67,42 @@ actions carry the captured backend ID/generation. Stop, Restart, Switch, Disable
 and account deregistration/deletion require confirmation. Internal modal dialogs preserve their underlying
 page; Continue in background dismisses progress without cancelling backend work.
 Operations shows progress, fresh confirmation prompts and supported recovery.
-Only the selected operation shows its gray ID. If it does not fit beside the row,
+Hover details are selected-only and disappear on Back/Close. Fit is decided for
+the whole list: if any detail cannot fit inline, the selected detail moves below
+the options or pagination, centered, unbolded, with one blank line above and below.
+Long detached text is ellipsized to one line. Paths in Settings and Space roots use
+this same rule. Only the selected operation shows its gray ID. If any does not fit beside the row,
 it is centered below the list (below the visible-range counter while scrolling),
 with one blank line above and at least one before the bottom controls. The list
 and counter move upward to reserve that space; if width/height cannot fit it,
 the ID stays hidden.
 It also lists original New/Resume receipts after reopening, without resending them.
+Operations are newest-first by creation time; unknown legacy creation dates sort
+last. Status updates retain the selected ID. New/Resume launches display complete
+once creation is verified, independently of the agent continuing to run. Completed
+submenus offer Details, and completed dialogs offer Close (no period), updating on
+the one-second status poll.
 Resume has editable account, Space and name, plus the saved read-only directory.
 It prefers a verified original Space, then current focus, otherwise unset. Changing
 account uses the backend safe transfer, preserving conversation history and ID.
 Uncertain responses are not automatically retried. Focus tab selects an existing
 HERDR tab in this instance after rechecking its catalog identity.
+
+Manage Sessions keeps busy activity visible with the reference ten-frame Braille
+spinner, advancing every 100 ms after one space following the account. The timer
+follows after another space when it fits inline, otherwise uses the shared hover
+panel. Read-only state refreshes once per second, one request at a time; idle, exit,
+unknown activity or discovery failure removes the spinner. Inactive sessions show
+an accent asterisk directly after their account; their hover marker stays muted
+and unbolded. Timers use the normal deselected gray.
+
+Bottom controls and pagination use readable gray. Held arrows stop at menu ends; release and press again to wrap. Terminals
+without repeat/release events use a 750 ms quiet gap to distinguish gestures.
+Centering with Back/Close rounds
+right; six spare columns use four on the left to keep the arrow one cell from the
+edge. Options scroll only when they cannot fit with one blank line before controls;
+range/detail rows reserve space only when required. Unavailable options strike
+only their text, never the bullet, and their text never becomes bold.
 
 Dialogs use read-only HERDR theme configuration and bundled attributed palette
 tokens. Configured built-ins and RGB overrides are supported; dynamic/terminal
@@ -101,7 +134,7 @@ Open **New Session**, edit Account, Space, Name and Directory in any order, then
 select Start Session directly below the fields and separator. The default Space is
 the one currently focused in HERDR; no focus leaves it unset. Pickers preserve the
 draft on Back. Existing automatic paths require explicit selection. Directory Enter
-selects; Right browses child rows only, leaving `<use this dir>` and `<create dir>` unchanged; Left goes
+selects; Right browses child rows only, leaving `[use this dir]` and `[create dir]` unchanged; Left goes
 up or focuses Back. Tab and Ctrl-U have no directory-picker action. Typing and paste edit the path. Create stages
 intent and never calls mkdir. Configuration uses the same picker and saves on Back.
 Missing per-Space roots remain unset, without a global fallback. Last-account prefill

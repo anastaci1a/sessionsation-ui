@@ -18,7 +18,9 @@ area. Stars/gradient cover the entire popup PTY; only options scroll. Hints stay
 at the bottom. The compact Back arrow sits immediately left of the first visible
 option. Left focuses it and expands its label where space permits; Right returns
 to the remembered option. The main page says Close and dismisses the popup;
-other pages say Back. Expansion requires one left-padding cell after measuring
+other pages say Back. Odd centering rounds right; six free columns reserve four
+on the left so the compact arrow retains an edge padding cell. Expansion requires
+one left-padding cell after measuring
 the complete label. Standalone shell remains excluded.
 
 New Session is an editable summary: Account, Space, Name, Directory. Pickers open
@@ -34,12 +36,12 @@ and disabled until all fields are valid. Back preserves draft choices.
   reject duplicates. Creation waits until Start.
 - Name is the unique backend name and normal tab label, also a valid single path
   component. No silent slugification.
-- Directory is `<unset>` until a valid name/root yields `root/name`. Automatically
+- Directory is `[unset]` until a valid name/root yields `root/name`. Automatically
   derived paths follow Name/Space changes; manually chosen paths remain unchanged.
   An existing automatic path requires explicit selection. Every Create Directory
   action stages intent, including configuration pickers; no directory is created
   before Start. Enter accepts a child; Right browses only a child row, doing
-  nothing on `<use this dir>` and `<create dir>`. Tab and Ctrl-U have no picker action.
+  nothing on `[use this dir]` and `[create dir]`. Tab and Ctrl-U have no picker action.
   The path stays typable.
 - Account remembers the last successful launch. Backend-computed fresh usage and
   existing limits govern initial prefill. Retain a selected account through refresh
@@ -119,12 +121,14 @@ original installs, credentials, Agent DM pins/data, receipts and live sessions.
 Main options through Settings form their own centered block. The inline account/bar
 module is centered independently, caps bar width at 24 cells and shrinks to fit
 the popup. Names have no selector circles; selected names are bold with the normal
-full animated accent, and unselected names use its existing dimmed level. The inline module displays
+full animated accent; unselected names retain that accent without bold. Selection
+adds a small triangle in a reserved lane. Names and bars have one space between. The inline module displays
 all accounts or none, measuring the complete menu, one blank line, per-account
 height and bottom hints. Bars share a start derived from the longest displayed
 name; preferred width is 24 cells, minimum 12. Existing long names are ellipsized
 to 12 display cells, never renamed; details show the full ID. New names are limited
-to 12 ASCII characters excluding the provider prefix. Disabled/removed accounts
+to 24 ASCII characters excluding the provider prefix; session names allow 24 Unicode
+scalar values, with 12 display cells in menus. Disabled/removed accounts
 remain selectable for management.
 
 Verified five-hour accounts show adjacent 5h/weekly remaining bars, then one blank
@@ -138,19 +142,22 @@ right-aligned column, then left-aligned period labels. Shared percentage width
 uses three digits only when a displayed value is 100. Custom limits are vertical
 markers inside the bars, converted from maximum used to minimum remaining.
 
-Compact Manage Accounts has `<add account>` first. The highlighted account's same
+Compact Manage Accounts has `[add account]` first. The highlighted account's same
 bar component appears one blank row below the options, or below the visible-range
 counter when scrolling. Enabled/Disabled status text shares a left-aligned column;
-Enabled uses the selected/dimmed accent. Resize returns only this list to Home when the full module fits,
+Enabled uses the selected/dimmed accent; Enabled* marks attention. Disabled is
+muted gray and suppresses the hover panel. The hover panel uses selected Home
+colors and weight, except Login required is never bold. Resize returns only this list to Home when the full module fits,
 retaining account focus. Account actions and open forms stay in place; Back resolves
 to Home or the compact list according to current fit.
 
 The account **picker** used by New, Resume and Switch keeps normal option names
-and a separate right-aligned usage column. It shows `x% 5h / x% wkly` remaining,
+and a separate right-aligned usage column. It shows `x% 5h / x% wk` remaining,
 omitting the short period and slash unless a five-hour window is verified. Percent
 signs and slashes share columns, using the minimum padding required by the largest
 displayed number. Weekly-only rows align with the weekly column. Unknown values
-use `?`; freshness and full account ID appear in the selected-account note.
+use `?`; freshness and the shortened account name appear in the selected-account note,
+hidden while Back is focused.
 
 Account action groups use dot/blank separators: Usage details and Limits; Log in
 and Enable/Disable; Deregister/Restore/Delete. Limits edit minimum remaining percentages with
@@ -172,7 +179,14 @@ capability-gated; Stop/Restart/Switch require confirmation. Switch uses the shar
 account picker. Focus tab explicitly verifies the current generation, HERDR target
 and foreground PID, then focuses the existing tab and exits. No messaging/steering
 controls belong here. Session `[account]` suffixes use the shared animated accent,
-dim/unbolded when unselected and full/bold when selected.
+full color and unbolded when unselected, full/bold when selected, with a triangle
+selection marker. Inactive sessions add an accent asterisk immediately after the
+account; `(inactive)` is an unbolded muted-gray hover detail. Timers are unbolded
+deselected gray. Busy sessions use the reference ten-frame spinner from
+`cli-main-menu/select.bash` at 100 ms per frame, persistent regardless of selection,
+one space after the account, followed by one space before an inline timer. Only
+positively busy running snapshots animate. One-second single-flight read-only
+refreshes remove it on idle/exit/error; no message or lifecycle action is sent.
 
 Resume uses the shared summary with editable account, Space and name, read-only
 saved directory. Prefer the original Space only when its host/socket and ID still
@@ -190,12 +204,30 @@ dialog. Single-field forms keep the input editable while only buttons take selec
 Validation colors come from actual validity, independently of focus. Continue in background returns
 to the menu, never cancels or steals focus later. Operations can reopen original
 New/Resume receipts, account deletions and transfer jobs after closing the popup.
-Only the selected operation displays its ID, retaining gray. When it cannot fit
-beside the option, center it below the list or scrolling range counter: one blank
-line above and at least one before bottom controls. Reserve list/counter space
-for it while scrolling; hide it if width/height still cannot fit it. Range counters
-are centered and share the bottom controls’ animated hint palette/fading. Dialog
-hints use the same renderer; no flat gray override.
+Hover-only previews, including paths, session timers/markers and parenthesized
+operation/request IDs, share one list-wide fit decision, including offscreen rows.
+If any cannot fit inline, show only the selected detail centered below the list
+or range counter, one blank line above and below. Back/Close focus hides it
+without changing layout. Details stay gray and never bold; overly long detached
+text is ellipsized to one line, and insufficient height hides it. Operation IDs
+have exactly one space after the status when inline. Status columns align left. Range counters
+are centered and use the same readable gray as bottom controls. Dialog
+hints use the same readable gray renderer (RGB 188), without hue shift.
+Operations combine New/Resume receipts and jobs by immutable creation date, newest
+first. Unknown legacy creation dates come last with stable kind/ID ties; progress
+updates never reorder them. The launch receipt phase `running` means successful
+creation: display `complete`, independently of the agent lifetime. Complete items
+show Details and dialogs show Close (without a period), updated by the one-second
+status poll.
+
+A cold Sessions menu contains only [new session], the dot separator and Operations;
+Loading… is a centered non-option below it. Options consume available height down
+to one blank line before controls; reserve counter/detail rows only when needed.
+Held arrows stop at boundaries. Kitty repeat/release reporting rearms wrapping on
+a fresh press. Legacy arrow bytes lack releases, so a 750 ms quiet gap separates
+gestures. Only unavailable labels are struck; bullets stay intact and unavailable
+labels never become bold.
+
 Uncertain outcomes are inspected, never replayed. Cancellation/recovery are separate backend actions.
 
 Account deregistration previews open immediately while data loads. The confirmation
@@ -206,3 +238,10 @@ Codex Switcher, with Focus Session, Session Details and Rename Session first.
 Unsupported public capabilities remain disabled. Session account columns appear
 for the complete list together; selected live sessions show the reference elapsed
 time format when the backend reports verified `active_since`.
+
+Home usage focus moves Right from the selected account name only when public
+account-limit support and a reported allowance are available. Enter/Space opens
+the CLI-backed Limits form without changing the underlying page or account.
+Cancel/save/close restore that same bar focus; Left returns to the name. Focus
+blends the colored line 20% toward its mean channel value, raises spent gray from
+144 to 188, and bolds bar glyphs. It adds no arrow or layout shift.

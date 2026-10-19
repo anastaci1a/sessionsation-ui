@@ -49,7 +49,7 @@ impl Field {
     }
     pub fn validated(mut self, rule: Rule) -> Self {
         if matches!(rule, Rule::AccountName | Rule::Name) {
-            self.input = self.input.limited(12);
+            self.input = self.input.limited(24);
         }
         self.rule = rule;
         self
@@ -67,14 +67,14 @@ impl Field {
                 .is_ok_and(|n| n.is_finite() && (0. ..=100.).contains(&n)),
             Rule::AccountName => {
                 !v.is_empty()
-                    && v.len() <= 12
+                    && v.len() <= 24
                     && v.bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
             }
             Rule::Name => {
                 !v.is_empty()
                     && v.trim() == v
-                    && v.chars().count() <= 12
+                    && v.chars().count() <= 24
                     && !v.chars().any(char::is_control)
             }
         }
@@ -119,6 +119,11 @@ impl Dialog {
         d.busy = true;
         d
     }
+    pub fn finish(&mut self) {
+        self.busy = false;
+        self.buttons = vec![Row::yes("Close")];
+        self.selected = self.field_slots();
+    }
     pub fn values(&self) -> Vec<String> {
         self.fields.iter().map(|f| f.input.value.clone()).collect()
     }
@@ -151,6 +156,9 @@ impl Dialog {
         }
     }
     pub fn key(&mut self, key: KeyEvent) -> Event {
+        self.key_with_wrap(key, key.kind != crossterm::event::KeyEventKind::Repeat)
+    }
+    pub fn key_with_wrap(&mut self, key: KeyEvent, wrap: bool) -> Event {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return Event::None;
         }
@@ -166,9 +174,15 @@ impl Dialog {
             KeyCode::PageUp if self.wrapped > self.visible => {
                 self.offset = self.offset.saturating_sub(self.visible.max(1))
             }
-            KeyCode::Up if count > 0 => self.selected = (self.selected + count - 1) % count,
+            KeyCode::Up if count > 0 => {
+                if self.selected > 0 || wrap {
+                    self.selected = (self.selected + count - 1) % count;
+                }
+            }
             KeyCode::Down | KeyCode::Tab if count > 0 => {
-                self.selected = (self.selected + 1) % count
+                if self.selected + 1 < count || wrap || key.code == KeyCode::Tab {
+                    self.selected = (self.selected + 1) % count;
+                }
             }
             KeyCode::Enter if self.selected >= slots => {
                 let button = self.selected - slots;
@@ -398,8 +412,8 @@ mod tests {
         assert!(matches!(d.key(enter()), Event::None));
         d.selected = 0;
         d.fields[0].input.clear();
-        d.paste("abcdefghijklmnop");
-        assert_eq!(d.fields[0].input.value, "abcdefghijkl");
+        d.paste("abcdefghijklmnopqrstuvwxyz");
+        assert_eq!(d.fields[0].input.value, "abcdefghijklmnopqrstuvwx");
         assert!(d.fields[0].valid());
         for selected in 0..4 {
             d.selected = selected;

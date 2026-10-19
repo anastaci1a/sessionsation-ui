@@ -70,6 +70,7 @@ pub struct Manager {
     pub palette: Palette,
     pub note: String,
     pub inline: bool,
+    pub usage_focus: bool,
     pub inventory_known: bool,
     pub sessions_known: bool,
     form: Form,
@@ -94,6 +95,7 @@ impl Default for Manager {
             palette: Palette::default(),
             note: String::new(),
             inline: false,
+            usage_focus: false,
             inventory_known: false,
             sessions_known: false,
             form: Form::None,
@@ -114,6 +116,12 @@ fn id(v: &Value) -> &str {
 }
 fn account_label(id: &str) -> String {
     id.replacen(':', "-", 1)
+}
+fn launch_status(record: &Value) -> &str {
+    match record["phase"].as_str().unwrap_or("unknown") {
+        "running" => "complete",
+        phase => phase,
+    }
 }
 fn terminal(phase: &str) -> bool {
     matches!(
@@ -151,6 +159,24 @@ impl Manager {
             Page::Account(id) => Some(id.clone()),
             _ => None,
         }
+    }
+    fn usage_selectable(&self) -> bool {
+        self.page == Page::Home
+            && self.inline
+            && self.provider_cap("account_limits")
+            && self
+                .selected_account()
+                .as_deref()
+                .and_then(|id| self.account(id))
+                .is_some_and(|a| {
+                    let u = Usage::account(a);
+                    a.id.starts_with("codex:")
+                        && !matches!(
+                            u.status.as_str(),
+                            "Disabled" | "Deregistered" | "Login required"
+                        )
+                        && u.windows.iter().any(|w| w.remaining.is_some())
+                })
     }
     pub fn inventory(&mut self, accounts: Vec<Account>) {
         let selected = self.selected_account();
@@ -205,6 +231,7 @@ impl Manager {
         self.form = Form::None;
         self.foreground = None;
         self.page = page;
+        self.usage_focus = false;
         self.options = Options::default();
         self.options.selected = self.rows().iter().position(|r| r.enabled).unwrap_or(0);
         self.note.clear();
@@ -235,7 +262,11 @@ impl Manager {
                     Row::yes("Settings"),
                 ];
                 if self.inline {
-                    rows.extend(self.accounts.iter().map(|a| Row::yes(short_name(&a.id))));
+                    rows.extend(
+                        self.accounts
+                            .iter()
+                            .map(|a| Row::yes(short_name(&a.id)).account()),
+                    );
                 }
                 rows
             }
@@ -247,12 +278,24 @@ impl Manager {
                     .max()
                     .unwrap_or(0)
                     + 4;
-                std::iter::once(Row::yes("<add account>"))
+                std::iter::once(Row::yes("[add account]"))
                     .chain(self.accounts.iter().map(|a| {
                         let enabled =
                             a.details.get("enabled").and_then(Value::as_bool) == Some(true);
-                        Row::yes(short_name(&a.id)).with_column_preview(
-                            if enabled { "Enabled" } else { "Disabled" },
+                        Row::yes(short_name(&a.id)).account().with_column_preview(
+                            if enabled {
+                                if Usage::account(a).status != "Ready"
+                                    || a.details
+                                        .get("switch_thresholds")
+                                        .is_some_and(|v| v["needs_plan_review"] == true)
+                                {
+                                    "Enabled*"
+                                } else {
+                                    "Enabled"
+                                }
+                            } else {
+                                "Disabled"
+                            },
                             column,
                             enabled,
                         )
@@ -300,39 +343,39 @@ impl Manager {
             Page::Launch(kind, key) => {
                 let receipt = self.launch_record(kind, key);
                 vec![
-                    Row::yes("Progress"),
+                    Row::yes(
+                        if receipt.is_some_and(|r| {
+                            terminal(r["phase"].as_str().unwrap_or("")) || r["phase"] == "running"
+                        }) {
+                            "Details"
+                        } else {
+                            "Progress"
+                        },
+                    ),
                     Row::gate(
                         "Transfer operation",
                         receipt.is_some_and(|r| r["operation_id"].is_string()),
                     ),
                 ]
             }
-            Page::Operations => self
-                .operations
-                .iter()
-                .map(|o| {
-                    Row::yes(format!(
-                        "{}: {}",
-                        o["kind"].as_str().unwrap_or("operation"),
-                        o["phase"].as_str().unwrap_or("unknown")
-                    ))
-                    .with_selected_preview(id(o))
-                })
-                .chain(self.launches.iter().flat_map(|(kind, rs)| {
-                    rs.iter().map(|r| {
-                        Row::yes(format!(
-                            "{}: {}",
-                            if *kind == "launch" {
-                                "New session"
+            Page::Operations => {
+                let entries = self.operation_entries();
+                let width = entries.iter().map(|e| e.2.len()).max().unwrap_or(0);
+                entries
+                    .into_iter()
+                    .map(|(kind, key, label, record)| {
+                        let row = Row::yes(format!(
+                            "{label:<width$}: {}",
+                            if kind == "operation" {
+                                record["phase"].as_str().unwrap_or("unknown")
                             } else {
-                                "Resume"
-                            },
-                            r["phase"].as_str().unwrap_or("unknown")
-                        ))
-                        .with_preview(r["request"]["name"].as_str().unwrap_or(""))
+                                launch_status(record)
+                            }
+                        ));
+                        row.with_selected_preview(format!("({key})")).preview_gap(1)
                     })
-                }))
-                .collect(),
+                    .collect()
+            }
             Page::Operation(key) => {
                 let o = self
                     .operations
@@ -342,7 +385,11 @@ impl Manager {
                     .unwrap_or(Value::Null);
                 let phase = o["phase"].as_str().unwrap_or("");
                 vec![
-                    Row::yes("Progress"),
+                    Row::yes(if terminal(phase) {
+                        "Details"
+                    } else {
+                        "Progress"
+                    }),
                     Row::gate("Respond yes", phase.starts_with("awaiting")),
                     Row::gate("Respond no", phase.starts_with("awaiting")),
                     Row::separator(),
@@ -355,18 +402,46 @@ impl Manager {
             }
         }
     }
-    fn operation_keys(&self) -> Vec<(String, String)> {
-        self.operations
+    fn operation_entries(&self) -> Vec<(&'static str, &str, &str, &Value)> {
+        let mut entries: Vec<_> = self
+            .operations
             .iter()
-            .map(|o| ("operation".into(), id(o).into()))
+            .map(|r| {
+                (
+                    "operation",
+                    id(r),
+                    r["kind"].as_str().unwrap_or("operation"),
+                    r,
+                )
+            })
             .chain(self.launches.iter().flat_map(|(kind, rs)| {
                 rs.iter().map(move |r| {
                     (
-                        (*kind).into(),
-                        r["request"]["request_id"].as_str().unwrap_or("").into(),
+                        *kind,
+                        r["request"]["request_id"].as_str().unwrap_or(""),
+                        if *kind == "launch" {
+                            "New session"
+                        } else {
+                            "Resume"
+                        },
+                        r,
                     )
                 })
             }))
+            .collect();
+        entries.sort_by(|a, b| {
+            b.3["created_at"]
+                .as_i64()
+                .cmp(&a.3["created_at"].as_i64())
+                .then_with(|| a.0.cmp(b.0))
+                .then_with(|| a.1.cmp(b.1))
+        });
+        entries
+    }
+    fn operation_keys(&self) -> Vec<(String, String)> {
+        self.operation_entries()
+            .into_iter()
+            .map(|(kind, key, _, _)| (kind.into(), key.into()))
             .collect()
     }
     fn retain_operation_focus(&mut self, chosen: Option<(String, String)>) {
@@ -410,11 +485,7 @@ impl Manager {
                 Purpose::Launch(kind, key),
             ));
         }
-        if matches!(self.page, Page::Sessions | Page::Session(_))
-            && !self.pending.values().any(|p| matches!(p, Purpose::State))
-        {
-            out.extend(self.request(strings(&["state"]), Purpose::State));
-        }
+        out.extend(self.refresh_sessions());
         if (self.active_operation.is_some()
             || matches!(self.form, Form::Operation(_))
             || matches!(self.page, Page::Operations | Page::Operation(_)))
@@ -443,6 +514,26 @@ impl Manager {
             out.extend(self.request(Self::target(&s, "observe"), Purpose::Observe(key.clone())));
         }
         out
+    }
+    pub fn refresh_sessions(&mut self) -> Vec<Intent> {
+        if matches!(self.page, Page::Sessions | Page::Session(_))
+            && !self.pending.values().any(|p| matches!(p, Purpose::State))
+        {
+            self.request(strings(&["state"]), Purpose::State)
+        } else {
+            vec![]
+        }
+    }
+    pub fn refresh_live(&mut self) -> Vec<Intent> {
+        if matches!(
+            self.page,
+            Page::Operations | Page::Operation(_) | Page::Launch(..)
+        ) || matches!(self.form, Form::Operation(_))
+        {
+            self.refresh()
+        } else {
+            self.refresh_sessions()
+        }
     }
     fn target(s: &Value, command: &str) -> Vec<String> {
         strings(&[
@@ -477,7 +568,7 @@ impl Manager {
         self.confirm("Switch account",vec![format!("Move {} to {} while retaining conversation history? The backend waits for safe idle; it never steers.",s["name"].as_str().unwrap_or("session"),account)],args);
     }
     fn dismiss(&mut self) {
-        if matches!(self.form, Form::Progress | Form::Operation(_)) {
+        if matches!(self.form, Form::Progress | Form::Operation(_)) && !self.usage_focus {
             self.go(Page::Home);
         }
         self.dialog = None;
@@ -488,9 +579,12 @@ impl Manager {
         self.show(title, body, &["Confirm", "Cancel"], Form::Confirm(args));
     }
     pub fn key(&mut self, key: KeyEvent) -> Vec<Intent> {
+        self.key_with_wrap(key, key.kind != crossterm::event::KeyEventKind::Repeat)
+    }
+    pub fn key_with_wrap(&mut self, key: KeyEvent, wrap: bool) -> Vec<Intent> {
         self.validate_dialog_names();
         if let Some(d) = &mut self.dialog {
-            match d.key(key) {
+            match d.key_with_wrap(key, wrap) {
                 dialog::Event::None => return vec![],
                 dialog::Event::Dismiss => {
                     self.dismiss();
@@ -505,14 +599,24 @@ impl Manager {
         match key.code {
             KeyCode::Up | KeyCode::Down => {
                 self.options
-                    .step(&self.rows(), false, key.code == KeyCode::Up);
+                    .step_with_wrap(&self.rows(), false, key.code == KeyCode::Up, wrap);
+                if !self.usage_selectable() {
+                    self.usage_focus = false;
+                }
                 vec![]
             }
             KeyCode::Left => {
-                self.options.back = true;
+                if self.usage_focus {
+                    self.usage_focus = false;
+                } else {
+                    self.options.back = true;
+                }
                 vec![]
             }
             KeyCode::Right => {
+                if !self.options.back && self.usage_selectable() {
+                    self.usage_focus = true;
+                }
                 self.options.back = false;
                 vec![]
             }
@@ -554,7 +658,7 @@ impl Manager {
     fn add(&mut self) {
         self.show(
             "Add Account",
-            vec!["Codex account name: 1–12 letters, digits, hyphens or underscores.".into()],
+            vec!["Codex account name: 1–24 letters, digits, hyphens or underscores.".into()],
             &["Add account", "Cancel"],
             Form::Add,
         );
@@ -572,6 +676,14 @@ impl Manager {
             .is_some_and(|r| r.enabled)
         {
             return vec![];
+        }
+        if self.usage_focus && self.usage_selectable() {
+            let key = self.selected_account().unwrap();
+            return self.preview(
+                "Account limits",
+                strings(&["account", "limits", &key]),
+                Purpose::Limits(key),
+            );
         }
         let index = self.options.selected;
         match self.page.clone() {
@@ -738,22 +850,19 @@ impl Manager {
                 }
             }
             Page::Operations => {
-                if let Some(o) = self.operations.get(index) {
-                    self.go(Page::Operation(id(o).into()));
-                } else if let Some((kind, key)) = self
-                    .launches
-                    .iter()
-                    .flat_map(|(kind, rs)| {
-                        rs.iter().map(move |r| {
-                            (
-                                *kind,
-                                r["request"]["request_id"].as_str().unwrap_or("").to_owned(),
-                            )
-                        })
-                    })
-                    .nth(index.saturating_sub(self.operations.len()))
-                {
-                    self.go(Page::Launch(kind, key));
+                if let Some((kind, key)) = self.operation_keys().get(index).cloned() {
+                    if kind == "operation" {
+                        self.go(Page::Operation(key));
+                    } else {
+                        self.go(Page::Launch(
+                            if kind == "launch" {
+                                "launch"
+                            } else {
+                                "resume-launch"
+                            },
+                            key,
+                        ));
+                    }
                 }
                 return self.refresh();
             }
@@ -779,12 +888,20 @@ impl Manager {
                 };
                 match index {
                     0 => self.show(
-                        "Operation progress",
+                        if terminal(o["phase"].as_str().unwrap_or("")) {
+                            "Operation details"
+                        } else {
+                            "Operation progress"
+                        },
                         vec![
                             o["phase"].as_str().unwrap_or("unknown").into(),
                             o["detail"].as_str().unwrap_or("").into(),
                         ],
-                        &["Continue in background"],
+                        &[if terminal(o["phase"].as_str().unwrap_or("")) {
+                            "Close"
+                        } else {
+                            "Continue in background"
+                        }],
                         Form::Operation(key.clone()),
                     ),
                     1 | 2 => self.confirm(
@@ -849,13 +966,13 @@ impl Manager {
             Form::Add => {
                 let name = value(0);
                 if name.is_empty()
-                    || name.len() > 12
+                    || name.len() > 24
                     || !name
                         .bytes()
                         .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
                 {
                     self.dialog.as_mut().unwrap().body =
-                        vec!["Use 1–12 letters, digits, hyphens or underscores.".into()];
+                        vec!["Use 1–24 letters, digits, hyphens or underscores.".into()];
                     return vec![];
                 }
                 strings(&["account", "add", &format!("codex:{name}")])
@@ -945,6 +1062,11 @@ impl Manager {
         let value = match result {
             Ok(v) => v,
             Err(e) => {
+                if matches!(purpose, Purpose::State) {
+                    for session in &mut self.sessions {
+                        session["activity"] = json!("unknown");
+                    }
+                }
                 self.note = e.clone();
                 if matches!(self.form, Form::Loading) && self.foreground == Some(token) {
                     self.show("Could not load", vec![e.clone()], &["Close"], Form::None);
@@ -1010,7 +1132,7 @@ impl Manager {
                 if self.page == Page::Launch(kind, key.clone()) {
                     let body = vec![
                         format!("Request: {key}"),
-                        format!("Phase: {}", value["phase"].as_str().unwrap_or("unknown")),
+                        format!("Status: {}", launch_status(&value)),
                         value["detail"].as_str().unwrap_or("").into(),
                         "Closing this view does not stop or resend the request.".into(),
                     ];
@@ -1025,6 +1147,12 @@ impl Manager {
                         && let Some(d) = &mut self.dialog
                     {
                         d.body = body;
+                    }
+                    if (terminal(value["phase"].as_str().unwrap_or(""))
+                        || value["phase"] == "running")
+                        && let Some(d) = &mut self.dialog
+                    {
+                        d.finish();
                     }
                 }
             }
@@ -1042,6 +1170,9 @@ impl Manager {
                         o["phase"].as_str().unwrap_or("unknown").into(),
                         o["detail"].as_str().unwrap_or("").into(),
                     ];
+                    if terminal(o["phase"].as_str().unwrap_or("")) {
+                        d.finish();
+                    }
                 }
                 if let Some(key) = &self.active_operation
                     && let Some(o) = self.operations.iter().find(|o| id(o) == key)
@@ -1082,7 +1213,11 @@ impl Manager {
                 self.show("Session details", body, &["Close"], Form::None);
             }
             Purpose::Limits(key) => {
-                if self.page != Page::Account(key.clone()) {
+                if self.page != Page::Account(key.clone())
+                    && !(self.usage_focus
+                        && self.usage_selectable()
+                        && self.selected_account().as_deref() == Some(&key))
+                {
                     return vec![];
                 }
                 let limits = &value["limits"];
@@ -1188,6 +1323,11 @@ impl Manager {
                     self.active_operation = Some(id(&value).into());
                     if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
                         self.form = Form::Operation(id(&value).into());
+                        if terminal(value["phase"].as_str().unwrap_or(""))
+                            && let Some(d) = &mut self.dialog
+                        {
+                            d.finish();
+                        }
                     }
                     return self.refresh();
                 } else if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
@@ -1203,6 +1343,13 @@ impl Manager {
         vec![]
     }
     pub fn paint(&mut self, canvas: &mut Canvas, footer: usize) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        self.paint_at(canvas, footer, now);
+    }
+    pub fn paint_at(&mut self, canvas: &mut Canvas, footer: usize, now: i64) {
         let hints = hint_lines(
             &[
                 "▲/▼/◀/▶: Move",
@@ -1216,6 +1363,11 @@ impl Manager {
             canvas.width,
         );
         let controls_start = canvas.height.saturating_sub(hints.len());
+        let list_controls = if self.note.is_empty() {
+            controls_start
+        } else {
+            controls_start.saturating_sub(2)
+        };
         let layout = AccountsLayout::fit(&self.accounts, canvas.width, footer.saturating_sub(10));
         let was = self.inline;
         self.inline = self.inventory_known && layout.is_some();
@@ -1234,6 +1386,9 @@ impl Manager {
         if !self.inline && was && self.page == Page::Home && self.options.selected >= 5 {
             self.options.selected = 2;
         }
+        if self.usage_focus && !self.usage_selectable() {
+            self.usage_focus = false;
+        }
         let rows = self.rows();
         if self.page == Page::Home && self.inline {
             let l = layout.as_ref().unwrap();
@@ -1243,7 +1398,7 @@ impl Manager {
                 .map(|r| unicode_width::UnicodeWidthStr::width(r.label.as_str()))
                 .max()
                 .unwrap_or(0);
-            let top_left = canvas.width.saturating_sub(longest + 2) / 2;
+            let top_left = Options::centered_left(canvas.width, longest + 2);
             for (i, row) in rows.iter().take(5).enumerate() {
                 row.paint(
                     canvas,
@@ -1259,6 +1414,7 @@ impl Manager {
                 9,
                 self.options.selected.checked_sub(5),
                 self.options.back,
+                self.usage_focus,
             );
             self.options.paint_back(canvas, top_left, 3, "Close");
         } else {
@@ -1267,39 +1423,22 @@ impl Manager {
                 selected
                     .as_ref()
                     .and_then(|key| self.account(key))
+                    .filter(|a| {
+                        !self.options.back
+                            && a.details.get("enabled").and_then(Value::as_bool) != Some(false)
+                    })
                     .map(Usage::account)
             } else {
                 None
             };
             let preview_height = usage.as_ref().map(Usage::height).unwrap_or(0);
-            let bottom = if preview_height > 0 {
-                footer.saturating_sub(preview_height + 2)
+            let menu_controls = if preview_height > 0 {
+                list_controls.saturating_sub(preview_height + 1)
             } else {
-                footer.saturating_sub(3)
+                list_controls
             };
-            let detached_id = self.page == Page::Operations
-                && !self.options.back
-                && self.note.is_empty()
-                && rows.get(self.options.selected).is_some_and(|row| {
-                    row.preview_selected_only
-                        && row
-                            .preview_position(canvas.width, Options::left(canvas.width, &rows))
-                            .is_none()
-                        && row.preview.as_deref().is_some_and(|p| {
-                            unicode_width::UnicodeWidthStr::width(p) + 2 <= canvas.width
-                        })
-                })
-                && controls_start.saturating_sub(4) >= 4;
-            let bottom = if detached_id {
-                bottom.min(controls_start.saturating_sub(4))
-            } else {
-                bottom
-            };
+            let bottom = menu_controls.saturating_sub(1);
             let (left, capacity) = if self.page == Page::Sessions {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
                 crate::session_list::paint(
                     canvas,
                     &mut self.options,
@@ -1307,9 +1446,11 @@ impl Manager {
                     self.sessions_known,
                     bottom,
                     now,
+                    menu_controls,
                 )
             } else {
-                self.options.paint(canvas, &rows, 3, bottom)
+                self.options
+                    .paint_menu(canvas, &rows, 3, bottom, menu_controls)
             };
             self.options.paint_back(
                 canvas,
@@ -1321,32 +1462,6 @@ impl Manager {
                     "Back"
                 },
             );
-            if detached_id
-                && !self.options.back
-                && let Some(row) = rows.get(self.options.selected)
-                && row.preview_selected_only
-                && row.preview_position(canvas.width, left).is_none()
-                && let Some(preview) = row.preview.as_deref()
-            {
-                let width = unicode_width::UnicodeWidthStr::width(preview);
-                let y = if rows.len() > capacity {
-                    bottom + 2
-                } else {
-                    3 + rows.len().saturating_sub(self.options.scroll).min(capacity) + 1
-                };
-                if width + 2 <= canvas.width && y + 1 < controls_start && self.note.is_empty() {
-                    canvas.text(
-                        (canvas.width - width) / 2,
-                        y,
-                        preview,
-                        Cell {
-                            fg: [188; 3],
-                            ..Cell::default()
-                        },
-                        false,
-                    );
-                }
-            }
             if let Some(u) = usage {
                 let bar = 24.min(canvas.width.saturating_sub(20));
                 if bar < 12 {
@@ -1359,30 +1474,25 @@ impl Manager {
                     );
                 }
                 if bar >= 12 {
-                    u.paint(
+                    u.paint_selected(
                         canvas,
                         canvas.width.saturating_sub(u.width(bar, u.digits())) / 2,
                         if rows.len() > capacity {
-                            bottom + 2
+                            3 + capacity + 2
                         } else {
                             3 + rows.len().saturating_sub(self.options.scroll).min(capacity) + 1
                         },
                         bar,
                         u.digits(),
+                        true,
                     );
                 }
             }
-            self.options
-                .paint_range(canvas, rows.len(), capacity, bottom);
         }
         if !self.note.is_empty() {
             canvas.text(
                 1,
-                if self.page == Page::Accounts {
-                    footer.saturating_sub(5)
-                } else {
-                    footer.saturating_sub(1)
-                },
+                controls_start.saturating_sub(2),
                 &clip(&self.note, canvas.width.saturating_sub(2)),
                 Cell::default(),
                 false,
@@ -1398,6 +1508,137 @@ impl Manager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn operations_share_creation_order_status_columns_and_id_presentation() {
+        let mut m = setup();
+        m.page = Page::Operations;
+        m.operations = vec![
+            json!({"id":"old","kind":"switch","phase":"complete","created_at":10,"updated_at":1000}),
+            json!({"id":"new","kind":"account_delete","phase":"running","created_at":20,"updated_at":1}),
+            json!({"id":"legacy","kind":"switch","phase":"complete","updated_at":2000}),
+        ];
+        m.launches.insert("launch",vec![json!({"request":{"request_id":"12345678-1234-4234-8234-123456789abc"},"phase":"running","created_at":30})]);
+        m.launches.insert(
+            "resume-launch",
+            vec![json!({"request":{"request_id":"resume-id"},"phase":"running","created_at":15})],
+        );
+        let keys = m.operation_keys();
+        assert_eq!(
+            keys.iter().map(|(_, key)| key.as_str()).collect::<Vec<_>>(),
+            vec![
+                "12345678-1234-4234-8234-123456789abc",
+                "new",
+                "resume-id",
+                "old",
+                "legacy"
+            ]
+        );
+        let rows = m.rows();
+        assert!(rows[0].label.ends_with("complete"));
+        assert!(
+            rows.iter()
+                .all(|r| r.label.find(": ") == rows[0].label.find(": "))
+        );
+        assert!(rows.iter().all(|r| r.preview_gap == 1
+            && r.preview_selected_only
+            && r.preview.as_ref().unwrap().starts_with('(')
+            && r.preview.as_ref().unwrap().ends_with(')')));
+        assert!(Options::previews_detached(60, &rows));
+        m.operations[0]["updated_at"] = json!(999999);
+        assert_eq!(m.operation_keys(), keys);
+        m.options.selected = 0;
+        m.activate();
+        assert_eq!(
+            m.page,
+            Page::Launch("launch", "12345678-1234-4234-8234-123456789abc".into())
+        );
+    }
+    #[test]
+    fn completed_progress_uses_close_and_loading_is_not_a_menu_option() {
+        let mut m = setup();
+        m.page = Page::Sessions;
+        m.sessions_known = false;
+        assert_eq!(
+            m.rows()
+                .iter()
+                .map(|r| r.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["[new session]", "", "Operations"]
+        );
+        let mut c = Canvas::new(60, 18);
+        m.paint_at(&mut c, 17, 100);
+        let text = |y: usize| {
+            c.cells[y * 60..(y + 1) * 60]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+        };
+        assert!(text(7).contains("Loading…"));
+        assert!(text(6).trim().is_empty());
+        m.page = Page::Operation("done".into());
+        m.operations = vec![json!({"id":"done","phase":"complete"})];
+        m.options.selected = 0;
+        m.activate();
+        assert_eq!(m.dialog.as_ref().unwrap().buttons[0].label, "Close");
+        m.form = Form::Operation("done".into());
+        m.dialog = Some(Dialog::progress("Working"));
+        let requests = m.request(strings(&["operations"]), Purpose::Operations);
+        let Intent::Api(token, _) = requests[0] else {
+            panic!()
+        };
+        m.response(token, Ok(json!([{"id":"done","phase":"complete"}])));
+        assert_eq!(m.dialog.as_ref().unwrap().buttons[0].label, "Close");
+        assert_eq!(m.rows()[0].label, "Details");
+    }
+    #[test]
+    fn live_state_refresh_is_single_flight_and_errors_clear_busy_claims() {
+        let mut m = setup();
+        m.page = Page::Sessions;
+        m.sessions =
+            vec![json!({"id":"id", "name":"Working", "availability":"running", "activity":"busy"})];
+        let requests = m.refresh_sessions();
+        let Intent::Api(token, args) = &requests[0] else {
+            panic!()
+        };
+        assert_eq!(args, &strings(&["state"]));
+        assert!(m.refresh_sessions().is_empty());
+        m.response(*token, Ok(json!({"sessions":[{"id":"id","name":"Working","availability":"running","activity":"idle"}]})));
+        assert_eq!(m.sessions[0]["activity"], "idle");
+        let requests = m.refresh_sessions();
+        let Intent::Api(token, _) = &requests[0] else {
+            panic!()
+        };
+        m.sessions[0]["activity"] = json!("busy");
+        m.response(*token, Err("Discovery unavailable".into()));
+        assert_eq!(m.sessions[0]["activity"], "unknown");
+        m.page = Page::Home;
+        assert!(m.refresh_sessions().is_empty());
+    }
+    #[test]
+    fn disabled_accounts_have_no_hover_usage_and_login_requires_attention() {
+        let mut m = setup();
+        m.accounts[0].details.insert("enabled".into(), json!(false));
+        m.accounts[1]
+            .details
+            .insert("auth_required".into(), json!(true));
+        m.accounts.extend((3..9).map(account));
+        m.page = Page::Accounts;
+        let rows = m.rows();
+        assert_eq!(rows[1].preview.as_deref(), Some("Disabled"));
+        assert_eq!(rows[1].preview_fg, crate::widgets::MUTED);
+        assert_eq!(rows[2].preview.as_deref(), Some("Enabled*"));
+        m.options.selected = 1;
+        let mut c = Canvas::new(40, 18);
+        m.paint(&mut c, 17);
+        for y in 6..16 {
+            let row = c.cells[y * 40..(y + 1) * 40]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>();
+            assert!(!row.contains("Disabled"));
+            assert!(!row.contains('━'));
+        }
+    }
     fn account(n: usize) -> Account {
         serde_json::from_value(json!({"id":format!("codex:account{n}"),"selectable":true,"enabled":true,"usage_fresh":true,"usage":{"observed_at":100,"short":{"duration_minutes":300,"used_percent":25},"weekly":{"duration_minutes":10080,"used_percent":35}},"switch_thresholds":{"customized":true,"short_percent":80,"weekly_percent":90}})).unwrap()
     }
@@ -1407,6 +1648,49 @@ mod tests {
         m.capabilities =
             json!({"providers":[{"id":"codex","account_limits":true,"enrollment":true}]});
         m
+    }
+    #[test]
+    fn home_usage_focus_limits_returns_to_same_selection() {
+        let mut m = setup();
+        m.inline = true;
+        m.options.selected = 5;
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        m.key(key(KeyCode::Right));
+        assert!(m.usage_focus);
+        let sent = m.key(key(KeyCode::Enter));
+        let Intent::Api(token, args) = &sent[0] else {
+            panic!()
+        };
+        assert_eq!(args, &strings(&["account", "limits", "codex:account1"]));
+        m.response(
+            *token,
+            Ok(json!({"limits":{"short_percent":80,"weekly_percent":90}})),
+        );
+        assert!(matches!(m.form, Form::Limits(_)));
+        m.key(key(KeyCode::Esc));
+        assert_eq!(m.page, Page::Home);
+        assert_eq!(m.options.selected, 5);
+        assert!(m.usage_focus);
+        let sent = m.key(key(KeyCode::Enter));
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        m.response(token, Ok(json!({"limits":{}})));
+        let sent = m.submit(0, vec!["20".into(), "10".into()]);
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        m.response(token, Ok(json!({"limits":{}})));
+        m.submit(0, vec![]);
+        assert_eq!(m.page, Page::Home);
+        assert_eq!(m.options.selected, 5);
+        assert!(m.usage_focus);
+        m.key(key(KeyCode::Left));
+        assert!(!m.usage_focus);
+        assert!(!m.options.back);
+        m.accounts[0].details.insert("enabled".into(), json!(false));
+        m.key(key(KeyCode::Right));
+        assert!(!m.usage_focus);
     }
     #[test]
     fn duplicate_account_validation_refreshes_without_io() {
@@ -1457,7 +1741,7 @@ mod tests {
         let range = (0..18).find(|y| row(*y).contains(" of ")).unwrap();
         assert!(!row(range + 1).contains('━'));
         assert!(row(range + 2).contains("5h"));
-        assert!(row(range + 3).contains("wkly"));
+        assert!(row(range + 3).contains("wk"));
     }
     #[test]
     fn selected_operation_id_falls_below_list_only_when_it_fits() {
@@ -1484,7 +1768,7 @@ mod tests {
             assert!(!text.contains(b));
             if width == 45 && height == 16 {
                 assert!(c.cells[5 * width..6 * width].iter().all(|c| c.glyph == " "));
-                assert_eq!(c.cells[6 * width + (width - a.len()) / 2].glyph, "1");
+                assert_eq!(c.cells[6 * width + (width - a.len() - 2) / 2].glyph, "(");
             }
         }
     }
@@ -1657,7 +1941,7 @@ mod tests {
         };
         assert!(row(6).trim().is_empty());
         assert!(row(7).contains("5h"));
-        assert!(row(8).contains("wkly"));
+        assert!(row(8).contains("wk"));
         assert!(!row(13).contains('━'));
         m.paint(&mut Canvas::new(100, 40), 39);
         assert_eq!(m.page, Page::Home);

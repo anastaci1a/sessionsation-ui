@@ -1,8 +1,46 @@
 //! Reusable terminal controls. No filesystem, provider, host or application policy.
 use crate::render::{Accent, Canvas, Cell};
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+pub const SECONDARY: [u8; 3] = [188; 3];
+pub const MUTED: [u8; 3] = [108; 3];
+pub const SELECTED: [u8; 3] = [238; 3];
+/// Native repeat/release events are exact. Legacy arrow bursts have no release
+/// bytes, so a quiet gap separates gestures conservatively.
+#[derive(Default)]
+pub struct Navigation {
+    last: Option<(KeyCode, Instant)>,
+    event_types: bool,
+}
+impl Navigation {
+    pub fn key(&mut self, key: KeyEvent) -> bool {
+        self.key_at(key, Instant::now())
+    }
+    fn key_at(&mut self, key: KeyEvent, now: Instant) -> bool {
+        if key.kind == KeyEventKind::Release {
+            self.event_types = true;
+            self.last = None;
+            return false;
+        }
+        if key.kind == KeyEventKind::Repeat {
+            self.event_types = true;
+        }
+        if !matches!(key.code, KeyCode::Up | KeyCode::Down) {
+            self.last = None;
+            return true;
+        }
+        let fresh = key.kind == KeyEventKind::Press
+            && (self.event_types
+                || self.last.is_none_or(|(last, at)| {
+                    last != key.code
+                        || now.saturating_duration_since(at) >= Duration::from_millis(750)
+                }));
+        self.last = Some((key.code, now));
+        fresh
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct TextInput {
@@ -149,6 +187,9 @@ pub struct Row {
     pub preview_selected_only: bool,
     pub preview_column: Option<usize>,
     pub preview_accent: bool,
+    pub preview_fg: [u8; 3],
+    pub account: bool,
+    pub preview_gap: usize,
     pub separator: bool,
 }
 impl Row {
@@ -164,11 +205,27 @@ impl Row {
             preview_selected_only: false,
             preview_column: None,
             preview_accent: false,
+            preview_fg: SECONDARY,
+            account: false,
+            preview_gap: 2,
             separator: false,
         }
     }
     pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
         self.preview = Some(preview.into());
+        self.preview_selected_only = true;
+        self
+    }
+    pub fn account(mut self) -> Self {
+        self.account = true;
+        self
+    }
+    pub fn preview_color(mut self, color: [u8; 3]) -> Self {
+        self.preview_fg = color;
+        self
+    }
+    pub fn preview_gap(mut self, gap: usize) -> Self {
+        self.preview_gap = gap;
         self
     }
     pub fn with_right_preview(mut self, preview: impl Into<String>) -> Self {
@@ -185,6 +242,9 @@ impl Row {
         self.preview = Some(preview.into());
         self.preview_column = Some(column);
         self.preview_accent = accent;
+        if !accent {
+            self.preview_fg = MUTED;
+        }
         self
     }
     pub fn with_selected_preview(mut self, preview: impl Into<String>) -> Self {
@@ -194,7 +254,7 @@ impl Row {
     }
     pub fn preview_position(&self, width: usize, x: usize) -> Option<usize> {
         let preview = self.preview.as_deref()?;
-        let minimum = x + 2 + UnicodeWidthStr::width(self.label.as_str()) + 2;
+        let minimum = x + 2 + UnicodeWidthStr::width(self.label.as_str()) + self.preview_gap;
         let start = if let Some(column) = self.preview_column {
             x + column
         } else if self.right_preview {
@@ -214,10 +274,24 @@ impl Row {
             preview_selected_only: false,
             preview_column: None,
             preview_accent: false,
+            preview_fg: SECONDARY,
+            account: false,
+            preview_gap: 2,
             separator: true,
         }
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, selected: bool, back: bool) {
+        self.paint_with_preview(canvas, x, y, selected, back, true);
+    }
+    fn paint_with_preview(
+        &self,
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        selected: bool,
+        back: bool,
+        show_preview: bool,
+    ) {
         if self.separator {
             canvas.accent_text(
                 x,
@@ -234,60 +308,90 @@ impl Row {
         canvas.accent_text(
             x,
             y,
-            if selected { "●" } else { "○" },
+            if self.account {
+                if selected && !back { "▸" } else { " " }
+            } else if selected {
+                "●"
+            } else {
+                "○"
+            },
             Accent {
                 brightness: if self.enabled && !back { 1000 } else { 600 },
                 bold: selected,
-                strike: !self.enabled,
+                strike: false,
                 ..Accent::default()
             },
         );
         canvas.text(x + 1, y, " ", Cell::default(), true);
-        canvas.text(
-            x + 2,
-            y,
-            &self.label,
-            Cell {
-                fg: if !self.enabled {
-                    [108; 3]
-                } else if selected {
-                    [238; 3]
-                } else {
-                    [188; 3]
+        if self.account {
+            canvas.accent_text(
+                x + 2,
+                y,
+                &self.label,
+                Accent {
+                    bold: selected && !back && self.enabled,
+                    strike: !self.enabled,
+                    ..Accent::default()
                 },
-                bold: selected,
-                strike: !self.enabled,
-                ..Cell::default()
-            },
-            self.enabled,
-        );
+            );
+        } else {
+            canvas.text(
+                x + 2,
+                y,
+                &self.label,
+                Cell {
+                    fg: if !self.enabled {
+                        [108; 3]
+                    } else if selected {
+                        [238; 3]
+                    } else {
+                        [188; 3]
+                    },
+                    bold: selected && self.enabled,
+                    strike: !self.enabled,
+                    ..Cell::default()
+                },
+                self.enabled,
+            );
+        }
         if let Some(preview) = &self.preview
+            && show_preview
             && (!self.preview_selected_only || (selected && !back))
             && let Some(start) = self.preview_position(canvas.width, x)
         {
-            if self.preview_accent {
-                canvas.accent_text(
-                    start,
-                    y,
-                    preview,
-                    Accent {
-                        brightness: if selected && !back { 1000 } else { 600 },
-                        bold: selected && !back,
-                        ..Accent::default()
-                    },
-                );
-            } else {
-                canvas.text(
-                    start,
-                    y,
-                    preview,
-                    Cell {
-                        fg: if self.enabled { [188; 3] } else { [108; 3] },
-                        ..Cell::default()
-                    },
-                    false,
-                );
-            }
+            self.paint_preview(canvas, start, y, preview, selected && !back);
+        }
+    }
+    fn paint_preview(
+        &self,
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        preview: &str,
+        selected: bool,
+    ) {
+        if self.preview_accent {
+            canvas.accent_text(
+                x,
+                y,
+                preview,
+                Accent {
+                    brightness: if selected { 1000 } else { 600 },
+                    bold: false,
+                    ..Accent::default()
+                },
+            );
+        } else {
+            canvas.text(
+                x,
+                y,
+                preview,
+                Cell {
+                    fg: self.preview_fg,
+                    ..Cell::default()
+                },
+                false,
+            );
         }
     }
 }
@@ -301,17 +405,22 @@ pub struct Options {
 
 /// Shared bottom hints: token wrapping never changes the star-field geometry.
 pub fn paint_hint(canvas: &mut Canvas, x: usize, y: usize, text: &str) {
-    canvas.accent_text(
-        x,
-        y,
-        text,
-        Accent {
-            soft: true,
-            brightness: 550,
-            flash: false,
-            ..Accent::default()
-        },
-    );
+    let mut x = x;
+    for glyph in text.graphemes(true) {
+        if glyph != " " {
+            canvas.text(
+                x,
+                y,
+                glyph,
+                Cell {
+                    fg: SECONDARY,
+                    ..Cell::default()
+                },
+                false,
+            );
+        }
+        x += UnicodeWidthStr::width(glyph);
+    }
 }
 pub fn paint_hints(canvas: &mut Canvas, hints: &[String]) {
     let width = hints
@@ -363,21 +472,40 @@ pub fn clip(text: &str, width: usize) -> String {
         .collect()
 }
 impl Options {
+    /// Bias odd free space right; six free columns need four on the arrow side.
+    pub fn centered_left(width: usize, content: usize) -> usize {
+        let free = width.saturating_sub(content);
+        if free == 6 { 4 } else { free.div_ceil(2) }
+    }
     /// Optional bottom action participates in focus without scrolling the list.
     pub fn step(&mut self, rows: &[Row], bottom_action: bool, previous: bool) {
+        self.step_with_wrap(rows, bottom_action, previous, true);
+    }
+    pub fn step_with_wrap(
+        &mut self,
+        rows: &[Row],
+        bottom_action: bool,
+        previous: bool,
+        wrap: bool,
+    ) {
         let count = rows.len() + usize::from(bottom_action);
         if count == 0 {
             return;
         }
         self.back = false;
         self.selected %= count;
+        let mut probe = self.selected;
         for _ in 0..count {
-            self.selected = if previous {
-                (self.selected + count - 1) % count
+            if !wrap && (previous && probe == 0 || !previous && probe + 1 == count) {
+                return;
+            }
+            probe = if previous {
+                (probe + count - 1) % count
             } else {
-                (self.selected + 1) % count
+                (probe + 1) % count
             };
-            if self.selected == rows.len() || rows[self.selected].enabled {
+            if probe == rows.len() || rows[probe].enabled {
+                self.selected = probe;
                 break;
             }
         }
@@ -389,7 +517,7 @@ impl Options {
             .max()
             .unwrap_or(0)
             .min(width.saturating_sub(8));
-        let mut left = width.saturating_sub(longest + 2) / 2;
+        let mut left = Self::centered_left(width, longest + 2);
         if let Some(right) = rows
             .iter()
             .filter(|r| r.right_preview)
@@ -400,6 +528,66 @@ impl Options {
             left = left.min(width.saturating_sub(longest + right + 6).max(4));
         }
         left
+    }
+    pub fn previews_detached(width: usize, rows: &[Row]) -> bool {
+        let left = Self::left(width, rows);
+        rows.iter().any(|r| {
+            r.preview_selected_only
+                && r.preview.is_some()
+                && r.preview_position(width, left).is_none()
+        })
+    }
+    /// One fit decision for the whole list, independent of selection and scrolling.
+    pub fn paint_menu(
+        &mut self,
+        canvas: &mut Canvas,
+        rows: &[Row],
+        top: usize,
+        bottom: usize,
+        controls_start: usize,
+    ) -> (usize, usize) {
+        let detached = Self::previews_detached(canvas.width, rows);
+        let bottom = bottom.min(controls_start.saturating_sub(if detached { 3 } else { 1 }));
+        // Reserve a range counter only after the options stop fitting.
+        let bottom = if rows.len() > bottom.saturating_sub(top) {
+            bottom.saturating_sub(1)
+        } else {
+            bottom
+        };
+        let result = self.paint(canvas, rows, top, bottom);
+        self.paint_range(canvas, rows.len(), result.1, bottom);
+        if detached
+            && !self.back
+            && result.1 > 0
+            && let Some(row) = rows.get(self.selected)
+            && row.preview_selected_only
+            && let Some(preview) = row.preview.as_deref()
+        {
+            let y = if rows.len() > result.1 {
+                bottom + 2
+            } else {
+                top + rows.len().saturating_sub(self.scroll).min(result.1) + 1
+            };
+            if y + 1 < controls_start && canvas.width > 3 {
+                let max = canvas.width - 2;
+                let text = if UnicodeWidthStr::width(preview) > max {
+                    format!("{}…", clip(preview, max - 1))
+                } else {
+                    preview.to_owned()
+                };
+                row.paint_preview(
+                    canvas,
+                    canvas
+                        .width
+                        .saturating_sub(UnicodeWidthStr::width(text.as_str()))
+                        / 2,
+                    y,
+                    &text,
+                    true,
+                );
+            }
+        }
+        result
     }
     pub fn paint(
         &mut self,
@@ -419,13 +607,15 @@ impl Options {
         }
         self.scroll = self.scroll.min(rows.len().saturating_sub(capacity));
         let left = Self::left(canvas.width, rows);
+        let inline = !Self::previews_detached(canvas.width, rows);
         for (i, row) in rows.iter().enumerate().skip(self.scroll).take(capacity) {
-            row.paint(
+            row.paint_with_preview(
                 canvas,
                 left,
                 top + i - self.scroll,
                 i == self.selected && !self.back,
                 self.back,
+                inline || !row.preview_selected_only,
             );
         }
         (left, capacity)
@@ -473,6 +663,123 @@ impl Options {
 mod tests {
     use super::*;
     #[test]
+    fn held_arrows_stop_at_edges_and_release_rearms_wrap() {
+        let mut nav = Navigation::default();
+        let start = Instant::now();
+        let down = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE);
+        let mut repeated = down;
+        repeated.kind = KeyEventKind::Repeat;
+        let mut released = down;
+        released.kind = KeyEventKind::Release;
+        let rows = vec![
+            Row::yes("First"),
+            Row::yes("Last"),
+            Row::gate("Unavailable", false),
+        ];
+        let mut options = Options::default();
+        options.step_with_wrap(&rows, false, false, nav.key_at(down, start));
+        assert_eq!(options.selected, 1);
+        for i in 1..20 {
+            options.step_with_wrap(
+                &rows,
+                false,
+                false,
+                nav.key_at(repeated, start + Duration::from_millis(i * 100)),
+            );
+            assert_eq!(options.selected, 1);
+        }
+        nav.key_at(released, start + Duration::from_millis(2000));
+        options.step_with_wrap(
+            &rows,
+            false,
+            false,
+            nav.key_at(down, start + Duration::from_millis(2001)),
+        );
+        assert_eq!(options.selected, 0);
+        let up = KeyEvent::new(KeyCode::Up, crossterm::event::KeyModifiers::NONE);
+        let mut repeated_up = up;
+        repeated_up.kind = KeyEventKind::Repeat;
+        options.step_with_wrap(
+            &rows,
+            false,
+            true,
+            nav.key_at(repeated_up, start + Duration::from_millis(2100)),
+        );
+        assert_eq!(options.selected, 0);
+        options.step_with_wrap(
+            &rows,
+            false,
+            true,
+            nav.key_at(up, start + Duration::from_millis(2200)),
+        );
+        assert_eq!(options.selected, 1);
+        let mut legacy = Navigation::default();
+        assert!(legacy.key_at(down, start));
+        assert!(!legacy.key_at(down, start + Duration::from_millis(500)));
+        assert!(!legacy.key_at(down, start + Duration::from_millis(530)));
+        assert!(legacy.key_at(down, start + Duration::from_millis(1300)));
+    }
+    #[test]
+    fn eighteen_options_fit_twenty_two_body_rows_before_scrolling() {
+        for count in [18, 19, 20] {
+            let rows = vec![Row::yes("Option"); count];
+            let mut options = Options::default();
+            let mut c = Canvas::new(80, 24);
+            let (_, capacity) = options.paint_menu(&mut c, &rows, 3, 22, 23);
+            if count <= 19 {
+                assert_eq!(capacity, 19);
+                let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+                assert!(!text.contains(" of "));
+            } else {
+                assert_eq!(capacity, 18);
+                assert!(c.cells[21 * 80..22 * 80].iter().any(|c| c.glyph == "f"));
+            }
+            assert!(c.cells[22 * 80..23 * 80].iter().all(|c| c.glyph == " "));
+        }
+    }
+    #[test]
+    fn arrow_centering_bias_and_unavailable_styles_are_shared() {
+        assert_eq!(Options::centered_left(31, 10), 11);
+        let left = Options::centered_left(16, 10);
+        assert_eq!(left, 4);
+        let mut c = Canvas::new(16, 4);
+        Options::default().paint_back(&mut c, left, 1, "Back");
+        assert_eq!(c.cells[17].glyph, "◀");
+        let row = Row::gate("Unavailable", false);
+        let mut c = Canvas::new(30, 2);
+        row.paint(&mut c, 2, 0, true, false);
+        assert!(!c.cells[2].strike);
+        assert!(c.cells[4].strike);
+        assert!(!c.cells[4].bold);
+    }
+    #[test]
+    fn global_preview_fit_includes_offscreen_rows_and_back_hides_details() {
+        let mut rows = vec![Row::yes("Item").with_preview("short"); 20];
+        rows[19] =
+            Row::yes("Item").with_preview("a very long path that cannot fit beside any option");
+        assert!(Options::previews_detached(50, &rows));
+        let mut options = Options::default();
+        let mut c = Canvas::new(50, 18);
+        let (left, capacity) = options.paint_menu(&mut c, &rows, 3, 14, 17);
+        assert!(capacity < rows.len());
+        let text = |c: &Canvas, y: usize| {
+            c.cells[y * 50..(y + 1) * 50]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+        };
+        assert!(!text(&c, 3).contains("short"));
+        assert!(text(&c, 13).contains("of 20"));
+        assert!(text(&c, 15).contains("short"));
+        for cell in &c.cells[15 * 50..16 * 50] {
+            assert!(!cell.bold);
+        }
+        options.back = true;
+        let mut back = Canvas::new(50, 18);
+        assert_eq!(options.paint_menu(&mut back, &rows, 3, 14, 17).0, left);
+        assert!(!text(&back, 15).contains("short"));
+    }
+    #[test]
     fn editor_moves_and_erases_whole_graphemes_and_paste_cannot_submit() {
         let mut input = TextInput::new("a界e\u{301}".into());
         input.edit(KeyCode::Backspace);
@@ -512,11 +819,11 @@ mod tests {
         let mut options = Options::default();
         let mut small = Canvas::new(40, 12);
         let (small_left, _) = options.paint(&mut small, &rows, 3, 8);
-        assert_eq!(small_left, (40 - 13) / 2);
+        assert_eq!(small_left, (40usize - 13).div_ceil(2));
         assert!(!small.cells.iter().any(|c| c.glyph == "/"));
         let mut wide = Canvas::new(120, 30);
         let (wide_left, _) = options.paint(&mut wide, &rows, 3, 8);
-        assert_eq!(wide_left, (120 - 13) / 2);
+        assert_eq!(wide_left, (120usize - 13).div_ceil(2));
         assert!(wide.cells.iter().any(|c| c.glyph == "/"));
     }
     #[test]
@@ -552,27 +859,15 @@ mod tests {
         );
     }
     #[test]
-    fn footer_hints_use_reference_soft_palette_fade_and_centering() {
+    fn footer_hints_are_readable_gray_and_centered_at_every_frame() {
         let mut field = crate::render::Field::new(80, 24, 1967);
         for time in [0, 1467, 4060, 8000] {
             let mut canvas = field.paint(time);
             let hints = vec!["Esc: Back".into()];
             paint_hints(&mut canvas, &hints);
-            let mut expected = field.paint(time);
-            expected.accent_text(
-                35,
-                23,
-                "E",
-                Accent {
-                    soft: true,
-                    brightness: 550,
-                    flash: false,
-                    ..Accent::default()
-                },
-            );
             let cell = &canvas.cells[23 * 80 + 35];
             assert_eq!(cell.glyph, "E");
-            assert_eq!(cell.fg, expected.cells[23 * 80 + 35].fg);
+            assert_eq!(cell.fg, SECONDARY);
             assert!(!cell.bold);
         }
     }

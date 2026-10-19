@@ -52,6 +52,7 @@ struct Saved {
     listing: Listing,
 }
 pub struct App {
+    navigation: crate::widgets::Navigation,
     pub manager: crate::management::Manager,
     pub page: Page,
     pub options: Options,
@@ -100,6 +101,7 @@ impl App {
             ..Draft::default()
         };
         Self {
+            navigation: crate::widgets::Navigation::default(),
             manager: crate::management::Manager::default(),
             page: Page::Home,
             options: Options::default(),
@@ -231,11 +233,11 @@ impl App {
     fn name_valid(&self, name: &str) -> bool {
         if self.resume.is_some() {
             !name.is_empty()
-                && name.chars().count() <= 12
+                && name.chars().count() <= 24
                 && name.trim() == name
                 && !name.chars().any(char::is_control)
         } else {
-            valid_name(name) && name.chars().count() <= 12
+            valid_name(name) && name.chars().count() <= 24
         }
     }
     fn ready(&self) -> bool {
@@ -256,14 +258,18 @@ impl App {
     pub fn rows(&self) -> Vec<Row> {
         let path = |p: Option<&Path>| {
             p.map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "<unset>".into())
+                .unwrap_or_else(|| "[unset]".into())
         };
         match &self.page {
             Page::Home | Page::Management => self.manager.rows(),
             Page::Summary => vec![
                 Row::yes(format!(
                     "Account: {}",
-                    self.draft.account.as_deref().unwrap_or("<unset>")
+                    self.draft
+                        .account
+                        .as_deref()
+                        .map(crate::usage::short_name)
+                        .unwrap_or_else(|| "[unset]".into())
                 )),
                 Row::yes(format!(
                     "Space: {}",
@@ -272,14 +278,14 @@ impl App {
                         .as_ref()
                         .map(Space::label)
                         .filter(|s| !s.is_empty())
-                        .unwrap_or("<unset>")
+                        .unwrap_or("[unset]")
                 )),
                 Row::yes(format!(
                     "Name: {}",
                     if self.draft.name.is_empty() {
-                        "<unset>"
+                        "[unset]".to_owned()
                     } else {
-                        &self.draft.name
+                        crate::usage::display_name(&self.draft.name)
                     }
                 )),
                 Row::gate(
@@ -319,6 +325,7 @@ impl App {
                 .map(|(a, usage)| {
                     Row::gate(crate::usage::short_name(&a.id), a.selectable)
                         .with_right_preview(usage)
+                        .account()
                 })
                 .collect(),
             Page::Spaces => std::iter::once(Row::yes("Create new Space"))
@@ -339,9 +346,9 @@ impl App {
                 valid_name(&self.input.value) && self.listing.creatable,
             )],
             Page::Directory(_) => {
-                std::iter::once(Row::gate("<use this dir>", self.listing.existing))
+                std::iter::once(Row::gate("[use this dir]", self.listing.existing))
                     .chain(std::iter::once(Row::gate(
-                        "<create dir>",
+                        "[create dir]",
                         self.listing.existing || self.listing.creatable,
                     )))
                     .chain(self.listing.children.iter().map(|p| {
@@ -374,7 +381,7 @@ impl App {
         self.options.back = false;
         self.input.value = text;
         self.input.cursor = self.input.value.len();
-        self.input.max_chars = (self.page == Page::Name).then_some(12);
+        self.input.max_chars = (self.page == Page::Name).then_some(24);
         self.listing = Listing::default();
         self.error.clear();
         self.dirty = true;
@@ -411,7 +418,7 @@ impl App {
             self.options.selected = old.selected;
             self.input.value = old.text;
             self.input.cursor = self.input.value.len();
-            self.input.max_chars = (self.page == Page::Name).then_some(12);
+            self.input.max_chars = (self.page == Page::Name).then_some(24);
             self.listing = old.listing;
             self.options.back = false;
             self.options.scroll = 0;
@@ -819,11 +826,15 @@ impl App {
         )
     }
     pub fn key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        let wrap = self.navigation.key(key);
+        if key.kind == crossterm::event::KeyEventKind::Release {
+            return vec![];
+        }
         self.dirty = true;
         if self.launch_dialog && !key.modifiers.contains(KeyModifiers::CONTROL) {
             if let Some(d) = &mut self.manager.dialog
                 && matches!(
-                    d.key(key),
+                    d.key_with_wrap(key, wrap),
                     crate::dialog::Event::Dismiss | crate::dialog::Event::Choose(..)
                 )
             {
@@ -840,7 +851,7 @@ impl App {
         if matches!(self.page, Page::Home | Page::Management)
             && !key.modifiers.contains(KeyModifiers::CONTROL)
         {
-            let intents = self.manager.key(key);
+            let intents = self.manager.key_with_wrap(key, wrap);
             return self.management(intents);
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -886,10 +897,11 @@ impl App {
                 }
             }
             KeyCode::Up | KeyCode::Down => {
-                self.options.step(
+                self.options.step_with_wrap(
                     &self.rows(),
                     self.page == Page::Summary,
                     key.code == KeyCode::Up,
+                    wrap,
                 );
                 vec![]
             }
@@ -1047,8 +1059,19 @@ impl App {
         }
         let rows = self.rows();
         let top = if self.is_form() { 5 } else { 3 };
-        let bottom = footer - 4 - usize::from(self.page == Page::Summary) * 2;
-        let (left, capacity) = self.options.paint(&mut canvas, &rows, top, bottom);
+        let has_note = !self.error.is_empty()
+            || self.pending
+            || self.page == Page::Launching
+            || self.page == Page::Accounts && !self.options.back;
+        let menu_controls = if has_note {
+            footer.saturating_sub(2)
+        } else {
+            footer
+        };
+        let bottom = menu_controls.saturating_sub(if self.page == Page::Summary { 3 } else { 1 });
+        let (left, capacity) =
+            self.options
+                .paint_menu(&mut canvas, &rows, top, bottom, menu_controls);
         if self.page != Page::Launching {
             self.options.paint_back(
                 &mut canvas,
@@ -1098,14 +1121,20 @@ impl App {
                 self.options.back,
             );
         }
-        self.options
-            .paint_range(&mut canvas, rows.len(), capacity, footer - 3);
+
         let note = if !self.error.is_empty() {
             self.error.clone()
         } else if self.page == Page::Accounts {
             self.accounts
                 .get(self.options.selected)
-                .map(|a| format!("{} — {}", a.id, crate::usage::Usage::account(a).status))
+                .filter(|_| !self.options.back)
+                .map(|a| {
+                    format!(
+                        "{} — {}",
+                        crate::usage::short_name(&a.id),
+                        crate::usage::Usage::account(a).status
+                    )
+                })
                 .unwrap_or_default()
         } else if self.pending {
             "Checking choices…".into()
@@ -1127,7 +1156,11 @@ impl App {
             footer - 2,
             &note,
             Cell {
-                fg: [215, 135, 0],
+                fg: if self.page == Page::Accounts && self.error.is_empty() {
+                    crate::widgets::SECONDARY
+                } else {
+                    [215, 135, 0]
+                },
                 ..Cell::default()
             },
             false,
@@ -1145,6 +1178,36 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repeated_arrows_stop_and_a_released_press_wraps() {
+        use crossterm::event::KeyEventKind;
+        let mut app = app();
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let mut repeat = down;
+        repeat.kind = KeyEventKind::Repeat;
+        let mut release = down;
+        release.kind = KeyEventKind::Release;
+        app.key(down);
+        for _ in 0..20 {
+            app.key(repeat);
+        }
+        assert_eq!(app.manager.options.selected, 4);
+        app.key(release);
+        app.key(down);
+        assert_eq!(app.manager.options.selected, 0);
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        let mut repeat_up = up;
+        repeat_up.kind = KeyEventKind::Repeat;
+        for _ in 0..20 {
+            app.key(repeat_up);
+        }
+        assert_eq!(app.manager.options.selected, 0);
+        let mut release_up = up;
+        release_up.kind = KeyEventKind::Release;
+        app.key(release_up);
+        app.key(up);
+        assert_eq!(app.manager.options.selected, 4);
+    }
     fn app() -> App {
         App::new(
             Preferences::default(),
@@ -1323,19 +1386,19 @@ mod tests {
         assert!(matches!(&a.draft.space,Some(Space::Existing {id,..}) if id=="w1"));
     }
     #[test]
-    fn session_editor_stops_at_twelve_and_does_not_limit_other_editors() {
+    fn session_editor_stops_at_twenty_four_and_does_not_limit_other_editors() {
         let mut a = app();
         a.push(Page::Name, String::new());
-        a.paste("abcdefghijklmnop");
-        assert_eq!(a.input.value, "abcdefghijkl");
+        a.paste("abcdefghijklmnopqrstuvwxyz");
+        assert_eq!(a.input.value, "abcdefghijklmnopqrstuvwx");
         assert!(a.name_valid(&a.input.value));
-        assert!(!a.name_valid("thirteenchars"));
+        assert!(!a.name_valid("abcdefghijklmnopqrstuvwxy"));
         a.push(Page::SpaceName, String::new());
         a.paste("a longer workspace name");
         assert_eq!(a.input.value, "a longer workspace name");
         a.pop();
         a.paste("ignored");
-        assert_eq!(a.input.value, "abcdefghijkl");
+        assert_eq!(a.input.value, "abcdefghijklmnopqrstuvwx");
     }
     #[test]
     fn summary_start_is_adjacent_to_fields_and_home_control_says_close() {

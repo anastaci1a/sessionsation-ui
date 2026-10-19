@@ -8,6 +8,9 @@ use unicode_width::UnicodeWidthStr;
 
 pub fn short_name(id: &str) -> String {
     let name = id.split_once(':').map_or(id, |(_, n)| n);
+    display_name(name)
+}
+pub fn display_name(name: &str) -> String {
     let clean: String = name.chars().filter(|c| !c.is_control()).collect();
     if UnicodeWidthStr::width(clean.as_str()) <= 12 {
         return clean;
@@ -55,7 +58,7 @@ impl Usage {
         let windows = {
             [
                 ("short", "5h", "short_percent", 300),
-                ("weekly", "wkly", "weekly_percent", 10080),
+                ("weekly", "wk", "weekly_percent", 10080),
             ]
             .into_iter()
             .filter(|(key, _, _, duration)| {
@@ -89,7 +92,11 @@ impl Usage {
         }
     }
     pub fn height(&self) -> usize {
-        self.windows.len().max(1)
+        if self.status == "Disabled" || self.status == "Login required" {
+            1
+        } else {
+            self.windows.len().max(1)
+        }
     }
     pub fn digits(&self) -> usize {
         if self
@@ -103,15 +110,74 @@ impl Usage {
         }
     }
     pub fn width(&self, bar: usize, digits: usize) -> usize {
-        if self.windows.is_empty() {
+        if self.windows.is_empty() || self.status == "Disabled" || self.status == "Login required" {
             UnicodeWidthStr::width(self.status.as_str())
         } else {
-            bar + digits + 7 + if self.stale { 6 } else { 0 }
+            bar + digits + 5 + if self.stale { 6 } else { 0 }
         }
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, digits: usize) {
-        if self.windows.is_empty() {
-            canvas.accent_text(x, y, &self.status, Accent::default());
+        self.paint_selected(canvas, x, y, bar, digits, false);
+    }
+    pub fn paint_focused(
+        &self,
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        bar: usize,
+        digits: usize,
+    ) {
+        self.paint_selected(canvas, x, y, bar, digits, true);
+        for row in 0..self.windows.len() {
+            for col in x..(x + bar).min(canvas.width) {
+                if y + row >= canvas.height {
+                    break;
+                }
+                let cell = &mut canvas.cells[(y + row) * canvas.width + col];
+                let [r, g, b] = cell.fg;
+                if r == g && g == b {
+                    cell.fg = [188; 3];
+                } else {
+                    let mean = (u16::from(r) + u16::from(g) + u16::from(b)) / 3;
+                    cell.fg = cell.fg.map(|v| ((u16::from(v) * 4 + mean) / 5) as u8);
+                }
+                cell.bold = true;
+            }
+        }
+    }
+    pub fn paint_selected(
+        &self,
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        bar: usize,
+        digits: usize,
+        selected: bool,
+    ) {
+        if self.status == "Disabled" {
+            canvas.text(
+                x,
+                y,
+                &self.status,
+                Cell {
+                    fg: crate::widgets::MUTED,
+                    ..Cell::default()
+                },
+                false,
+            );
+            return;
+        }
+        if self.windows.is_empty() || self.status == "Login required" {
+            canvas.accent_text(
+                x,
+                y,
+                &self.status,
+                Accent {
+                    brightness: if selected { 1000 } else { 600 },
+                    bold: false,
+                    ..Accent::default()
+                },
+            );
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
@@ -170,12 +236,26 @@ impl Usage {
                 .map(|p| format!("{p:.0}"))
                 .unwrap_or_else(|| "?".into());
             let label = format!(
-                "{:>digits$}% {:<4}{}",
+                "{:>digits$}% {}{}",
                 percent,
                 window.label,
                 if self.stale { " stale" } else { "" }
             );
-            canvas.text(x + bar + 1, y + row, &label, Cell::default(), false);
+            canvas.text(
+                x + bar + 1,
+                y + row,
+                &label,
+                Cell {
+                    fg: if selected {
+                        crate::widgets::SELECTED
+                    } else {
+                        crate::widgets::SECONDARY
+                    },
+                    bold: selected,
+                    ..Cell::default()
+                },
+                false,
+            );
         }
     }
 }
@@ -229,18 +309,9 @@ impl AccountsLayout {
             .max()
             .unwrap_or(0);
         let digits = uses.iter().map(Usage::digits).max().unwrap_or(2);
-        let right = uses
-            .iter()
-            .map(|u| {
-                if u.windows.is_empty() {
-                    u.status.len()
-                } else {
-                    12 + 1 + 4 + 1 + digits + 1 + if u.stale { 6 } else { 0 }
-                }
-            })
-            .max()
-            .unwrap_or(0);
-        let prefix = names + 2;
+        let right = uses.iter().map(|u| u.width(12, digits)).max().unwrap_or(0);
+        // Two-column selection lane, then one space between the name and bar.
+        let prefix = names + 3;
         let min_width = prefix + right;
         if min_width + 2 > width {
             return None;
@@ -262,22 +333,30 @@ impl AccountsLayout {
         top: usize,
         selected: Option<usize>,
         back: bool,
+        usage_focus: bool,
     ) {
         let mut y = top;
         for (index, account) in accounts.iter().enumerate() {
             let active = selected == Some(index) && !back;
+            if active && !usage_focus {
+                canvas.accent_text(self.left, y, "▸", Accent::default());
+            }
             canvas.accent_text(
-                self.left,
+                self.left + 2,
                 y,
                 &short_name(&account.id),
                 Accent {
-                    brightness: if active { 1000 } else { 600 },
-                    bold: active,
+                    brightness: 1000,
+                    bold: active && !usage_focus,
                     ..Accent::default()
                 },
             );
             let usage = Usage::account(account);
-            usage.paint(canvas, self.bars, y, self.bar_width, self.digits);
+            if active && usage_focus {
+                usage.paint_focused(canvas, self.bars, y, self.bar_width, self.digits);
+            } else {
+                usage.paint_selected(canvas, self.bars, y, self.bar_width, self.digits, active);
+            }
             y += usage.height() + 1;
         }
     }
@@ -287,6 +366,55 @@ impl AccountsLayout {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn focused_bar_bolds_lines_brightens_gray_and_desaturates_accent() {
+        let u = Usage {
+            windows: vec![Window {
+                label: "wk",
+                remaining: Some(50.),
+                limit: Some(20.),
+            }],
+            status: "Ready".into(),
+            stale: false,
+        };
+        let mut plain = Canvas::new(40, 4);
+        let mut focus = Canvas::new(40, 4);
+        u.paint_selected(&mut plain, 1, 1, 20, 2, true);
+        u.paint_focused(&mut focus, 1, 1, 20, 2);
+        for x in 1..21 {
+            let before = &plain.cells[40 + x];
+            let after = &focus.cells[40 + x];
+            assert_eq!(before.glyph, after.glyph);
+            assert!(after.bold);
+            if before.fg == [144; 3] {
+                assert_eq!(after.fg, [188; 3]);
+            } else {
+                assert!(
+                    after.fg.iter().max().unwrap() - after.fg.iter().min().unwrap()
+                        < before.fg.iter().max().unwrap() - before.fg.iter().min().unwrap()
+                );
+            }
+        }
+    }
+    #[test]
+    fn selected_usage_labels_and_account_status_colors_have_distinct_rules() {
+        let mut a = account();
+        let u = Usage::account(&a);
+        let mut c = Canvas::new(60, 5);
+        u.paint_selected(&mut c, 1, 1, 20, 3, true);
+        assert_eq!(c.cells[60 + 22].fg, crate::widgets::SELECTED);
+        assert!(c.cells[60 + 22].bold);
+        a.details.insert("enabled".into(), json!(false));
+        let u = Usage::account(&a);
+        assert_eq!(u.height(), 1);
+        let mut c = Canvas::new(60, 5);
+        u.paint_selected(&mut c, 1, 1, 20, 3, true);
+        assert_eq!(c.cells[61].fg, crate::widgets::MUTED);
+        assert!(!c.cells[61].bold);
+        assert!(c.cells.iter().all(|c| c.glyph != "━"));
+        assert_eq!(display_name("abcdefghijklmnopqrstuvwx"), "abcdefghijk…");
+        assert_eq!(display_name("my:session"), "my:session");
+    }
     fn account() -> Account {
         serde_json::from_value(json!({"id":"codex:long-account-name", "selectable":true,
         "usage_fresh":true,"usage":{"observed_at":100,"short":{"duration_minutes":300,"used_percent":20},"weekly":{"duration_minutes":10080,"used_percent":0}},
@@ -347,7 +475,7 @@ mod tests {
         a.usage["short"] = serde_json::Value::Null;
         let u = Usage::account(&a);
         assert_eq!(u.windows.len(), 1);
-        assert_eq!(u.windows[0].label, "wkly");
+        assert_eq!(u.windows[0].label, "wk");
         a.usage = json!({});
         let mut c = Canvas::new(40, 4);
         Usage::account(&a).paint(&mut c, 1, 1, 20, 2);
@@ -463,8 +591,8 @@ pub fn picker_labels(accounts: &[Account]) -> Vec<String> {
     values
         .into_iter()
         .map(|(short, weekly)| match short {
-            Some(short) => format!("{short:>digits$}% 5h / {weekly:>digits$}% wkly"),
-            None => format!("{weekly:>digits$}% wkly"),
+            Some(short) => format!("{short:>digits$}% 5h / {weekly:>digits$}% wk"),
+            None => format!("{weekly:>digits$}% wk"),
         })
         .collect()
 }
@@ -484,17 +612,14 @@ mod picker_tests {
             account(None, 55.),
         ];
         let labels = picker_labels(&accounts);
-        assert_eq!(
-            labels,
-            vec![" 5% 5h / 80% wkly", "99% 5h /  6% wkly", "45% wkly"]
-        );
+        assert_eq!(labels, vec![" 5% 5h / 80% wk", "99% 5h /  6% wk", "45% wk"]);
         assert_eq!(labels[0].find('/'), labels[1].find('/'));
         assert_eq!(labels[0].find('%'), labels[1].find('%'));
         accounts[1].usage["short"]["used_percent"] = json!(0);
-        assert_eq!(picker_labels(&accounts)[0], "  5% 5h /  80% wkly");
+        assert_eq!(picker_labels(&accounts)[0], "  5% 5h /  80% wk");
         assert_eq!(
             picker_labels(&[account(Some(95.), 94.)])[0],
-            "5% 5h / 6% wkly"
+            "5% 5h / 6% wk"
         );
         accounts[2].usage["short"] = json!({"duration_minutes":60,"used_percent":0});
         assert!(!picker_labels(&accounts)[2].contains('/'));
