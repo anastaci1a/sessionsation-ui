@@ -1761,7 +1761,7 @@ impl Manager {
                     self.form = Form::None;
                     self.foreground = None;
                     if value["resume_block_reason"] == "unfinished_history" {
-                        self.show("Unfinished conversation", vec!["This conversation ended during a turn. Start from its saved history? Review unfinished work before continuing; the interrupted request will not be replayed automatically.".into()], &["Start Session", "Cancel"], Form::ResumeWarning(value));
+                        self.show("Unfinished conversation", vec!["This conversation ended during a turn. Start from its saved history? Review unfinished work before continuing; the interrupted request will not be replayed automatically.".into()], &["Start session", "Cancel"], Form::ResumeWarning(value));
                     } else {
                         return vec![Intent::Resume(value)];
                     }

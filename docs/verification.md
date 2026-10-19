@@ -122,8 +122,9 @@ without shape/color changes or per-frame visibility toggling. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
 The README capture uses SHA-256 `125ca57415b64f91ef34c11695d65077127b93b82b2d29937970cce0b605227d`.
-The tested release artifact is `5c84ed036f31c40f2c08078ffbca434293857614dbeaec9d81820be58dd5fc76`; its final guard additionally
-keeps account statuses below the list when usage cannot fit in a very narrow popup.
+The tested release artifact is `1e850dec8a47792d3699974bae2f81616037a65c3cba934322490185192e53a4`.
+The capture predates sentence-case action labels and the empty-directory bullet.
+Account statuses remain below the list when usage cannot fit in a very narrow popup.
 All three PTY scripts and the owned HERDR popup test passed against the release artifact. Shared
 form, choice, information and progress regressions cover exact fixed-choice
 height, left alignment, Cancel/history restoration, one/multiple-input cursor
@@ -131,7 +132,9 @@ ownership, Enter/Esc information dismissal and locked geometry through live
 body/status changes, loading-to-confirmation transitions and completion. Resize
 refits the frame; long content scrolls inside it. Directory goldens cover pinned
 actions with Cancel in the same group, the five-row scrolling fallback, loading
-without stale children and the non-activating `(none)` row with Left-to-parent.
+without stale children and the non-activating `(none)` row with its normal hover
+bullet and Left-to-parent. Popup actions use sentence case; directory choices
+read Use this directory and Create subdirectory.
 Width-fitting and one-blank-line field spacing, inline/detached account statuses,
 and hidden lone Close buttons with preserved background progress are covered. Other
 coverage includes inactive account-label hiding, independent preview fit, Space

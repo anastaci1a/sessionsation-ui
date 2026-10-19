@@ -444,7 +444,7 @@ impl App {
                     })
                     .collect()
             }
-            Page::Spaces => [Row::yes("Create New Space"), Row::yes("Cancel")]
+            Page::Spaces => [Row::yes("Create new space"), Row::yes("Cancel")]
                 .into_iter()
                 .chain((!self.spaces.is_empty()).then(Row::separator))
                 .chain(self.spaces.iter().map(|s| {
@@ -455,7 +455,7 @@ impl App {
                 .collect(),
             Page::Name => vec![Row::gate("Continue", self.name_valid(&self.input.value))],
             Page::SpaceName => vec![Row::gate(
-                "Use new Space",
+                "Use new space",
                 valid_name(&self.input.value)
                     && !self.spaces.iter().any(|s| s.label == self.input.value),
             )],
@@ -463,25 +463,27 @@ impl App {
                 "Create directory",
                 valid_name(&self.input.value) && self.listing.creatable,
             )],
-            Page::Directory(_) => std::iter::once(Row::gate("Use This Dir", self.listing.existing))
-                .chain((self.directory_action_count() == 3).then(|| Row::yes("Leave Unset")))
-                .chain(std::iter::once(Row::gate(
-                    "Create Dir",
-                    self.listing.existing || self.listing.creatable,
-                )))
-                .chain(std::iter::once(Row::yes("Cancel")))
-                .chain(std::iter::once(Row::separator()))
-                .chain(
-                    (self.listing.children.is_empty() && !self.listing_pending)
-                        .then(|| Row::placeholder("(none)")),
-                )
-                .chain(self.listing.children.iter().map(|p| {
-                    Row::yes(format!(
-                        "{}/",
-                        p.file_name().unwrap_or_default().to_string_lossy()
-                    ))
-                }))
-                .collect(),
+            Page::Directory(_) => {
+                std::iter::once(Row::gate("Use this directory", self.listing.existing))
+                    .chain((self.directory_action_count() == 3).then(|| Row::yes("Leave unset")))
+                    .chain(std::iter::once(Row::gate(
+                        "Create subdirectory",
+                        self.listing.existing || self.listing.creatable,
+                    )))
+                    .chain(std::iter::once(Row::yes("Cancel")))
+                    .chain(std::iter::once(Row::separator()))
+                    .chain(
+                        (self.listing.children.is_empty() && !self.listing_pending)
+                            .then(|| Row::placeholder("(none)")),
+                    )
+                    .chain(self.listing.children.iter().map(|p| {
+                        Row::yes(format!(
+                            "{}/",
+                            p.file_name().unwrap_or_default().to_string_lossy()
+                        ))
+                    }))
+                    .collect()
+            }
             Page::Launching => vec![Row::gate("Starting session…", false)],
         };
         if Self::is_popup(&self.page) {
@@ -903,7 +905,7 @@ impl App {
                     .as_deref()
                     .is_some_and(|e| e.starts_with("UNFINISHED_HISTORY_CONFIRMATION_REQUIRED"))
             {
-                let mut dialog = crate::dialog::Dialog::new("Unfinished conversation", vec!["This conversation ended during a turn. Start from its saved history in the chosen directory? Review unfinished work before continuing; the interrupted request will not be replayed automatically.".into()], &["Start Session", "Cancel"]);
+                let mut dialog = crate::dialog::Dialog::new("Unfinished conversation", vec!["This conversation ended during a turn. Start from its saved history in the chosen directory? Review unfinished work before continuing; the interrupted request will not be replayed automatically.".into()], &["Start session", "Cancel"]);
                 dialog.selected = 1;
                 self.start_confirmation = Some((dialog, StartConfirmation::UnfinishedHistory));
                 return vec![];
@@ -913,7 +915,7 @@ impl App {
                     "Another session already uses this directory. Both sessions can change the same project files.".into(),
                     self.draft.directory.path().unwrap().display().to_string(),
                     "Start another session here?".into(),
-                ], &["Start Session", "Cancel"]);
+                ], &["Start session", "Cancel"]);
                 dialog.selected = 1;
                 self.start_confirmation = Some((
                     dialog,
@@ -1769,8 +1771,8 @@ mod tests {
         let c = a.paint(&mut field, 20, 100, 30);
         let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
         assert!(
-            text.contains("Use This Dir")
-                && text.contains("Create Dir")
+            text.contains("Use this directory")
+                && text.contains("Create subdirectory")
                 && text.contains("Loading…")
         );
         assert!(!text.contains("child/"));
@@ -1779,7 +1781,10 @@ mod tests {
             .chunks(100)
             .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
             .collect();
-        let create = lines.iter().position(|s| s.contains("Create Dir")).unwrap();
+        let create = lines
+            .iter()
+            .position(|s| s.contains("Create subdirectory"))
+            .unwrap();
         let loading = lines.iter().position(|s| s.contains("Loading…")).unwrap();
         assert_eq!(loading, create + 4);
         assert_eq!(a.popup_size.as_ref().unwrap().1.height, size.height);
@@ -2422,9 +2427,9 @@ mod tests {
                 children: vec!["/tmp/child".into()],
                 ..Listing::default()
             };
-            assert_eq!(a.rows()[0].label, "Use This Dir");
-            assert_eq!(a.rows()[1].label, "Leave Unset");
-            assert_eq!(a.rows()[2].label, "Create Dir");
+            assert_eq!(a.rows()[0].label, "Use this directory");
+            assert_eq!(a.rows()[1].label, "Leave unset");
+            assert_eq!(a.rows()[2].label, "Create subdirectory");
             for row in 0..3 {
                 a.options.selected = row;
                 a.options.back = false;
@@ -2572,7 +2577,7 @@ mod tests {
         ];
         let rows = a.rows();
         assert!(rows.iter().all(|row| row.preview_column.is_none()));
-        assert_eq!(rows[0].label, "Create New Space");
+        assert_eq!(rows[0].label, "Create new space");
         assert_eq!(rows[3].preview.as_deref(), Some("(w1)"));
         for selected in [3, 4] {
             a.options.selected = selected;
@@ -2614,7 +2619,7 @@ mod tests {
                 r.iter()
                     .map(|c| c.glyph.as_str())
                     .collect::<String>()
-                    .contains("Create New Space")
+                    .contains("Create new space")
             })
             .unwrap();
         assert_eq!(index / 36, first_row + rows.len() + 1);

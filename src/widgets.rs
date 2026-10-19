@@ -286,6 +286,16 @@ impl Row {
         show_preview: bool,
     ) {
         if self.placeholder {
+            canvas.accent_text(
+                x,
+                y,
+                if selected && !back { "●" } else { "○" },
+                Accent {
+                    brightness: if back { 600 } else { 1000 },
+                    ..Accent::default()
+                },
+            );
+            canvas.text(x + 1, y, " ", Cell::default(), true);
             canvas.text(
                 x + 2,
                 y,
@@ -818,13 +828,17 @@ mod tests {
         let mut c = Canvas::new(40, 10);
         Row::placeholder("(none)").paint(&mut c, 0, 0, true, false);
         assert!(c.cells.iter().all(|c| !c.strike && !c.bold));
+        assert_eq!(c.cells[0].glyph, "●");
+        let mut idle = Canvas::new(40, 10);
+        Row::placeholder("(none)").paint(&mut idle, 0, 0, false, false);
+        assert_eq!(idle.cells[0].glyph, "○");
     }
     #[test]
     fn pinned_actions_stay_visible_and_short_viewports_scroll_the_whole_list() {
         let mut rows = vec![
-            Row::yes("Use This Dir"),
-            Row::yes("Leave Unset"),
-            Row::yes("Create Dir"),
+            Row::yes("Use this directory"),
+            Row::yes("Leave unset"),
+            Row::yes("Create subdirectory"),
             Row::separator(),
         ];
         rows.extend((0..30).map(|i| Row::yes(format!("directory{i:02}/"))));
@@ -840,7 +854,7 @@ mod tests {
                 .map(|c| c.glyph.as_str())
                 .collect::<String>()
         };
-        for (i, label) in ["Use This Dir", "Leave Unset", "Create Dir"]
+        for (i, label) in ["Use this directory", "Leave unset", "Create subdirectory"]
             .iter()
             .enumerate()
         {
@@ -861,7 +875,7 @@ mod tests {
             .iter()
             .map(|c| c.glyph.as_str())
             .collect::<String>();
-        assert!(!text.contains("Use This Dir"));
+        assert!(!text.contains("Use this directory"));
         assert!(text.contains("directory29/"));
     }
     #[test]

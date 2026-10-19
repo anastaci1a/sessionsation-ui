@@ -73,7 +73,7 @@ with descriptive text followed by one blank line before fields or choices.
 Information-only dialogs, including a dialog whose only action is Close, hide
 that action and all bottom controls; Enter/Esc dismisses them. Progress and loading dialogs
 reserve a fixed body viewport and scroll updates within it. Long lists scroll
-and selected previews can move below them. Action groups use title case and a
+and selected previews can move below them. Action groups use sentence case and a
 blank bullet spacer. Where top actions exist, Cancel belongs to that same group.
 
 ## Capabilities and limits
@@ -357,7 +357,7 @@ the one currently focused in HERDR; no focus leaves it unset. Pickers preserve t
 draft on Cancel/Esc. Existing automatic paths require explicit selection. Directory Enter
 selects the current option. In an unfamiliar directory, focus starts on the first
 subdirectory, or the non-activating `(none)` placeholder when empty; revisiting restores its selection.
-Use This Dir, Leave Unset (for defaults), Create Dir and Cancel stay above the scrolling
+Use this directory, Leave unset (for defaults), Create subdirectory and Cancel stay above the scrolling
 subdirectory list and its range counter, separated from it by a blank bullet row
 even when empty. Left on `(none)` navigates to the parent; Enter does nothing.
 If at most five rows fit, the whole list
@@ -366,7 +366,7 @@ old child rows and shows Loading… one blank line below the actions. Right brow
 child rows only; Left returns to their parent and does nothing on action rows.
 Only child rows show the Parent/Open hint. Tab and Ctrl-U have no directory-picker
 action. Typing and paste edit the path. Create stages
-intent and never calls mkdir. Configuration uses the same picker; Use This Dir applies a directory and Cancel/Esc returns without applying the edited field.
+intent and never calls mkdir. Configuration uses the same picker; Use this directory applies a directory and Cancel/Esc returns without applying the edited field.
 Missing per-Space roots remain unset, without a global fallback. Last-account prefill
 initially requires fresh usage within existing limits. Once selected, the account remains
 visible during refreshes and stale usage; only confirmed unavailability clears it.
@@ -377,7 +377,7 @@ On full-screen menus, the Back arrow is beside the top visible option. Left sele
 when the expanded label retains a left padding cell;
 Right returns to the option. On the main page its expanded label is **Close**.
 Settings’ **Default Dir:** chooses global or per-Space defaults. In either default-directory
-picker, Leave Unset clears that default and its pending creation plan. Left/Right
+picker, Leave unset clears that default and its pending creation plan. Left/Right
 do nothing on its top actions.
 The session-directory picker retains its two top actions. Configuration uses short
 labels; path previews follow the shared hover-only, list-wide fit rule.
