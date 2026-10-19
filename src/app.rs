@@ -4,7 +4,7 @@ use crate::{
     draft::{Directory, Draft, Space, valid_name},
     preferences::{Mode, Preferences},
     render::{Accent, Canvas, Cell, Field},
-    widgets::{Options, Row, TextInput, UNSET},
+    widgets::{NAME_MAX_CHARS, Options, Row, TextInput, UNSET},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
@@ -298,11 +298,11 @@ impl App {
     fn name_valid(&self, name: &str) -> bool {
         if self.resume.is_some() {
             !name.is_empty()
-                && name.chars().count() <= 24
+                && name.chars().count() <= NAME_MAX_CHARS
                 && name.trim() == name
                 && !name.chars().any(char::is_control)
         } else {
-            valid_name(name) && name.chars().count() <= 24
+            valid_name(name) && name.chars().count() <= NAME_MAX_CHARS
         }
     }
     fn ready(&self) -> bool {
@@ -489,7 +489,7 @@ impl App {
         self.options.back = false;
         self.input.value = text;
         self.input.cursor = self.input.value.len();
-        self.input.max_chars = (self.page == Page::Name).then_some(24);
+        self.input.max_chars = (self.page == Page::Name).then_some(NAME_MAX_CHARS);
         self.listing = Listing::default();
         self.error.clear();
         self.dirty = true;
@@ -531,7 +531,7 @@ impl App {
             self.options.preview_visible = false;
             self.input.value = old.text;
             self.input.cursor = self.input.value.len();
-            self.input.max_chars = (self.page == Page::Name).then_some(24);
+            self.input.max_chars = (self.page == Page::Name).then_some(NAME_MAX_CHARS);
             self.listing = old.listing;
             self.options.back = false;
             self.error.clear();
@@ -2157,19 +2157,19 @@ mod tests {
         assert!(matches!(&a.draft.space,Some(Space::Existing {id,..}) if id=="w1"));
     }
     #[test]
-    fn session_editor_stops_at_twenty_four_and_does_not_limit_other_editors() {
+    fn session_editor_stops_at_thirty_and_does_not_limit_other_editors() {
         let mut a = app();
         a.push(Page::Name, String::new());
-        a.paste("abcdefghijklmnopqrstuvwxyz");
-        assert_eq!(a.input.value, "abcdefghijklmnopqrstuvwx");
+        a.paste("abcdefghijklmnopqrstuvwxyz123456789");
+        assert_eq!(a.input.value, "abcdefghijklmnopqrstuvwxyz1234");
         assert!(a.name_valid(&a.input.value));
-        assert!(!a.name_valid("abcdefghijklmnopqrstuvwxy"));
+        assert!(!a.name_valid("abcdefghijklmnopqrstuvwxyz12345"));
         a.push(Page::SpaceName, String::new());
         a.paste("a longer workspace name");
         assert_eq!(a.input.value, "a longer workspace name");
         a.pop();
         a.paste("ignored");
-        assert_eq!(a.input.value, "abcdefghijklmnopqrstuvwx");
+        assert_eq!(a.input.value, "abcdefghijklmnopqrstuvwxyz1234");
     }
     #[test]
     fn summary_start_is_adjacent_to_fields_and_home_control_says_close() {

@@ -148,10 +148,10 @@ line length (one cell less than the rendered width). Percentages precede period 
 observations show Disabled, Login required or Usage unavailable as appropriate;
 stale observations are marked. New/resume account pickers use standard bullets
 with white/gray names and an aligned `x% 5h / x% wk` block one space after the longest name, omitting the short period and
-slash for weekly-only accounts. The selected account’s status appears one blank line below the list or range counter, without repeating its name. Ready uses the animated selected-bullet hue, unbolded; other statuses remain unbolded gray. Account names accept at most 24 ASCII characters;
+slash for weekly-only accounts. The selected account’s status appears one blank line below the list or range counter, without repeating its name. Ready uses the animated selected-bullet hue, unbolded; other statuses remain unbolded gray. Account names accept at most 30 ASCII characters;
 typing and paste stop at the limit.
 Duplicate names immediately invalidate the editor and disable confirmation.
-Session creation/resume/rename accepts at most 24 Unicode scalar values, also
+Session creation/resume/rename accepts at most 30 Unicode scalar values, also
 enforced by the CLI.
 Dialogs cover the animated star field without changing its generation or lifetimes;
 closing a dialog reveals the continuing animation. Valid confirmation does not

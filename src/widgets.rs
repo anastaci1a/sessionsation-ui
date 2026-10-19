@@ -7,6 +7,7 @@ pub const SECONDARY: [u8; 3] = [188; 3];
 pub const MUTED: [u8; 3] = [108; 3];
 pub const SELECTED: [u8; 3] = [238; 3];
 pub const UNSET: &str = "<unset>";
+pub const NAME_MAX_CHARS: usize = 30;
 pub use crate::navigation::{Navigation, SelectionNavigation};
 
 #[derive(Clone, Debug, Default)]

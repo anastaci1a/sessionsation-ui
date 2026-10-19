@@ -1,7 +1,7 @@
 //! Shared, nonblocking dialogs. Validation and cancellation never depend on focus.
 use crate::{
     render::{Canvas, Cell},
-    widgets::{Row, TextInput, clip},
+    widgets::{NAME_MAX_CHARS, Row, TextInput, clip},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
@@ -50,7 +50,7 @@ impl Field {
     }
     pub fn validated(mut self, rule: Rule) -> Self {
         if matches!(rule, Rule::AccountName | Rule::Name | Rule::Rename(_)) {
-            self.input = self.input.limited(24);
+            self.input = self.input.limited(NAME_MAX_CHARS);
         }
         self.rule = rule;
         self
@@ -71,14 +71,14 @@ impl Field {
                 .is_ok_and(|n| n.is_finite() && (0. ..=100.).contains(&n)),
             Rule::AccountName => {
                 !v.is_empty()
-                    && v.len() <= 24
+                    && v.len() <= NAME_MAX_CHARS
                     && v.bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
             }
             Rule::Name | Rule::Rename(_) => {
                 !v.is_empty()
                     && v.trim() == v
-                    && v.chars().count() <= 24
+                    && v.chars().count() <= NAME_MAX_CHARS
                     && !v.chars().any(char::is_control)
             }
         }
@@ -484,8 +484,8 @@ mod tests {
         assert!(matches!(d.key(enter()), Event::None));
         d.selected = 0;
         d.fields[0].input.clear();
-        d.paste("abcdefghijklmnopqrstuvwxyz");
-        assert_eq!(d.fields[0].input.value, "abcdefghijklmnopqrstuvwx");
+        d.paste("abcdefghijklmnopqrstuvwxyz123456789");
+        assert_eq!(d.fields[0].input.value, "abcdefghijklmnopqrstuvwxyz1234");
         assert!(d.fields[0].valid());
         for selected in 0..4 {
             d.selected = selected;
