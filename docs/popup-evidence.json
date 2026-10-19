@@ -2,13 +2,13 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "94bc902b998611390d27fa0b7106c5840963fc91",
+    "ui": "b7c829087866e9cc059e821859f5927c8fe53148",
     "backend": "51764d216830bb9623c877abb2ef325d1c2231fd",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
   "checks": {
     "rust": {
-      "unit_passed": 126,
+      "unit_passed": 128,
       "visual_snapshot_test_passed": 2,
       "golden_frames": 21,
       "failed": 0,
@@ -207,7 +207,18 @@
       "fast deletion intent and one confirmed CLI admission; detach never cancels/resends"
     ],
     "models": 0,
-    "source_ui": "1468c7d45f8fc91e1ce526e3ac9641fc8851e671"
+    "source_ui": "1468c7d45f8fc91e1ce526e3ac9641fc8851e671",
+    "directory_selection": {
+      "passed": true,
+      "source": "b7c829087866e9cc059e821859f5927c8fe53148",
+      "scope": "Synthetic public CLI and PTY; no native provider",
+      "checks": [
+        "normal bullet account picker and aligned adjacent usage block",
+        "resume existing-directory choice reaches public CLI exactly once",
+        "background returns to Manage Sessions",
+        "unfinished consent preserves edited destination"
+      ]
+    }
   },
   "limitations": [
     "No new live model acceptance; separately approved unauthenticated account deletion recovered to completion with conversations preserved",
