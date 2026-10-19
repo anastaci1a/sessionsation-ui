@@ -56,6 +56,9 @@ typing and paste stop at the limit.
 Duplicate names immediately invalidate the editor and disable confirmation.
 Session creation/resume/rename accepts at most 24 Unicode scalar values, also
 enforced by the CLI.
+Dialogs cover the animated star field without changing its generation or lifetimes;
+closing a dialog reveals the continuing animation. Valid confirmation does not
+require scrolling explanatory text to the bottom.
 Input focus is shown by the cursor alone, with no triangle. Only the focused input
 shows a cursor in multi-input dialogs; single-input dialogs
 stay editable while navigating buttons. Menu account names are ellipsized on cell 12, session titles on cell 16; full values remain

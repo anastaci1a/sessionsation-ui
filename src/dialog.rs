@@ -207,9 +207,7 @@ impl Dialog {
                 let cancel = self.dismiss_button(button);
                 if self.buttons.get(button).is_some_and(|b| b.enabled)
                     && (cancel || self.fields.iter().all(Field::valid))
-                    && (cancel
-                        || self.busy
-                        || self.visible > 0 && self.offset + self.visible >= self.wrapped)
+                    && (cancel || self.busy || self.visible > 0)
                 {
                     return Event::Choose(button, self.values());
                 }
@@ -226,6 +224,9 @@ impl Dialog {
         Event::None
     }
     pub fn paint(&mut self, canvas: &mut Canvas, palette: &Palette) {
+        canvas.overlay(|canvas| self.paint_panel(canvas, palette));
+    }
+    fn paint_panel(&mut self, canvas: &mut Canvas, palette: &Palette) {
         let width = canvas.width.saturating_sub(4).min(76);
         let max_height = canvas.height.saturating_sub(4);
         let mut lines: Vec<_> = self
@@ -544,7 +545,8 @@ mod tests {
         assert_eq!(d.selected, 1);
         assert!(matches!(d.key(enter()), Event::Choose(1, _)));
         d.selected = 0;
-        assert!(matches!(d.key(enter()), Event::None));
+        assert!(d.offset + d.visible < d.wrapped);
+        assert!(matches!(d.key(enter()), Event::Choose(0, _)));
         for _ in 0..50 {
             d.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
         }

@@ -46,6 +46,14 @@ impl Canvas {
             foreground: vec![false; w * h],
         }
     }
+    /// Composite a temporary panel without feeding its occlusion into star lifetimes.
+    pub fn overlay(&mut self, paint: impl FnOnce(&mut Self)) {
+        let baseline = self.baseline_blocked.clone();
+        let foreground = self.foreground.clone();
+        paint(self);
+        self.baseline_blocked = baseline;
+        self.foreground = foreground;
+    }
     pub fn text(&mut self, x: usize, y: usize, text: &str, style: Cell, _transparent: bool) {
         if y >= self.height {
             return;
@@ -679,6 +687,30 @@ mod tests {
         c.text(2, 3, "Login required", Cell::default(), false);
         assert_eq!(c.cells[3 * 80 + 7].bg, None);
         assert_eq!(mix([26; 3], [150, 180, 200], 0), [26; 3]);
+    }
+    #[test]
+    fn dialog_occlusion_never_changes_background_evolution() {
+        use crate::dialog::{Dialog, Palette};
+        let mut covered = Field::new(80, 24, 1967);
+        let mut control = Field::new(80, 24, 1967);
+        let mut dialog = Dialog::new("Popup", vec!["Some text".into()], &["Close"]);
+        for now in (0..12000).step_by(50) {
+            let (w, h) = if now < 6000 { (80, 24) } else { (60, 18) };
+            covered.resize(w, h);
+            control.resize(w, h);
+            let mut visible = covered.paint(now);
+            let mut plain = control.paint(now);
+            assert_eq!(visible.cells, plain.cells, "animation changed at {now}");
+            visible.text(2, 2, "Underlying menu", Cell::default(), false);
+            plain.text(2, 2, "Underlying menu", Cell::default(), false);
+            if now % 2000 < 1500 {
+                dialog.paint(&mut visible, &Palette::default());
+                assert_ne!(visible.cells, plain.cells);
+                assert_eq!(&visible.cells[(h - 1) * w..], &plain.cells[(h - 1) * w..]);
+            }
+            covered.apply_masks(&visible);
+            control.apply_masks(&plain);
+        }
     }
     #[test]
     fn reference_curve_boundaries() {

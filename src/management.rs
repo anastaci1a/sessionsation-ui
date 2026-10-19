@@ -2151,7 +2151,13 @@ mod tests {
                 .contains("codex-account1")
         );
         assert!(m.submit(0, vec!["codex:account1".into()]).is_empty());
-        let sent = m.submit(0, vec!["codex-account1".into()]);
+        // Exercise the actual small-popup input path, not submit directly.
+        let d = m.dialog.as_mut().unwrap();
+        d.status = None;
+        d.paste("codex-account1");
+        d.paint(&mut Canvas::new(40, 18), &Palette::default());
+        assert!(d.offset + d.visible < d.wrapped);
+        let sent = m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let Intent::Api(token, ref args) = sent[0] else {
             panic!()
         };
