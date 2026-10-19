@@ -37,6 +37,14 @@ fn resume_invalid(error: &str) -> bool {
     .iter()
     .any(|code| error.starts_with(code))
 }
+/// Receipt-read freshness errors are pending observations, not failed mutations.
+pub fn reconciliation_message(error: &str) -> String {
+    if error.starts_with("SESSION_STATE_UNVERIFIED") || error.starts_with("STALE_TARGET") {
+        "Checking session state…".into()
+    } else {
+        format!("{error}; reconciling original request")
+    }
+}
 fn resume_explanation(error: &str) -> String {
     let reason =
         if error.starts_with("SESSION_STATE_UNVERIFIED") || error.starts_with("STALE_TARGET") {
@@ -394,7 +402,6 @@ impl App {
                 .map(|(a, usage)| {
                     Row::gate(crate::usage::short_name(&a.id), a.selectable)
                         .with_right_preview(usage)
-                        .account()
                 })
                 .collect(),
             Page::Spaces => std::iter::once(Row::yes("Create new Space"))
@@ -1385,6 +1392,43 @@ mod tests {
             json!({}),
             None,
         )
+    }
+    #[test]
+    fn pending_receipt_freshness_uses_plain_language() {
+        assert_eq!(
+            reconciliation_message("SESSION_STATE_UNVERIFIED"),
+            "Checking session state…"
+        );
+        assert_eq!(
+            reconciliation_message("STALE_TARGET: changed"),
+            "Checking session state…"
+        );
+        assert!(reconciliation_message("PERMISSION_DENIED").contains("PERMISSION_DENIED"));
+    }
+    #[test]
+    fn creation_and_resume_account_pickers_use_standard_bullets() {
+        let mut a = app();
+        a.page = Page::Accounts;
+        a.accounts = serde_json::from_value(json!([
+            {"id":"codex:personal","selectable":true},
+            {"id":"codex:work","selectable":true}
+        ]))
+        .unwrap();
+        for resume in [None, Some(json!({"id":"saved"}))] {
+            a.resume = resume;
+            let rows = a.rows();
+            for (index, row) in rows.iter().enumerate() {
+                assert!(!row.account);
+                let mut canvas = Canvas::new(80, 4);
+                row.paint(&mut canvas, 0, 0, index == 0, false);
+                assert_eq!(canvas.cells[0].glyph, if index == 0 { "●" } else { "○" });
+                assert_eq!(
+                    canvas.cells[2].fg,
+                    if index == 0 { [238; 3] } else { [188; 3] }
+                );
+                assert!(!canvas.cells.iter().any(|c| c.glyph == "▶"));
+            }
+        }
     }
     #[test]
     fn new_form_and_picker_create_are_staged() {

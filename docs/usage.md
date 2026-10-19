@@ -49,8 +49,8 @@ Bars show remaining allowance for the periods the backend reports: 5h/weekly or
 weekly only. Full-width bold line segments (no endcaps) deplete into visible gray; custom limits appear
 inside the bar. Percentages precede period labels in aligned columns. Missing
 observations show Disabled, Login required or Usage unavailable as appropriate;
-stale observations are marked. The account picker uses
-a separate right-aligned `x% 5h / x% wk` column, omitting the short period and
+stale observations are marked. New/resume account pickers use standard bullets
+with white/gray names and a separate right-aligned `x% 5h / x% wk` column, omitting the short period and
 slash for weekly-only accounts. Account names accept at most 24 ASCII characters;
 typing and paste stop at the limit.
 Duplicate names immediately invalidate the editor and disable confirmation.
@@ -68,9 +68,10 @@ through separately; alignment padding is never struck through.
 Resume forms retain their chosen destination through stale or pending checks.
 Only confirmed invalid choices disable Resume; selected-only parentheticals explain
 validation state. Activation verifies again before admission. A generation refresh
-must still identify the same inactive conversation, source account and directory.
+must still identify the same inactive conversation, source account, name and directory.
 Definitively failed launch receipts release the form; uncertain requests remain
-pending for reconciliation and are never automatically replayed.
+pending for reconciliation and are never automatically replayed. Temporary receipt
+freshness errors show “Checking session state…”; confirmed failures remain explicit.
 An unfinished conversation offers Start Session with an explicit warning first.
 Confirming acknowledges only unfinished history, not active writers or conflicting copies.
 Input focus is shown by the cursor alone, with no triangle. Only the focused input

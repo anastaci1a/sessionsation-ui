@@ -452,7 +452,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
             "running" if !app.success=>{app.success=true;if app.launch_background {app.manager.note="Session is running; open Operations or Focus tab when ready.".into();app.prefs.last_account=app.request.as_ref().and_then(|r|r["account_id"].as_str().map(str::to_owned));next.push(Effect::Save);}else if let Some(tab)=r["tab_id"].as_str(){effects.focus(tab.into());}else{app.error="Session running; receipt has no tab identity. Esc closes.".into();}},
             "failed" | "cancelled" | "recovered"=>{app.request=None;app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",r["detail"].as_str().unwrap_or("inspect launch status"));},
             phase=>{app.error=format!("{phase}: {}",r["detail"].as_str().unwrap_or("waiting for confirmed handoff"));},
-           },Err(e)=>{app.error=format!("{e}; reconciling original request");}
+           },Err(e)=>{app.error=sessionsation_ui::app::reconciliation_message(&e);}
           }if app.launch_dialog&&let Some(d)=&mut app.manager.dialog{d.body=vec![app.error.clone()];if app.success || app.error.starts_with("Launch failed:"){d.finish();}}app.dirty=true;},
           Message::Focused(result)=>{match result { Ok(())=>{app.prefs.last_account=app.draft.account.clone();next.push(Effect::Save);},Err(e)=>{app.error=format!("Session is running; tab focus failed: {e}. Esc closes.");}}app.dirty=true;},
           Message::Saved(result)=>{if let Err(e)=result{app.error=format!("Preferences were not saved: {e}");if !app.success{app.page=Page::Config;}app.dirty=true;}else if app.success && !app.launch_background {app.exit=true;}},
