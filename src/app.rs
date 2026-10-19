@@ -935,7 +935,9 @@ impl App {
             KeyCode::Char(' ') if !self.is_form() => self.activate(),
             KeyCode::Char(c) if self.is_form() => self.edit(&c.to_string()),
             KeyCode::Backspace | KeyCode::Delete | KeyCode::Home | KeyCode::End
-                if self.is_form() =>
+                if self.is_form()
+                    && (!matches!(key.code, KeyCode::Home | KeyCode::End)
+                        || !matches!(self.page, Page::Directory(_))) =>
             {
                 self.input.edit(key.code);
                 if matches!(self.page, Page::Directory(_) | Page::NewDirectory(..)) {
@@ -943,6 +945,14 @@ impl App {
                 } else {
                     vec![]
                 }
+            }
+            KeyCode::Home | KeyCode::End => {
+                self.options.boundary(
+                    &self.rows(),
+                    self.page == Page::Summary,
+                    key.code == KeyCode::End,
+                );
+                vec![]
             }
             KeyCode::Up | KeyCode::Down => {
                 self.options.step_with_wrap(
@@ -1268,6 +1278,10 @@ mod tests {
         assert!(app.manager.inline);
         let last = app.manager.rows().len() - 1;
         assert_eq!(last, 5);
+        app.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        assert_eq!(app.manager.options.selected, last);
+        app.key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        assert_eq!(app.manager.options.selected, 0);
         let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
         let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
         let repeat = |mut key: KeyEvent| {

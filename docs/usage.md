@@ -126,7 +126,9 @@ press again there to wrap. Home, management menus, directory pickers and dialog
 buttons share this selection-navigation implementation. Terminals
 without repeat/release events use a 750 ms quiet gap to distinguish gestures for
 wrapping. The first press always moves immediately; repeat timing comes from the
-terminal, with no UI hold-delay timer.
+terminal, with no UI hold-delay timer. Home/End jump to the first/last list option
+(including directory lists); text editors retain cursor Home/End. These shortcuts
+do not add footer hints.
 Centering with Back/Close rounds
 right; six spare columns use four on the left to keep the arrow one cell from the
 edge. Options scroll only when they cannot fit with one blank line before controls;

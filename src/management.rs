@@ -681,6 +681,14 @@ impl Manager {
             return vec![];
         }
         match key.code {
+            KeyCode::Home | KeyCode::End => {
+                self.options
+                    .boundary(&self.rows(), false, key.code == KeyCode::End);
+                if !self.usage_selectable() {
+                    self.usage_focus = false;
+                }
+                vec![]
+            }
             KeyCode::Up | KeyCode::Down => {
                 self.options
                     .step_with_wrap(&self.rows(), false, key.code == KeyCode::Up, wrap);

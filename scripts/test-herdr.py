@@ -100,6 +100,8 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-popup-host-') as tmp:
   assert first_press_ms < 250,('First press delayed',first_press_ms)
   key(b'\x1b[1;1:3B\x1b[1;1:1A');focus_wait('New Session')
   key(b'\x1b[1;1:3A')
+  key(b'\x1b[F');focus_wait('fixture',account=True)
+  key(b'\x1b[H');focus_wait('New Session')
   # Enhanced press/repeat/release must survive the actual HERDR pane encoder.
   key(b'\x1b[1;1:1B'+b'\x1b[1;1:2B'*20);focus_wait('fixture',account=True)
   key(b'\x1b[1;1:3B\x1b[1;1:1B');focus_wait('New Session')
@@ -135,7 +137,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-popup-host-') as tmp:
    (root/'popup.json').unlink(missing_ok=True);start=time.perf_counter();key(b'\x02L');wait('Settings');key_samples.append((time.perf_counter()-start)*1000)
    dismiss()
   key_samples.sort()
-  print(json.dumps({'keybind_startup':{'samples':len(key_samples),'p50_ms':key_samples[10],'p95_ms':key_samples[19],'max_ms':max(key_samples)},'first_press_ms':first_press_ms,'installed_herdr':host('--version') if False else '0.9.5','plugin_to_first_paint_ms':elapsed,'popup_size':popup['size'],'checks':['origin context without pane ID','90% width / 65% height popup','ui_busy refusal','first press moves before repeat/release','held arrows and release/press wrap through installed HERDR','real host resize preserves draft','selected destination normal tab','staged directory','exact name/account','focus then popup exit','second popup cancel preserves new terminal','origin shell unchanged'],'models':0},indent=2))
+  print(json.dumps({'keybind_startup':{'samples':len(key_samples),'p50_ms':key_samples[10],'p95_ms':key_samples[19],'max_ms':max(key_samples)},'first_press_ms':first_press_ms,'installed_herdr':host('--version') if False else '0.9.5','plugin_to_first_paint_ms':elapsed,'popup_size':popup['size'],'checks':['origin context without pane ID','90% width / 65% height popup','ui_busy refusal','first press moves before repeat/release','Home/End jump to first/last option','held arrows and release/press wrap through installed HERDR','real host resize preserves draft','selected destination normal tab','staged directory','exact name/account','focus then popup exit','second popup cancel preserves new terminal','origin shell unchanged'],'models':0},indent=2))
  finally:
   host('server','stop')
   if client is not None:

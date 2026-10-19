@@ -410,6 +410,21 @@ pub struct SelectionNavigation {
     edge: bool,
 }
 impl SelectionNavigation {
+    pub fn boundary(
+        &mut self,
+        selected: usize,
+        count: usize,
+        last: bool,
+        focusable: impl Fn(usize) -> bool,
+    ) -> usize {
+        *self = Self::default();
+        if last {
+            (0..count).rfind(|i| focusable(*i))
+        } else {
+            (0..count).find(|i| focusable(*i))
+        }
+        .unwrap_or(selected)
+    }
     pub fn step(
         &mut self,
         selected: usize,
@@ -569,6 +584,15 @@ impl Options {
             .step(self.selected, count, previous, wrap, |index| {
                 index == rows.len() || !rows[index].separator
             });
+    }
+    pub fn boundary(&mut self, rows: &[Row], bottom_action: bool, last: bool) {
+        self.back = false;
+        self.selected = self.navigation.boundary(
+            self.selected,
+            rows.len() + usize::from(bottom_action),
+            last,
+            |i| i == rows.len() || !rows[i].separator,
+        );
     }
     pub fn left(width: usize, rows: &[Row]) -> usize {
         let longest = rows
@@ -778,6 +802,26 @@ mod tests {
         assert!(!legacy.key_at(down, start + Duration::from_millis(500)));
         assert!(!legacy.key_at(down, start + Duration::from_millis(530)));
         assert!(legacy.key_at(down, start + Duration::from_millis(1300)));
+    }
+    #[test]
+    fn boundaries_skip_separators_and_include_unavailable_or_bottom_actions() {
+        let rows = vec![
+            Row::separator(),
+            Row::yes("First"),
+            Row::gate("Last", false),
+            Row::separator(),
+        ];
+        let mut options = Options {
+            back: true,
+            ..Options::default()
+        };
+        options.boundary(&rows, false, true);
+        assert_eq!(options.selected, 2);
+        assert!(!options.back);
+        options.boundary(&rows, false, false);
+        assert_eq!(options.selected, 1);
+        options.boundary(&rows, true, true);
+        assert_eq!(options.selected, 4);
     }
     #[test]
     fn ellipsis_survives_reclipping_and_respects_terminal_cells() {

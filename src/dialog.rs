@@ -191,6 +191,14 @@ impl Dialog {
                     |_| true,
                 );
             }
+            KeyCode::Home | KeyCode::End if self.editor().is_none() => {
+                self.selected = self.navigation.boundary(
+                    self.selected,
+                    count,
+                    key.code == KeyCode::End,
+                    |_| true,
+                );
+            }
             KeyCode::Tab if count > 0 => {
                 self.selected = (self.selected + 1) % count;
             }
