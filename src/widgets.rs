@@ -1,41 +1,12 @@
 //! Reusable terminal controls. No filesystem, provider, host or application policy.
 use crate::render::{Accent, Canvas, Cell};
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
-use std::time::{Duration, Instant};
+use crossterm::event::KeyCode;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 pub const SECONDARY: [u8; 3] = [188; 3];
 pub const MUTED: [u8; 3] = [108; 3];
 pub const SELECTED: [u8; 3] = [238; 3];
-/// Native repeat/release events are exact. Legacy arrow bursts have no release
-/// bytes, so a quiet gap separates gestures conservatively.
-#[derive(Default)]
-pub struct Navigation {
-    last: Option<(KeyCode, Instant)>,
-}
-impl Navigation {
-    pub fn key(&mut self, key: KeyEvent) -> bool {
-        self.key_at(key, Instant::now())
-    }
-    fn key_at(&mut self, key: KeyEvent, now: Instant) -> bool {
-        if key.kind == KeyEventKind::Release {
-            if self.last.is_some_and(|(code, _)| code == key.code) {
-                self.last = None;
-            }
-            return false;
-        }
-        if !matches!(key.code, KeyCode::Up | KeyCode::Down) {
-            self.last = None;
-            return true;
-        }
-        let fresh = key.kind == KeyEventKind::Press
-            && self.last.is_none_or(|(last, at)| {
-                last != key.code || now.saturating_duration_since(at) >= Duration::from_millis(750)
-            });
-        self.last = Some((key.code, now));
-        fresh
-    }
-}
+pub use crate::navigation::{Navigation, SelectionNavigation};
 
 #[derive(Clone, Debug, Default)]
 pub struct TextInput {
@@ -398,65 +369,6 @@ impl Row {
     }
 }
 
-/// A held direction may wrap only when its gesture began at that edge.
-#[derive(Clone, Debug, Default)]
-pub struct SelectionNavigation {
-    direction: Option<bool>,
-    edge: bool,
-}
-impl SelectionNavigation {
-    pub fn boundary(
-        &mut self,
-        selected: usize,
-        count: usize,
-        last: bool,
-        focusable: impl Fn(usize) -> bool,
-    ) -> usize {
-        *self = Self::default();
-        if last {
-            (0..count).rfind(|i| focusable(*i))
-        } else {
-            (0..count).find(|i| focusable(*i))
-        }
-        .unwrap_or(selected)
-    }
-    pub fn step(
-        &mut self,
-        selected: usize,
-        count: usize,
-        previous: bool,
-        fresh: bool,
-        focusable: impl Fn(usize) -> bool,
-    ) -> usize {
-        if count == 0 {
-            return selected;
-        }
-        let selected = selected.min(count - 1);
-        let first = (0..count).find(|i| focusable(*i));
-        let last = (0..count).rfind(|i| focusable(*i));
-        if fresh {
-            self.direction = Some(previous);
-            self.edge = Some(selected) == if previous { first } else { last };
-        }
-        let wrap = self.direction == Some(previous) && self.edge;
-        let mut probe = selected;
-        for _ in 0..count {
-            if !wrap && (previous && probe == 0 || !previous && probe + 1 == count) {
-                return selected;
-            }
-            probe = if previous {
-                (probe + count - 1) % count
-            } else {
-                (probe + 1) % count
-            };
-            if focusable(probe) {
-                return probe;
-            }
-        }
-        selected
-    }
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct Options {
     pub selected: usize,
@@ -752,6 +664,8 @@ impl Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyEvent, KeyEventKind};
+    use std::time::{Duration, Instant};
     #[test]
     fn held_arrows_stop_at_edges_and_release_rearms_wrap() {
         let mut nav = Navigation::default();
@@ -805,7 +719,7 @@ mod tests {
         assert_eq!(options.selected, 2);
         let mut legacy = Navigation::default();
         assert!(legacy.key_at(down, start));
-        assert!(!legacy.key_at(down, start + Duration::from_millis(500)));
+        assert!(legacy.key_at(down, start + Duration::from_millis(500)));
         assert!(!legacy.key_at(down, start + Duration::from_millis(530)));
         assert!(legacy.key_at(down, start + Duration::from_millis(1300)));
     }
@@ -893,9 +807,9 @@ mod tests {
                     options.step_with_wrap(&rows, false, previous, step == 0);
                     let expected = if origin == edge {
                         if previous {
-                            (origin + 30 - step - 1) % 3
+                            2_usize.saturating_sub(step)
                         } else {
-                            (origin + step + 1) % 3
+                            step.min(2)
                         }
                     } else if previous {
                         origin.saturating_sub(step + 1)

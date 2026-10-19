@@ -111,6 +111,12 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-popup-host-') as tmp:
   assert screen.contains('New Session',selected=True),'held Up wrapped through HERDR'
   key(b'\x1b[1;1:3A\x1b[1;1:1A');focus_wait('fixture',account=True)
   key(b'\x1b[1;1:3B\x1b[1;1:1B');focus_wait('New Session')
+  # A hold started on the boundary wraps once, then consumes permission.
+  key(b'\x1b[H\x1b[1;1:3A\x1b[1;1:1A');focus_wait('fixture',account=True)
+  key(b'\x1b[1;1:2A'*20);focus_wait('New Session')
+  key(b'\x1b[1;1:2A'*20);time.sleep(.1)
+  while select.select([master],[],[],.01)[0]:screen.feed(os.read(master,65536))
+  assert screen.contains('New Session',selected=True),'boundary-origin hold wrapped twice'
   # HERDR may interleave enhanced events and ordinary repeat bytes.
   # Neither a prior enhanced release nor an unrelated release may rearm a hold.
   key(b'\x1b[H')

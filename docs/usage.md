@@ -128,13 +128,16 @@ A failed preview/mutation closes its waiting dialog and shows the error there,
 without an automatic retry.
 
 Menu bottom controls and pagination share the reference soft accent and sweep
-(55% brightness, regular weight). Dialog hints stay readable gray. Held arrows wrap only if that hold began at the corresponding edge (Up at the
+(55% brightness, regular weight). Dialog hints stay readable gray. Held arrows wrap once per hold, only if that hold began at the corresponding edge (Up at the
 top, Down at the bottom). Holds begun elsewhere stop at the edge; release and
 press again there to wrap. Home, management menus, directory pickers and dialog
 buttons share this selection-navigation implementation. Terminals
-without repeat/release events use a 750 ms quiet gap to distinguish gestures for
-wrapping. Mixed ordinary and enhanced key events never turn repeated presses
-into new holds; only the held arrow's release clears it. The first press always moves immediately; repeat timing comes from the
+without repeat/release events use a 150 ms quiet gap to estimate gesture boundaries.
+This fallback cannot distinguish a physical release from an equally long pause
+in repeated bytes (including an initial repeat delay or transport stall). Native
+repeat/release events provide exact hold boundaries. Unrelated releases never
+rearm a held arrow. The same navigation core handles either axis; existing
+Left/Right menu actions are unchanged. The first press always moves immediately; repeat timing comes from the
 terminal, with no UI hold-delay timer. Home/End jump to the first/last list option
 (including directory lists); text editors retain cursor Home/End. These shortcuts
 do not add footer hints.
