@@ -431,26 +431,25 @@ impl App {
                     .map(|a| UnicodeWidthStr::width(crate::usage::short_name(&a.id).as_str()))
                     .max()
                     .unwrap_or(0);
-                [Row::yes("Cancel"), Row::separator()]
-                    .into_iter()
-                    .chain(self.accounts.iter().zip(labels).map(|(a, usage)| {
+                self.accounts
+                    .iter()
+                    .zip(labels)
+                    .map(|(a, usage)| {
                         let column = 2 + name_width + 1 + preview_width
                             - UnicodeWidthStr::width(usage.as_str());
                         Row::gate(crate::usage::short_name(&a.id), a.selectable)
                             .with_column_preview(usage, column, false)
                             .preview_gap(1)
                             .preview_color(crate::widgets::SECONDARY)
-                    }))
+                    })
                     .collect()
             }
-            Page::Spaces => std::iter::once(Row::yes("Create new space"))
-                .chain((!self.spaces.is_empty()).then(Row::separator))
+            Page::Spaces => std::iter::once(Row::yes("[create new space]"))
                 .chain(self.spaces.iter().map(|s| {
                     Row::yes(&s.label)
                         .with_selected_preview(format!("({})", s.workspace_id))
                         .preview_gap(1)
                 }))
-                .chain([Row::separator(), Row::yes("Cancel")])
                 .collect(),
             Page::Name => vec![Row::gate("Continue", self.name_valid(&self.input.value))],
             Page::SpaceName => vec![Row::gate(
@@ -463,10 +462,10 @@ impl App {
                 valid_name(&self.input.value) && self.listing.creatable,
             )],
             Page::Directory(_) => {
-                std::iter::once(Row::gate("Use this directory", self.listing.existing))
-                    .chain((self.directory_action_count() == 3).then(|| Row::yes("Leave unset")))
+                std::iter::once(Row::gate("[use this directory]", self.listing.existing))
+                    .chain((self.directory_action_count() == 3).then(|| Row::yes("[leave unset]")))
                     .chain(std::iter::once(Row::gate(
-                        "Create subdirectory",
+                        "[create subdirectory]",
                         self.listing.existing || self.listing.creatable,
                     )))
                     .chain(std::iter::once(Row::separator()))
@@ -480,19 +479,20 @@ impl App {
                             p.file_name().unwrap_or_default().to_string_lossy()
                         ))
                     }))
-                    .chain([Row::separator(), Row::yes("Cancel")])
                     .collect()
             }
             Page::Launching => vec![Row::gate("Starting session…", false)],
         };
         if Self::is_popup(&self.page) {
-            rows = rows.into_iter().map(Row::popup_option).collect();
-            if !matches!(
+            if matches!(
                 self.page,
-                Page::Directory(_) | Page::Spaces | Page::Accounts
+                Page::Directory(_) | Page::Spaces | Page::Accounts | Page::Roots
             ) {
-                rows.push(Row::yes("Cancel").popup_option());
+                rows = crate::popup::with_cancel(rows);
+            } else {
+                rows.push(Row::yes("Cancel"));
             }
+            rows = rows.into_iter().map(Row::popup_option).collect();
         }
         rows
     }
@@ -516,7 +516,7 @@ impl App {
             && let Some(Space::Existing { id, .. }) = &self.draft.space
             && let Some(index) = self.spaces.iter().position(|s| s.workspace_id == *id)
         {
-            self.options.selected = index + 2;
+            self.options.selected = index + 1;
         }
         self.options.scroll = 0;
         self.options.back = false;
@@ -664,12 +664,16 @@ impl App {
         now: i64,
     ) -> Vec<Effect> {
         let empty_accounts = self.accounts.is_empty();
+        let picker_cancel = matches!(self.page, Page::Accounts | Page::Spaces)
+            && (self.page != Page::Accounts || !empty_accounts)
+            && self
+                .rows()
+                .get(self.options.selected)
+                .is_some_and(|r| r.label == "Cancel");
         let picker_account = (self.page == Page::Accounts)
             .then(|| {
-                self.options
-                    .selected
-                    .checked_sub(2)
-                    .and_then(|i| self.accounts.get(i))
+                self.accounts
+                    .get(self.options.selected)
                     .map(|a| a.id.clone())
             })
             .flatten();
@@ -678,7 +682,7 @@ impl App {
         let picker_space = if self.page == Page::Spaces {
             self.options
                 .selected
-                .checked_sub(2)
+                .checked_sub(1)
                 .and_then(|i| self.spaces.get(i))
                 .map(|s| s.workspace_id.clone())
         } else {
@@ -692,7 +696,7 @@ impl App {
                 .spaces
                 .iter()
                 .position(|s| s.workspace_id == id)
-                .map(|i| i + 2)
+                .map(|i| i + 1)
                 .unwrap_or(0);
         }
         if self.auto_space {
@@ -750,10 +754,13 @@ impl App {
                     .accounts
                     .iter()
                     .position(|a| a.id == id)
-                    .map_or_else(|| self.opening_account_row(), |i| i + 2);
+                    .unwrap_or_else(|| self.opening_account_row());
             } else if empty_accounts && !self.accounts.is_empty() {
                 self.options.selected = self.opening_account_row();
             }
+        }
+        if picker_cancel {
+            self.options.selected = self.rows().len() - 1;
         }
         self.dirty = true;
         if old_account == self.draft.account && old_space == self.draft.space {
@@ -814,7 +821,7 @@ impl App {
             .iter()
             .position(|a| Some(a.id.as_str()) == current)
             .or_else(|| (!self.accounts.is_empty()).then_some(0))
-            .map_or(0, |i| i + 2)
+            .unwrap_or(0)
     }
     fn directory_action_count(&self) -> usize {
         if matches!(
@@ -1027,7 +1034,7 @@ impl App {
             }
             Page::Accounts => {
                 if let Some(session) = self.switch.take() {
-                    let account = self.accounts[self.options.selected - 2].id.clone();
+                    let account = self.accounts[self.options.selected].id.clone();
                     self.pop();
                     self.manager.switch_confirmation(session, &account);
                     return vec![];
@@ -1042,7 +1049,7 @@ impl App {
                     self.push(Page::SpaceName, String::new())
                 } else {
                     self.auto_space = false;
-                    let s = &self.spaces[self.options.selected - 2];
+                    let s = &self.spaces[self.options.selected - 1];
                     self.draft.space = Some(Space::Existing {
                         id: s.workspace_id.clone(),
                         label: s.label.clone(),
@@ -1309,6 +1316,9 @@ impl App {
             }
             KeyCode::Left if matches!(self.page, Page::Directory(_)) => {
                 if self.options.selected < self.directory_children_offset()
+                    || self.options.selected
+                        >= self.directory_children_offset() + self.listing.children.len().max(1)
+                    || self.listing_pending
                     || self.listing.path.as_deref() == Some(Path::new("/"))
                 {
                     return vec![];
@@ -1445,10 +1455,8 @@ impl App {
         } else if !self.error.is_empty() {
             crate::messages::describe(&self.error)
         } else if self.page == Page::Accounts {
-            self.options
-                .selected
-                .checked_sub(2)
-                .and_then(|i| self.accounts.get(i))
+            self.accounts
+                .get(self.options.selected)
                 .map(|a| crate::usage::Usage::account(a).status)
                 .unwrap_or_default()
         } else {
@@ -1473,15 +1481,6 @@ impl App {
                 0
             },
             large: editor.is_some(),
-            pinned: if editor.is_some() {
-                self.directory_children_offset()
-            } else if self.page == Page::Accounts
-                || (self.page == Page::Spaces && !self.spaces.is_empty())
-            {
-                2
-            } else {
-                0
-            },
             browse_hint: editor.is_some() && self.control_tokens().contains(&"◀/▶: Parent/Open"),
         };
         if self
@@ -1758,19 +1757,58 @@ mod tests {
                     a.draft.account = current.map(str::to_owned);
                 }
                 a.push(Page::Accounts, String::new());
-                assert_eq!(a.rows()[0].label, "Cancel");
-                assert!(a.rows()[1].separator);
-                assert_eq!(a.options.selected, if current.is_some() { 3 } else { 2 });
-                let chosen = a.accounts[a.options.selected - 2].id.clone();
+                assert_eq!(a.rows().last().unwrap().label, "Cancel");
+                assert!(a.rows()[a.accounts.len()].separator);
+                assert_eq!(a.options.selected, if current.is_some() { 1 } else { 0 });
+                let chosen = a.accounts[a.options.selected].id.clone();
                 let mut reordered = a.accounts.clone();
                 reordered.reverse();
                 a.inventory(reordered, vec![], 0);
-                assert_eq!(a.accounts[a.options.selected - 2].id, chosen);
-                a.options.selected = 0;
+                assert_eq!(a.accounts[a.options.selected].id, chosen);
+                a.options.selected = a.rows().len() - 1;
                 a.activate();
                 assert_eq!(a.page, Page::Summary);
             }
         }
+    }
+    #[test]
+    fn account_choice_uses_visible_identity_and_bottom_cancel_survives_inventory_growth() {
+        let mut a = app();
+        a.page = Page::Summary;
+        a.accounts = serde_json::from_value(json!([
+            {"id":"codex:first","selectable":true},
+            {"id":"codex:second","selectable":true}
+        ]))
+        .unwrap();
+        a.push(Page::Accounts, String::new());
+        a.options.selected = 1;
+        a.activate();
+        assert_eq!(a.draft.account.as_deref(), Some("codex:second"));
+        a.push(Page::Accounts, String::new());
+        a.options.boundary(&a.rows(), false, true);
+        let mut refreshed = a.accounts.clone();
+        refreshed
+            .push(serde_json::from_value(json!({"id":"codex:third","selectable":true})).unwrap());
+        a.inventory(refreshed, vec![], 0);
+        assert_eq!(a.rows()[a.options.selected].label, "Cancel");
+        a.activate();
+        assert_eq!(a.page, Page::Summary);
+        assert_eq!(a.draft.account.as_deref(), Some("codex:second"));
+        let session = json!({"id":"stable","generation":7,"name":"Saved","capabilities":{"switch_account":true}});
+        a.manager.sessions = vec![session.clone()];
+        a.switch = Some(session);
+        a.push(Page::Accounts, String::new());
+        a.options.selected = 0;
+        assert!(a.activate().is_empty());
+        assert!(
+            a.manager
+                .dialog
+                .as_ref()
+                .unwrap()
+                .body
+                .join(" ")
+                .contains("codex:first")
+        );
     }
     #[test]
     fn polled_account_status_only_grows_the_popup_when_hovered() {
@@ -1883,8 +1921,8 @@ mod tests {
         let c = a.paint(&mut field, 20, 100, 30);
         let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
         assert!(
-            text.contains("Use this directory")
-                && text.contains("Create subdirectory")
+            text.contains("[use this directory]")
+                && text.contains("[create subdirectory]")
                 && text.contains("Loading…")
         );
         assert!(!text.contains("child/"));
@@ -1895,13 +1933,13 @@ mod tests {
             .collect();
         let create = lines
             .iter()
-            .position(|s| s.contains("Create subdirectory"))
+            .position(|s| s.contains("[create subdirectory]"))
             .unwrap();
         let loading = lines.iter().position(|s| s.contains("Loading…")).unwrap();
-        assert_eq!(loading, create + 3);
+        assert_eq!(loading, create + 4);
         let cancel = lines.iter().position(|s| s.contains("Cancel")).unwrap();
-        assert!(cancel > loading);
-        assert_eq!(cancel, (30 - size.height) / 2 + size.height - 3);
+        assert_eq!(cancel, create + 2);
+        assert!(loading > cancel);
         assert_eq!(a.popup_size.as_ref().unwrap().1.height, size.height);
         a.listing(
             a.revision,
@@ -2049,7 +2087,7 @@ mod tests {
             let mut a = app();
             a.page = Page::Accounts;
             a.switch = switching.then(|| json!({"id":"session"}));
-            a.options.selected = 2;
+            a.options.selected = 0;
             a.accounts=vec![serde_json::from_value(json!({"id":"codex:demo","selectable":true,"usage_fresh":true,"usage":{"observed_at":1,"short":{"duration_minutes":300,"used_percent":20},"weekly":{"duration_minutes":10080,"used_percent":10}}})).unwrap()];
             let mut field = Field::new(80, 24, 1);
             let c = a.paint(&mut field, 4200, 80, 24);
@@ -2261,7 +2299,7 @@ mod tests {
     fn picker_columns_are_adjacent_and_status_is_below_list_or_range() {
         let mut a = app();
         a.page = Page::Accounts;
-        a.options.selected = 2;
+        a.options.selected = 0;
         let account = |name: &str, short: bool| {
             serde_json::from_value(json!({"id":format!("codex:{name}"),"selectable":true,"usage_fresh":true,"usage":{"observed_at":1,"short":if short{json!({"duration_minutes":300,"used_percent":20})}else{Value::Null},"weekly":{"duration_minutes":10080,"used_percent":10}}})).unwrap()
         };
@@ -2279,12 +2317,12 @@ mod tests {
             assert!(line(ready).contains("longest"));
             let inner = width.saturating_sub(4).min(76) - 4;
             let left = Options::left(inner, &rows);
-            assert_eq!(rows[2].preview_position(inner, left).unwrap(), left + 10);
+            assert_eq!(rows[0].preview_position(inner, left).unwrap(), left + 10);
             assert_eq!(
-                rows[2].preview_position(inner, left).unwrap()
-                    + rows[2].preview.as_ref().unwrap().len(),
-                rows[3].preview_position(inner, left).unwrap()
-                    + rows[3].preview.as_ref().unwrap().len()
+                rows[0].preview_position(inner, left).unwrap()
+                    + rows[0].preview.as_ref().unwrap().len(),
+                rows[1].preview_position(inner, left).unwrap()
+                    + rows[1].preview.as_ref().unwrap().len()
             );
         }
         a.accounts = (0..30)
@@ -2323,7 +2361,7 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("acct0") && l.contains("Ready"))
         );
-        a.options.selected = 0;
+        a.options.selected = a.rows().len() - 1;
         let c = a.paint(&mut Field::new(60, 18, 1), 0, 60, 18);
         assert!(
             !c.cells
@@ -2545,9 +2583,9 @@ mod tests {
                 children: vec!["/tmp/child".into()],
                 ..Listing::default()
             };
-            assert_eq!(a.rows()[0].label, "Use this directory");
-            assert_eq!(a.rows()[1].label, "Leave unset");
-            assert_eq!(a.rows()[2].label, "Create subdirectory");
+            assert_eq!(a.rows()[0].label, "[use this directory]");
+            assert_eq!(a.rows()[1].label, "[leave unset]");
+            assert_eq!(a.rows()[2].label, "[create subdirectory]");
             for row in 0..3 {
                 a.options.selected = row;
                 a.options.back = false;
@@ -2695,9 +2733,9 @@ mod tests {
         ];
         let rows = a.rows();
         assert!(rows.iter().all(|row| row.preview_column.is_none()));
-        assert_eq!(rows[0].label, "Create new space");
-        assert_eq!(rows[2].preview.as_deref(), Some("(w1)"));
-        for selected in [2, 3] {
+        assert_eq!(rows[0].label, "[create new space]");
+        assert_eq!(rows[1].preview.as_deref(), Some("(w1)"));
+        for selected in [1, 2] {
             a.options.selected = selected;
             let mut field = Field::new(100, 24, 1);
             let c = a.paint(&mut field, 1000, 100, 24);
@@ -2727,7 +2765,7 @@ mod tests {
             assert_eq!(c.cells.iter().filter(|c| c.glyph == "(").count(), 1);
         }
         assert!(Options::previews_detached(36, &rows));
-        a.options.selected = 2;
+        a.options.selected = 1;
         let mut field = Field::new(36, 24, 1);
         let c = a.paint(&mut field, 1000, 36, 24);
         let index = c.cells.iter().position(|c| c.glyph == "(").unwrap();
@@ -2738,12 +2776,12 @@ mod tests {
                 r.iter()
                     .map(|c| c.glyph.as_str())
                     .collect::<String>()
-                    .contains("Create new space")
+                    .contains("[create new space]")
             })
             .unwrap();
-        assert_eq!(index / 36, first_row + rows.len() - 1);
+        assert_eq!(index / 36, first_row + rows.len() + 1);
         assert_eq!(index % 36, (36 - "(w1)".len()) / 2);
-        a.options.selected = 1;
+        a.options.selected = a.rows().len() - 1;
         let c = a.paint(&mut field, 1050, 36, 24);
         assert!(c.cells.iter().all(|c| c.glyph != "("));
         a.options.back = false;
@@ -2769,11 +2807,11 @@ mod tests {
         a.inventory(vec![], spaces.clone(), 0);
         assert!(matches!(&a.draft.space,Some(Space::Existing {id,..}) if id=="w2"));
         a.push(Page::Spaces, String::new());
-        assert_eq!(a.options.selected, 3);
+        assert_eq!(a.options.selected, 2);
         let mut reordered = spaces.clone();
         reordered.reverse();
         a.inventory(vec![], reordered, 0);
-        assert_eq!(a.options.selected, 2);
+        assert_eq!(a.options.selected, 1);
         let none = spaces
             .iter()
             .cloned()
@@ -2785,7 +2823,7 @@ mod tests {
         a.inventory(vec![], none, 0);
         assert_eq!(a.draft.space, None);
         a.inventory(vec![], spaces.clone(), 0);
-        a.options.selected = 2;
+        a.options.selected = 1;
         a.activate();
         a.inventory(vec![], spaces, 0);
         assert!(matches!(&a.draft.space,Some(Space::Existing {id,..}) if id=="w1"));

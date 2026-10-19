@@ -50,7 +50,9 @@ Its reusable components are:
 - `usage`: one measurement/rendering system for remaining-allowance bars, limit
   markers, status-only accounts and shared columns across responsive layouts.
 - `popup`: shared frame, measured size and choice-list template (optional boxed
-  editor, pinned action header and Cancel footer, selected preview and status). Callers supply
+  editor, one scrollable choice list, selected preview and status). A shared
+  list finisher places Cancel after exactly one bullet spacer; actions and Cancel
+  scroll with the choices. Callers supply
   content and handle actions; they do not duplicate layout. Pickers preserve the
   opening screen and cache geometry/detail budgets until terminal resize. Labels
   and known statuses determine opening width; descriptions wrap and path editors

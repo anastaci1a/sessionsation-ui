@@ -78,6 +78,21 @@ impl Size {
         }
     }
 }
+/// Finish a choice list with one bullet spacer and Cancel, without mounting rows.
+pub fn with_cancel(
+    rows: impl IntoIterator<Item = crate::widgets::Row>,
+) -> Vec<crate::widgets::Row> {
+    use crate::widgets::Row;
+    let mut rows: Vec<_> = rows.into_iter().collect();
+    while rows.last().is_some_and(|r| r.separator) {
+        rows.pop();
+    }
+    if !rows.is_empty() {
+        rows.push(Row::separator());
+    }
+    rows.push(Row::yes("Cancel"));
+    rows
+}
 /// Choice template: descriptive text, optional editor, navigable list and Cancel.
 /// Geometry belongs to the opened view; asynchronous content never remeasures it.
 pub struct Choices<'a> {
@@ -90,7 +105,6 @@ pub struct Choices<'a> {
     pub reserve_note: bool,
     pub inline_note_width: usize,
     pub large: bool,
-    pub pinned: usize,
     pub browse_hint: bool,
 }
 /// Natural content width, capped for readable wrapping and the current terminal.
@@ -156,7 +170,7 @@ impl Choices<'_> {
                 * 2;
         let height = if self.large {
             (viewport.1 * DIRECTORY_HEIGHT_PERCENT / 100)
-                .max(description + 1 + usize::from(self.editor.is_some()) * 4 + self.pinned + 4)
+                .max(description + 1 + usize::from(self.editor.is_some()) * 4 + 4)
         } else {
             description + 1 + self.rows.len().max(1) + preview + note + 2
         };
@@ -250,28 +264,13 @@ pub fn paint_choices(
         let menu_bottom = local.height.saturating_sub(usize::from(view.large));
         let bottom = menu_bottom.saturating_sub(note_height);
         options.back = false;
-        let (_, capacity) = if view.pinned > 0 {
-            options.paint_pinned_menu(local, view.rows, view.pinned, top, menu_bottom, bottom + 1)
-        } else {
-            options.paint_menu(local, view.rows, top, bottom, bottom + 1)
-        };
+        let (_, capacity) = options.paint_menu(local, view.rows, top, bottom, bottom + 1);
         if !view.note.is_empty() {
-            let available = bottom.saturating_sub(top);
-            let pinned_active = view.pinned > 0
-                && view.rows.len() > available
-                && available.saturating_sub(1) > 5
-                && view.pinned < view.rows.len();
-            let selected_y = if pinned_active && options.selected < view.pinned {
-                Some(top + options.selected)
-            } else {
-                options
-                    .selected
-                    .checked_sub(options.scroll)
-                    .filter(|i| {
-                        *i < capacity.saturating_sub(if pinned_active { view.pinned } else { 0 })
-                    })
-                    .map(|i| top + i + if pinned_active { view.pinned } else { 0 })
-            };
+            let selected_y = options
+                .selected
+                .checked_sub(options.scroll)
+                .filter(|i| *i < capacity)
+                .map(|i| top + i);
             let (x, y) = if inline {
                 view.rows
                     .get(options.selected)
@@ -279,27 +278,13 @@ pub fn paint_choices(
                     .map(|(r, y)| (Choices::row_end(r, local.width) + 1, y))
                     .unwrap_or((0, local.height))
             } else {
-                let footer = usize::from(
-                    view.pinned > 0
-                        && available.saturating_sub(usize::from(view.rows.len() > available)) > 5
-                        && view.rows.last().is_some_and(|r| r.label == "Cancel")
-                        && view
-                            .rows
-                            .get(view.rows.len().saturating_sub(2))
-                            .is_some_and(|r| r.separator)
-                        && available > view.pinned + 3,
-                ) * 2;
                 let y = top
-                    + view
-                        .rows
-                        .len()
-                        .saturating_sub(footer)
-                        .min(capacity.saturating_sub(footer))
+                    + view.rows.len().min(capacity)
                     + usize::from(view.rows.len() > capacity)
                     + 1;
                 (
                     (local.width.saturating_sub(view.note.chars().count())) / 2,
-                    y.min(menu_bottom.saturating_sub(footer + 1)),
+                    y.min(menu_bottom.saturating_sub(1)),
                 )
             };
             local.text(
@@ -399,15 +384,33 @@ mod tests {
         assert_ne!(row[border - 2].glyph, " ");
     }
     #[test]
+    fn cancel_spacer_is_exactly_one_row_and_empty_lists_only_offer_cancel() {
+        use crate::widgets::Row;
+        for rows in [
+            vec![],
+            vec![Row::yes("A")],
+            vec![Row::yes("A"), Row::separator(), Row::separator()],
+        ] {
+            let rows = with_cancel(rows);
+            assert_eq!(rows.last().unwrap().label, "Cancel");
+            if rows.len() > 1 {
+                assert_eq!(rows.len(), 3);
+                assert!(rows[1].separator);
+            } else {
+                assert_eq!(rows.len(), 1);
+            }
+        }
+    }
+    #[test]
     fn account_status_has_exactly_one_trailing_space_on_open_and_growth() {
         use crate::widgets::{Options, Row};
         let rows = vec![
-            Row::yes("Cancel").popup_option(),
-            Row::separator().popup_option(),
             Row::yes("personal")
                 .with_column_preview("90% wk", 11, false)
                 .preview_gap(1)
                 .popup_option(),
+            Row::separator().popup_option(),
+            Row::yes("Cancel").popup_option(),
         ];
         let mut view = Choices {
             title: "Choose Account",
@@ -419,11 +422,10 @@ mod tests {
             reserve_note: true,
             inline_note_width: 5,
             large: false,
-            pinned: 2,
             browse_hint: false,
         };
         let mut options = Options {
-            selected: 2,
+            selected: 0,
             ..Options::default()
         };
         let opened = view.measure((100, 30));
@@ -437,7 +439,7 @@ mod tests {
         );
         assert_one_space_before_border(&canvas, "Ready");
         view.note = "Login required";
-        let grown = view.grow_for_selection(opened, 2);
+        let grown = view.grow_for_selection(opened, 0);
         let mut canvas = Canvas::new(100, 30);
         paint_choices(&mut canvas, &Palette::default(), &view, &mut options, grown);
         assert_one_space_before_border(&canvas, "Login required");
@@ -465,7 +467,6 @@ mod tests {
             reserve_note: false,
             inline_note_width: 0,
             large: false,
-            pinned: 0,
             browse_hint: false,
         };
         let size = view.measure((100, 30));
@@ -499,7 +500,6 @@ mod tests {
             reserve_note: false,
             inline_note_width: 0,
             large: false,
-            pinned: 0,
             browse_hint: false,
         };
         let opened = view.measure((100, 30));
@@ -537,7 +537,6 @@ mod tests {
             reserve_note: false,
             inline_note_width: 0,
             large: true,
-            pinned: 3,
             browse_hint: false,
         };
         for height in 16..45 {
@@ -572,7 +571,6 @@ mod tests {
                 reserve_note: false,
                 inline_note_width: 0,
                 large: false,
-                pinned: 0,
                 browse_hint: false,
             };
             let size = view.measure(viewport);

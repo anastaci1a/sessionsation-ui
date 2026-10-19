@@ -84,9 +84,11 @@ Information-only dialogs, including a dialog whose only action is Close, hide
 that action and all bottom controls; Enter/Esc dismisses them. Progress and loading dialogs
 reserve a fixed body viewport and scroll updates within it. Long lists scroll
 and selected previews can move below them. Action groups use sentence case and a
-blank bullet spacer. Directory and Space pickers keep Cancel below their list
-with a bullet separator.
-Account selection puts Cancel first, followed by a bullet separator. It opens on
+blank bullet spacer. Choice pickers end with Cancel after exactly one bullet
+spacer; it follows the last choice directly rather than the bottom of the frame.
+All choices, including actions and Cancel, scroll together. Directory action labels
+and `[create new space]` use lowercase brackets. Space creation is the first row,
+with Space choices immediately after it. Account selection opens on
 the current selection (including a prefilled default), or the first account when
 there is no matching selection; refreshed lists retain the hovered account by ID.
 
@@ -375,19 +377,19 @@ the one currently focused in HERDR; no focus leaves it unset. Pickers preserve t
 draft on Cancel/Esc. Existing automatic paths require explicit selection. Directory Enter
 selects the current option. In an unfamiliar directory, focus starts on the first
 subdirectory, or the non-activating `(none)` placeholder when empty; revisiting restores its selection.
-Use this directory, Leave unset (for defaults) and Create subdirectory stay above the scrolling
-subdirectory list; Cancel stays below its range counter. Both groups are separated
-from the list by a blank bullet row
-even when empty. Left on `(none)` navigates to the parent; Enter does nothing.
-If at most five rows fit, the whole list
-scrolls instead. Directory popup dimensions stay fixed through browsing and path
-editing, with equal outer padding above and below. Wraparound and Home/End move
-the list viewport to the matching end. Pending navigation clears
-old child rows and shows Loading… one blank line below the actions. Right browses
-child rows only; Left returns to their parent and does nothing on action rows.
+[use this directory], [leave unset] (for defaults) and [create subdirectory] start
+the scrolling list. A bullet spacer separates these actions from subdirectories;
+another single bullet spacer separates the last subdirectory from Cancel.
+Left on `(none)` navigates to the parent; Enter does nothing. Actions can scroll
+out of view at every terminal size. Directory popup dimensions stay fixed through
+browsing and path editing, with equal outer padding above and below. Wraparound
+and Home/End move the list viewport to the matching end. Pending navigation clears
+old child rows and shows Loading… below the list. Right browses child rows only;
+Left returns to their parent and does nothing on action rows or Cancel.
 Only child rows show the Parent/Open hint. Tab and Ctrl-U have no directory-picker
-action. Typing and paste edit the path. Create stages
-intent and never calls mkdir. Configuration uses the same picker; Use this directory applies a directory and Cancel/Esc returns without applying the edited field.
+action. Typing and paste edit the path. Create stages intent and never calls mkdir.
+Configuration uses the same picker; [use this directory] applies a directory and
+Cancel/Esc returns without applying the edited field.
 Missing per-Space roots remain unset, without a global fallback. Last-account prefill
 initially requires fresh usage within existing limits. Once selected, the account remains
 visible during refreshes and stale usage; only confirmed unavailability clears it.

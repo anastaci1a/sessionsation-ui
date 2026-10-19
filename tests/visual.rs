@@ -77,7 +77,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("settings-compact", 50, 18),
         ("roots-compact", 50, 18),
         ("directory-loading", 80, 26),
-        ("directory-pinned", 80, 26),
+        ("directory-scroll", 80, 26),
         ("compact", 60, 16),
         ("actions", 80, 24),
         ("picker", 60, 20),
@@ -224,7 +224,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
                 None,
             );
             app.page = sessionsation_ui::app::Page::Accounts;
-            app.options.selected = 2;
+            app.options.selected = 0;
             app.accounts = accounts.clone();
             c = app.paint(&mut f, 4060, width, height);
             c.cells[..width].fill(sessionsation_ui::render::Cell::default());

@@ -594,7 +594,7 @@ impl Manager {
             Page::Spaces(_) => self.space_choices["spaces"]
                 .as_array()
                 .map(|spaces| {
-                    spaces
+                    let rows = spaces
                         .iter()
                         .map(|space| {
                             let row = Row::gate(
@@ -607,8 +607,10 @@ impl Manager {
                                 row
                             }
                         })
+                        .collect::<Vec<_>>();
+                    crate::popup::with_cancel(rows)
+                        .into_iter()
                         .map(Row::popup_option)
-                        .chain(std::iter::once(Row::yes("Cancel").popup_option()))
                         .collect()
                 })
                 .unwrap_or_else(|| vec![Row::yes("Cancel").popup_option()]),
@@ -1934,7 +1936,6 @@ impl Manager {
                 reserve_note: false,
                 inline_note_width: 0,
                 large: false,
-                pinned: 0,
                 browse_hint: false,
             };
             if self

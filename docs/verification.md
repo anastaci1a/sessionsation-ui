@@ -91,7 +91,7 @@ cp .demo/output/demo.gif docs/assets/demo.gif
 npm run check
 ```
 
-The checked-in demo is about 1.1 MiB, 46 seconds and 315 frames at a 10 FPS cap;
+The checked-in demo is about 1.1 MiB, 46 seconds and 313 frames at a 10 FPS cap;
 its 128×40 terminal renders to 1096×718 pixels. It shows bars/limits, session
 activity/details, the staged directory picker and an inert normal-tab handoff.
 The contact sheet and loop seam were inspected before README promotion. No real
@@ -139,13 +139,15 @@ ellipsis rather than determining popup width. Directory viewport checks assert
 60% main-popup width and 90% height, with small-terminal bounds. Archived IDs
 use parenthesized gray/unbolded previews with a list-wide decision including
 offscreen rows; wide/compact goldens verify both placements. Account selection restores the
-current/default ID or first account below the Cancel/separator group and retains
+current/default ID or first account, keeps Cancel last after one bullet spacer, and retains
 that identity through reordered inventory. Resize refits the frame; long content
-scrolls inside it. Directory goldens cover pinned
-headers and a bottom-mounted Cancel, wraparound/Home/End viewport synchronization, equal vertical margins, the five-row scrolling fallback, loading
+scrolls inside it. Directory goldens cover one scrolling list including top
+actions and Cancel, exact single-row bullet separation, wraparound/Home/End
+viewport synchronization, equal vertical margins, and loading
 without stale children and the non-activating `(none)` row with its normal hover
-bullet and Left-to-parent. Popup actions use sentence case; directory choices
-read Use this directory and Create subdirectory.
+bullet and Left-to-parent. Directory actions and [create new space] use lowercase brackets; forms and
+confirmations retain sentence case. Account selection and switch regressions bind
+the visible row to the correct account and retain Cancel through inventory growth.
 Width-fitting and one-blank-line field spacing, inline/detached account statuses,
 and hidden lone Close buttons with preserved background progress are covered. Other
 coverage includes inactive account-label hiding, independent preview fit, Space

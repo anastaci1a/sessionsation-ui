@@ -743,74 +743,6 @@ impl Options {
         }
         (left, capacity)
     }
-    /// Scroll a list body independently while retaining its action header.
-    /// A trailing separator + Cancel forms a mounted footer, including while empty.
-    /// Very short viewports use ordinary whole-list scrolling instead.
-    pub fn paint_pinned_menu(
-        &mut self,
-        canvas: &mut Canvas,
-        rows: &[Row],
-        pinned: usize,
-        top: usize,
-        bottom: usize,
-        controls_start: usize,
-    ) -> (usize, usize) {
-        let available = bottom
-            .min(controls_start.saturating_sub(1))
-            .saturating_sub(top);
-        let overflow = rows.len() > available;
-        let capacity = available.saturating_sub(usize::from(overflow));
-        let footer = usize::from(
-            rows.last().is_some_and(|r| r.label == "Cancel")
-                && rows
-                    .get(rows.len().saturating_sub(2))
-                    .is_some_and(|r| r.separator),
-        ) * 2;
-        if (!overflow && footer == 0)
-            || capacity <= 5
-            || pinned + footer > rows.len()
-            || available <= pinned + footer + 1
-        {
-            return self.paint_menu(canvas, rows, top, bottom, controls_start);
-        }
-        let left = Self::left(canvas.width, rows);
-        for (i, row) in rows.iter().take(pinned).enumerate() {
-            row.paint(
-                canvas,
-                left,
-                top + i,
-                self.selected == i && !self.back,
-                self.back,
-            );
-        }
-        let body_end = rows.len() - footer;
-        for (i, row) in rows.iter().enumerate().skip(body_end) {
-            row.paint(
-                canvas,
-                left,
-                bottom - footer + i - body_end,
-                self.selected == i && !self.back,
-                self.back,
-            );
-        }
-        let mut body = self.clone();
-        body.selected = self
-            .selected
-            .checked_sub(pinned)
-            .filter(|i| *i < body_end - pinned)
-            .unwrap_or(usize::MAX);
-        body.scroll = self.scroll.saturating_sub(pinned);
-        let (_, body_capacity) = body.paint_menu(
-            canvas,
-            &rows[pinned..body_end],
-            top + pinned,
-            bottom.saturating_sub(footer),
-            controls_start.saturating_sub(footer),
-        );
-        self.scroll = body.scroll + pinned;
-        self.preview_visible = body.preview_visible;
-        (left, pinned + body_capacity + footer)
-    }
     pub fn paint_range(&self, canvas: &mut Canvas, count: usize, capacity: usize, y: usize) {
         if capacity == 0 || count <= capacity {
             return;
@@ -874,155 +806,62 @@ mod tests {
         input.paint(&mut Canvas::new(3, 1), 0, 0, 3, true);
     }
     #[test]
-    fn pinned_header_survives_six_rows_but_five_scrolls_everything() {
-        let mut rows = vec![Row::yes("Action"), Row::yes("Cancel"), Row::separator()];
-        rows.extend((0..20).map(|i| Row::yes(format!("Child {i}"))));
-        for (bottom, pinned) in [(7, true), (6, false)] {
-            let mut options = Options {
-                selected: rows.len() - 1,
-                ..Options::default()
-            };
-            let mut c = Canvas::new(50, 15);
-            options.paint_pinned_menu(&mut c, &rows, 3, 0, bottom, 12);
-            let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
-            assert_eq!(text.contains("Action"), pinned);
-            assert_eq!(text.contains("Cancel"), pinned);
-            assert!(text.contains("Child 19"));
-        }
-        let mut c = Canvas::new(40, 10);
-        Row::placeholder("(none)").paint(&mut c, 0, 0, true, false);
-        assert!(c.cells.iter().all(|c| !c.strike && !c.bold));
-        assert_eq!(c.cells[0].glyph, "●");
-        let mut idle = Canvas::new(40, 10);
-        Row::placeholder("(none)").paint(&mut idle, 0, 0, false, false);
-        assert_eq!(idle.cells[0].glyph, "○");
-    }
-    #[test]
-    fn pinned_actions_stay_visible_and_short_viewports_scroll_the_whole_list() {
+    fn whole_choice_list_scrolls_actions_and_cancel_and_wraps_once() {
         let mut rows = vec![
-            Row::yes("Use this directory"),
-            Row::yes("Leave unset"),
-            Row::yes("Create subdirectory"),
+            Row::yes("[use this directory]"),
+            Row::yes("[create subdirectory]"),
             Row::separator(),
         ];
         rows.extend((0..30).map(|i| Row::yes(format!("directory{i:02}/"))));
-        let mut options = Options {
-            selected: rows.len() - 1,
-            ..Options::default()
-        };
-        let mut c = Canvas::new(60, 20);
-        let (_, capacity) = options.paint_pinned_menu(&mut c, &rows, 4, 2, 14, 17);
-        let line = |y: usize| {
-            c.cells[y * 60..(y + 1) * 60]
-                .iter()
-                .map(|c| c.glyph.as_str())
-                .collect::<String>()
-        };
-        for (i, label) in ["Use this directory", "Leave unset", "Create subdirectory"]
-            .iter()
-            .enumerate()
-        {
-            assert!(line(2 + i).contains(label));
-        }
-        assert!(line(5).contains('•'));
-        assert!(line(2 + capacity - 1).contains("directory29/"));
-        assert!(line(2 + capacity).contains(" of 30"));
-        options.selected = 0;
-        let mut top = Canvas::new(60, 20);
-        options.paint_pinned_menu(&mut top, &rows, 4, 2, 14, 17);
-        assert!(top.cells.iter().any(|c| c.glyph == "U" && c.bold));
-        let mut tiny = Canvas::new(60, 10);
-        options.selected = rows.len() - 1;
-        options.paint_pinned_menu(&mut tiny, &rows, 4, 2, 8, 9);
-        let text = tiny
-            .cells
-            .iter()
-            .map(|c| c.glyph.as_str())
-            .collect::<String>();
-        assert!(!text.contains("Use this directory"));
-        assert!(text.contains("directory29/"));
-    }
-    #[test]
-    fn mounted_cancel_and_header_wrap_move_the_body_to_each_end() {
-        let mut rows = vec![Row::yes("Use this directory"), Row::separator()];
-        rows.extend((0..30).map(|i| Row::yes(format!("directory{i:02}/"))));
-        rows.extend([Row::separator(), Row::yes("Cancel")]);
+        let rows = crate::popup::with_cancel(rows);
         let mut options = Options::default();
         let paint = |o: &mut Options, bottom| {
             let mut c = Canvas::new(60, 24);
-            o.paint_pinned_menu(&mut c, &rows, 2, 1, bottom, bottom + 1);
+            o.paint_menu(&mut c, &rows, 1, bottom, bottom + 1);
             c.cells
                 .chunks(60)
                 .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
                 .collect::<Vec<_>>()
         };
-        options.boundary(&rows, false, true);
-        let lines = paint(&mut options, 19);
-        assert!(lines[1].contains("Use this directory"));
-        assert!(lines[18].contains("Cancel"));
-        assert!(lines[17].contains('•'));
-        assert!(lines.iter().any(|l| l.contains("directory29/")));
-        options.step(&rows, false, false);
-        let lines = paint(&mut options, 19);
-        assert_eq!(options.selected, 0);
-        assert!(lines.iter().any(|l| l.contains("directory00/")));
-        assert!(!lines.iter().any(|l| l.contains("directory29/")));
-        options.step(&rows, false, true);
-        let lines = paint(&mut options, 19);
-        assert_eq!(options.selected, rows.len() - 1);
-        assert!(lines.iter().any(|l| l.contains("directory29/")));
-        options.boundary(&rows, false, false);
-        assert!(
-            paint(&mut options, 19)
-                .iter()
-                .any(|l| l.contains("directory00/"))
-        );
-        // Footer remains mounted even when the body has room to fit, and resize
-        // can fall back to whole-list scrolling without losing Cancel.
-        options.selected = rows.len() - 1;
-        assert!(paint(&mut options, 7).iter().any(|l| l.contains("Cancel")));
-        let short = vec![
-            Row::yes("Action"),
-            Row::separator(),
-            Row::placeholder("(none)"),
-            Row::separator(),
-            Row::yes("Cancel"),
-        ];
+        for bottom in [7, 19] {
+            options.boundary(&rows, false, true);
+            let lines = paint(&mut options, bottom);
+            let cancel = lines.iter().position(|l| l.contains("Cancel")).unwrap();
+            assert!(lines[cancel - 1].contains('•'));
+            assert!(lines[cancel - 2].contains("directory29/"));
+            assert!(!lines.iter().any(|l| l.contains("[use this directory]")));
+            options.step(&rows, false, false);
+            assert_eq!(options.selected, 0);
+            let lines = paint(&mut options, bottom);
+            assert!(lines[1].contains("[use this directory]"));
+            assert!(!lines.iter().any(|l| l.contains("Cancel")));
+            options.step(&rows, false, true);
+            assert_eq!(options.selected, rows.len() - 1);
+            assert!(
+                paint(&mut options, bottom)
+                    .iter()
+                    .any(|l| l.contains("directory29/"))
+            );
+            options.boundary(&rows, false, false);
+            assert!(paint(&mut options, bottom)[1].contains("[use this directory]"));
+        }
+    }
+    #[test]
+    fn placeholder_has_normal_bullet_and_short_cancel_follows_without_extra_space() {
+        let rows = crate::popup::with_cancel([Row::placeholder("(none)")]);
         let mut c = Canvas::new(40, 20);
-        options.selected = 2;
-        options.paint_pinned_menu(&mut c, &short, 2, 1, 16, 17);
-        let text = |y: usize| {
+        Options::default().paint_menu(&mut c, &rows, 1, 16, 17);
+        let line = |y: usize| {
             c.cells[y * 40..(y + 1) * 40]
                 .iter()
                 .map(|c| c.glyph.as_str())
                 .collect::<String>()
         };
-        assert!(text(3).contains("(none)"));
-        assert!(text(15).contains("Cancel"));
-    }
-    #[test]
-    fn pinned_header_wrap_and_boundaries_reset_scroll_without_a_footer() {
-        let mut rows = vec![Row::yes("Action"), Row::separator()];
-        rows.extend((0..30).map(|i| Row::yes(format!("Child {i}"))));
-        let mut o = Options::default();
-        for (last, expected) in [(true, "Child 29"), (false, "Child 0")] {
-            o.boundary(&rows, false, last);
-            let mut c = Canvas::new(40, 16);
-            o.paint_pinned_menu(&mut c, &rows, 2, 0, 12, 13);
-            assert!(c.cells.chunks(40).any(|r| {
-                r.iter()
-                    .map(|c| c.glyph.as_str())
-                    .collect::<String>()
-                    .contains(expected)
-            }));
-        }
-        o.step(&rows, false, true);
-        let mut c = Canvas::new(40, 16);
-        o.paint_pinned_menu(&mut c, &rows, 2, 0, 12, 13);
-        o.step(&rows, false, false);
-        let mut c = Canvas::new(40, 16);
-        o.paint_pinned_menu(&mut c, &rows, 2, 0, 12, 13);
-        assert_eq!(o.scroll, 2);
+        assert!(line(1).contains("(none)"));
+        assert!(line(2).contains('•'));
+        assert!(line(3).contains("Cancel"));
+        assert_eq!(c.cells[40 + Options::left(40, &rows)].glyph, "●");
+        assert!(c.cells.iter().all(|c| !c.strike && !c.bold));
     }
     #[test]
     fn held_arrows_stop_at_edges_and_release_rearms_wrap() {
