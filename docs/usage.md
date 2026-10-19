@@ -46,8 +46,10 @@ required, Restore for Deregistered, or usage details otherwise. These dialogs re
 the account and right-side focus when closed; mutations require confirmation.
 
 Bars show remaining allowance for the periods the backend reports: 5h/weekly or
-weekly only. Full-width bold line segments (no endcaps) deplete into visible gray; custom limits appear
-inside the bar. Percentages precede period labels in aligned columns. Missing
+weekly only. Bold lines with half-cell endcaps deplete into visible gray; custom limits appear
+inside the bar. Thresholds at the extreme ends use `├`/`┝` or `┤`/`┥`,
+matching the adjacent stroke weight. Percentages span the actual center-to-center
+line length (one cell less than the rendered width). Percentages precede period labels in aligned columns. Missing
 observations show Disabled, Login required or Usage unavailable as appropriate;
 stale observations are marked. New/resume account pickers use standard bullets
 with white/gray names and a separate right-aligned `x% 5h / x% wk` column, omitting the short period and

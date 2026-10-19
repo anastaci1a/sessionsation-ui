@@ -240,8 +240,9 @@ impl Usage {
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
-            let interior = bar.max(1);
-            let filled = window.remaining.map(|p| interior as f64 * p / 100.);
+            // End cells contribute half a cell each: center-to-center length.
+            let length = bar.saturating_sub(1) as f64;
+            let filled = window.remaining.map(|p| length * p.clamp(0., 100.) / 100.);
             let Some(filled) = filled else {
                 canvas.accent_text(
                     x,
@@ -261,10 +262,11 @@ impl Usage {
             };
             let marker = window
                 .limit
-                .map(|p| (interior.saturating_sub(1) as f64 * p / 100.).round() as usize);
+                .map(|p| (length * p.clamp(0., 100.) / 100.).round() as usize);
             for col in 0..bar {
                 let glyph = bar_glyph(col, bar, filled, marker);
-                if matches!(glyph, "╾" | "┽" | "┼" | "─") {
+                if matches!(glyph, "╾" | "┽" | "┼" | "─" | "╶" | "╴" | "├" | "┤" | "│")
+                {
                     canvas.text(
                         x + col,
                         y + row,
@@ -322,10 +324,30 @@ impl Usage {
 // Full-width segments, with matching horizontal weights at every cell boundary.
 // Character connections: https://www.unicode.org/charts/PDF/U2500.pdf
 fn bar_glyph(col: usize, width: usize, filled: f64, marker: Option<usize>) -> &'static str {
-    let interior = width as f64;
+    if width <= 1 {
+        return "│";
+    }
+    // Coordinates start at the center of the first endcap. Neighboring cells
+    // must agree on stroke weight at their shared edge, including mixed joints.
     let position = col as f64;
-    let left_heavy = filled > position;
-    let right_heavy = filled >= interior || filled > position + 1.;
+    let left_heavy = filled > position - 0.5;
+    let right_heavy = filled > position + 0.5;
+    if col == 0 {
+        return match (marker == Some(col), right_heavy) {
+            (true, true) => "┝",
+            (true, false) => "├",
+            (false, true) => "╺",
+            (false, false) => "╶",
+        };
+    }
+    if col == width - 1 {
+        return match (marker == Some(col), left_heavy) {
+            (true, true) => "┥",
+            (true, false) => "┤",
+            (false, true) => "╸",
+            (false, false) => "╴",
+        };
+    }
     match (marker == Some(col), left_heavy, right_heavy) {
         (true, _, true) => "┿",
         (true, true, false) => "┽",
@@ -627,23 +649,28 @@ mod tests {
     #[test]
     fn every_bar_join_is_continuous_at_all_percentages_and_threshold_positions() {
         let weights = |glyph| match glyph {
-            "╺" => (0, 2),
-            "╶" => (0, 1),
-            "╸" => (2, 0),
-            "╴" => (1, 0),
+            "╺" | "┝" => (0, 2),
+            "╶" | "├" => (0, 1),
+            "╸" | "┥" => (2, 0),
+            "╴" | "┤" => (1, 0),
             "━" | "┿" => (2, 2),
             "╾" | "┽" => (2, 1),
             "─" | "┼" => (1, 1),
             _ => panic!("unexpected bar segment"),
         };
-        for width in [3, 7, 24] {
+        for width in [2, 3, 7, 24] {
             for step in 0..=1000 {
-                let filled = width as f64 * step as f64 / 1000.;
+                let filled = (width - 1) as f64 * step as f64 / 1000.;
                 for marker in std::iter::once(None).chain((0..width).map(Some)) {
-                    for col in 0..width {
-                        assert!(!matches!(
-                            bar_glyph(col, width, filled, marker),
-                            "╺" | "╶" | "╸" | "╴"
+                    assert_eq!(weights(bar_glyph(0, width, filled, marker)).0, 0);
+                    assert_eq!(weights(bar_glyph(width - 1, width, filled, marker)).1, 0);
+                    if marker == Some(0) {
+                        assert!(matches!(bar_glyph(0, width, filled, marker), "├" | "┝"));
+                    }
+                    if marker == Some(width - 1) {
+                        assert!(matches!(
+                            bar_glyph(width - 1, width, filled, marker),
+                            "┤" | "┥"
                         ));
                     }
                     for col in 0..width - 1 {
@@ -693,21 +720,21 @@ mod tests {
         assert!(!text.contains("Ready"));
     }
     #[test]
-    fn full_line_bars_share_threshold_color_and_align_percentage_labels() {
+    fn half_endcaps_share_threshold_color_and_align_percentage_labels() {
         let mut a = account();
         a.usage["short"]["used_percent"] = json!(74.);
         a.details.remove("switch_thresholds");
         let u = Usage::account(&a);
         let mut c = Canvas::new(50, 5);
         u.paint(&mut c, 1, 1, 10, 2);
-        assert_eq!(c.cells[51].glyph, "━");
+        assert_eq!(c.cells[51].glyph, "╺");
         assert_eq!(c.cells[52].glyph, "━");
         assert_eq!(c.cells[53].glyph, "╾");
         assert_eq!(c.cells[54].glyph, "─");
         assert_eq!(c.cells[54].fg, [144; 3]);
         assert_eq!(c.cells[55].glyph, "─");
         assert_eq!(c.cells[55].fg, [144; 3]);
-        assert_eq!(c.cells[60].glyph, "─");
+        assert_eq!(c.cells[60].glyph, "╴");
         assert_eq!(c.cells[61].glyph, " ");
         assert_eq!(c.cells[62].glyph, "2");
         let u = Usage::account(&account());
