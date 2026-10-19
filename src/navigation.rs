@@ -7,10 +7,60 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 pub struct Navigation {
     last: Option<(KeyCode, Instant)>,
+    pending: Option<(KeyEvent, Instant)>,
 }
 impl Navigation {
-    pub fn key(&mut self, key: KeyEvent) -> bool {
-        self.key_at(key, Instant::now())
+    pub fn events(&mut self, key: KeyEvent) -> Vec<(KeyEvent, bool)> {
+        self.events_at(key, Instant::now())
+    }
+    pub fn flush(&mut self) -> Vec<(KeyEvent, bool)> {
+        self.flush_at(Instant::now())
+    }
+    fn flush_at(&mut self, now: Instant) -> Vec<(KeyEvent, bool)> {
+        if self.pending.is_some_and(|(_, deadline)| now >= deadline) {
+            let (key, _) = self.pending.take().unwrap();
+            self.last = Some((key.code, now));
+            vec![(key, true)]
+        } else {
+            vec![]
+        }
+    }
+    fn events_at(&mut self, key: KeyEvent, now: Instant) -> Vec<(KeyEvent, bool)> {
+        let mut events = Vec::new();
+        if let Some((pending, deadline)) = self.pending.take() {
+            if key.kind == KeyEventKind::Release && key.code != pending.code {
+                self.pending = Some((pending, deadline));
+                return vec![(key, false)];
+            }
+            if key.code == pending.code && key.kind != KeyEventKind::Release {
+                // A rapid follow-up proves the delayed first repeat belongs to
+                // the original hold. Neither event may rearm its wrap permission.
+                self.last = Some((key.code, now));
+                return vec![(pending, false), (key, false)];
+            }
+            events.push((pending, true));
+        }
+        let ambiguous = key.kind == KeyEventKind::Press
+            && matches!(
+                key.code,
+                KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right
+            )
+            && self.last.is_some_and(|(code, at)| {
+                let gap = now.saturating_duration_since(at);
+                code == key.code
+                    && gap >= Duration::from_millis(150)
+                    && gap <= Duration::from_millis(1200)
+            });
+        if ambiguous {
+            // Legacy terminals report a delayed first repeat as another Press.
+            // Resolve that ambiguity over one short repeat interval. The initial
+            // press and native repeat/release events are never delayed.
+            self.pending = Some((key, now + Duration::from_millis(100)));
+            self.last = Some((key.code, now));
+        } else {
+            events.push((key, self.key_at(key, now)));
+        }
+        events
     }
     pub(crate) fn key_at(&mut self, key: KeyEvent, now: Instant) -> bool {
         if key.kind == KeyEventKind::Release {
@@ -138,6 +188,68 @@ mod tests {
                 assert_eq!(selected, if previous { 3 } else { 0 });
             }
         }
+    }
+    #[test]
+    fn delayed_first_repeat_cannot_wrap_from_one_row_before_either_edge() {
+        for code in [KeyCode::Up, KeyCode::Down, KeyCode::Left, KeyCode::Right] {
+            let previous = matches!(code, KeyCode::Up | KeyCode::Left);
+            let mut input = Navigation::default();
+            let mut selection = SelectionNavigation::default();
+            let mut selected = if previous { 1 } else { 2 };
+            let now = Instant::now();
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            let mut apply = |events: Vec<(KeyEvent, bool)>| {
+                for (_, fresh) in events {
+                    selected = selection.step(selected, 4, previous, fresh, |_| true);
+                }
+                selected
+            };
+            assert_eq!(
+                apply(input.events_at(key, now)),
+                if previous { 0 } else { 3 }
+            );
+            assert!(
+                input
+                    .events_at(key, now + Duration::from_millis(500))
+                    .is_empty()
+            );
+            let mut unrelated = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+            unrelated.kind = KeyEventKind::Release;
+            let release = input.events_at(unrelated, now + Duration::from_millis(510));
+            assert_eq!(release.len(), 1);
+            assert!(!release[0].1);
+            for i in 1..60 {
+                assert_eq!(
+                    apply(input.events_at(key, now + Duration::from_millis(500 + i * 30))),
+                    if previous { 0 } else { 3 }
+                );
+            }
+            assert!(input.flush_at(now + Duration::from_secs(3)).is_empty());
+            // A distinct legacy tap still wraps after its short ambiguity window.
+            assert!(
+                !input
+                    .events_at(key, now + Duration::from_secs(4))
+                    .is_empty()
+            );
+        }
+    }
+    #[test]
+    fn legacy_tap_at_the_edge_resolves_while_native_release_rearms_immediately() {
+        let now = Instant::now();
+        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let mut input = Navigation::default();
+        assert!(input.events_at(key, now)[0].1);
+        assert!(
+            input
+                .events_at(key, now + Duration::from_millis(200))
+                .is_empty()
+        );
+        assert!(input.flush_at(now + Duration::from_millis(299)).is_empty());
+        assert!(input.flush_at(now + Duration::from_millis(300))[0].1);
+        let mut release = key;
+        release.kind = KeyEventKind::Release;
+        input.events_at(release, now + Duration::from_millis(301));
+        assert!(input.events_at(key, now + Duration::from_millis(302))[0].1);
     }
     #[test]
     fn legacy_quiet_tap_rearms_without_delaying_movement() {

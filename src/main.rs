@@ -429,7 +429,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
         let mut next = vec![];
         tokio::select! {
          _=term_signal.recv()=>{app.exit=true;},_ = hup_signal.recv()=>{app.exit=true;},
-         _=frame.tick()=>{app.dirty=true;},
+         _=frame.tick()=>{next=app.flush_navigation();app.dirty=true;},
          _=refresh.tick(),if !inventory_pending=>{inventory_pending=true;effects.inventory();let intents=app.manager.refresh();next=app.management(intents);},
          _=session_refresh.tick()=>{next=app.refresh_live();},
          _=receipt.tick(),if app.request.is_some()&&!app.success&&receipt_pending.as_deref()!=app.request.as_ref().and_then(|r|r["request_id"].as_str())=>{receipt_pending=app.request.as_ref().and_then(|r|r["request_id"].as_str()).map(str::to_owned);effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},

@@ -147,6 +147,7 @@ impl TextInput {
 #[derive(Clone, Debug)]
 pub struct Row {
     pub label: String,
+    pub status: Option<(String, bool)>,
     pub enabled: bool,
     pub preview: Option<String>,
     pub right_preview: bool,
@@ -180,6 +181,7 @@ impl Row {
         Self {
             label: label.into(),
             enabled,
+            status: None,
             preview: None,
             right_preview: false,
             preview_selected_only: false,
@@ -200,6 +202,23 @@ impl Row {
         self.preview = Some(preview.into());
         self.preview_selected_only = true;
         self
+    }
+    /// Persistent trailing status, independent of selection and optional previews.
+    pub fn with_status(mut self, text: impl Into<String>, accent: bool) -> Self {
+        self.status = Some((text.into(), accent));
+        self
+    }
+    pub fn content_end(&self) -> usize {
+        let end = self
+            .preview_position(usize::MAX / 2, 0)
+            .zip(self.preview.as_deref())
+            .map_or(2 + UnicodeWidthStr::width(self.label.as_str()), |(x, s)| {
+                x + UnicodeWidthStr::width(s)
+            });
+        end + self
+            .status
+            .as_ref()
+            .map_or(0, |(s, _)| 1 + UnicodeWidthStr::width(s.as_str()))
     }
     pub fn account(mut self) -> Self {
         self.account = true;
@@ -271,6 +290,7 @@ impl Row {
         Self {
             label: String::new(),
             enabled: false,
+            status: None,
             preview: None,
             right_preview: false,
             preview_selected_only: false,
@@ -299,6 +319,53 @@ impl Row {
         back: bool,
         show_preview: bool,
     ) {
+        if let Some((status, accent)) = &self.status {
+            let status_width = UnicodeWidthStr::width(status.as_str());
+            let start = self
+                .content_end()
+                .saturating_sub(status_width)
+                .saturating_add(x)
+                .min(
+                    canvas
+                        .width
+                        .saturating_sub(self.preview_edge_padding + status_width),
+                );
+            if start >= x + 3 && y < canvas.height {
+                let mut row = self.clone();
+                row.status = None;
+                row.label = ellipsize(&row.label, start.saturating_sub(x + 3));
+                let mut left = Canvas::new(start - 1, 1);
+                left.static_accent = canvas.static_accent;
+                row.paint_with_preview(&mut left, x, 0, selected, back, show_preview);
+                for (col, cell) in left.cells.into_iter().enumerate() {
+                    canvas.cells[y * canvas.width + col] = cell;
+                }
+                if *accent {
+                    canvas.accent_text(
+                        start,
+                        y,
+                        status,
+                        Accent {
+                            brightness: 1000,
+                            bold: false,
+                            ..Accent::default()
+                        },
+                    );
+                } else {
+                    canvas.text(
+                        start,
+                        y,
+                        status,
+                        Cell {
+                            fg: SECONDARY,
+                            ..Cell::default()
+                        },
+                        false,
+                    );
+                }
+                return;
+            }
+        }
         if self.placeholder {
             canvas.accent_text(
                 x,
@@ -743,6 +810,42 @@ impl Options {
         }
         (left, capacity)
     }
+    pub fn paint_footer_menu(
+        &mut self,
+        canvas: &mut Canvas,
+        rows: &[Row],
+        top: usize,
+        bottom: usize,
+        controls_start: usize,
+    ) -> (usize, usize) {
+        if rows.len() < 2 || bottom.saturating_sub(top) < 4 {
+            return self.paint_menu(canvas, rows, top, bottom, controls_start);
+        }
+        let end = rows.len() - 2;
+        let mut body = self.clone();
+        if self.selected >= end {
+            body.selected = usize::MAX;
+        }
+        let (left, capacity) = body.paint_menu(
+            canvas,
+            &rows[..end],
+            top,
+            bottom - 2,
+            controls_start.saturating_sub(2),
+        );
+        self.scroll = body.scroll;
+        self.preview_visible = body.preview_visible;
+        for (i, row) in rows[end..].iter().enumerate() {
+            row.paint(
+                canvas,
+                left,
+                bottom - 2 + i,
+                self.selected == end + i && !self.back,
+                self.back,
+            );
+        }
+        (left, capacity + 2)
+    }
     pub fn paint_range(&self, canvas: &mut Canvas, count: usize, capacity: usize, y: usize) {
         if capacity == 0 || count <= capacity {
             return;
@@ -844,6 +947,50 @@ mod tests {
             );
             options.boundary(&rows, false, false);
             assert!(paint(&mut options, bottom)[1].contains("[use this directory]"));
+        }
+    }
+    #[test]
+    fn directory_footer_stays_mounted_while_all_top_actions_scroll() {
+        let rows = crate::popup::with_cancel(
+            [Row::yes("[use this directory]"), Row::yes("<new>/")]
+                .into_iter()
+                .chain((0..30).map(|i| Row::yes(format!("directory{i:02}/")))),
+        );
+        let mut o = Options::default();
+        let paint = |o: &mut Options| {
+            let mut c = Canvas::new(60, 24);
+            o.paint_footer_menu(&mut c, &rows, 1, 20, 21);
+            c.cells
+                .chunks(60)
+                .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
+                .collect::<Vec<_>>()
+        };
+        let top = paint(&mut o);
+        assert!(top[1].contains("[use this directory]"));
+        assert!(top[2].contains("<new>/"));
+        assert!(top[3].contains("directory00/"));
+        assert!(top[18].contains('•') && top[19].contains("Cancel"));
+        o.boundary(&rows, false, true);
+        let bottom = paint(&mut o);
+        assert!(!bottom.iter().any(|l| l.contains("[use this directory]")));
+        assert!(bottom.iter().any(|l| l.contains("directory29/")));
+        assert!(bottom[18].contains('•') && bottom[19].contains("Cancel"));
+        o.step(&rows, false, false);
+        assert!(paint(&mut o)[1].contains("[use this directory]"));
+    }
+    #[test]
+    fn persistent_status_takes_priority_over_usage_at_narrow_widths() {
+        let row = Row::yes("longaccount")
+            .with_column_preview("100% 5h / 100% wk", 15, false)
+            .with_status("Ready", true)
+            .popup_option();
+        for width in [18, 24, 35, 80] {
+            let mut c = Canvas::new(width, 1);
+            row.paint(&mut c, 0, 0, false, false);
+            let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+            assert!(text.contains("Ready"));
+            let i = c.cells.iter().position(|c| c.glyph == "R").unwrap();
+            assert!(c.cells[i..i + 5].iter().all(|c| !c.bold && !c.strike));
         }
     }
     #[test]

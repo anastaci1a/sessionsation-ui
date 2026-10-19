@@ -1,5 +1,4 @@
 //! Shared flat popup surface. Content uses the normal editors/options in local cells.
-const DIRECTORY_WIDTH_PERCENT: usize = 60;
 const DIRECTORY_HEIGHT_PERCENT: usize = 90;
 
 use crate::{
@@ -66,7 +65,6 @@ pub struct Size {
     pub viewport: (usize, usize),
     pub width: usize,
     pub height: usize,
-    pub note_width: usize,
 }
 impl Size {
     pub fn fit(viewport: (usize, usize), width: usize, height: usize) -> Self {
@@ -74,7 +72,6 @@ impl Size {
             viewport,
             width: width.min(viewport.0.saturating_sub(4)),
             height: height.min(viewport.1.saturating_sub(4)),
-            note_width: 0,
         }
     }
 }
@@ -102,9 +99,8 @@ pub struct Choices<'a> {
     pub editor: Option<&'a crate::dialog::Field>,
     pub note: &'a str,
     pub note_accent: bool,
-    pub reserve_note: bool,
-    pub inline_note_width: usize,
     pub large: bool,
+    pub fit_description: bool,
     pub browse_hint: bool,
 }
 /// Natural content width, capped for readable wrapping and the current terminal.
@@ -128,33 +124,19 @@ impl Choices<'_> {
                 x + UnicodeWidthStr::width(s)
             })
     }
-    fn note_inline(&self, width: usize) -> bool {
-        self.inline_note_width > 0
-            && self.rows.iter().filter(|r| r.label != "Cancel").all(|r| {
-                (r.preview.is_none() || r.preview_position(width, 0).is_some())
-                    && Self::row_end(r, width) + 1 + self.inline_note_width <= width
-            })
-    }
     pub fn measure(&self, viewport: (usize, usize)) -> Size {
         use unicode_width::UnicodeWidthStr;
-        let natural = self
-            .rows
-            .iter()
-            .map(|r| {
-                let status = if self.reserve_note && !r.separator && r.label != "Cancel" {
-                    1 + self.inline_note_width
-                } else {
-                    0
-                };
-                Self::row_end(r, usize::MAX / 2) + status
-            })
+        let natural = self.rows.iter().map(|r| r.content_end()).max().unwrap_or(0);
+        let description = self
+            .description
+            .lines()
+            .map(UnicodeWidthStr::width)
             .max()
             .unwrap_or(0);
-        let width = if self.editor.is_some() {
-            // Directory browsing has a stable, useful viewport independent of paths.
-            (viewport.0 * DIRECTORY_WIDTH_PERCENT / 100).max(28)
+        let width = if self.editor.is_some() || self.fit_description {
+            description + 4
         } else {
-            (natural + 4)
+            (natural.max(description) + 4)
                 .max(UnicodeWidthStr::width(self.title) + 2)
                 .max(8)
         }
@@ -165,9 +147,7 @@ impl Choices<'_> {
         let inner = width.saturating_sub(4);
         let description = crate::dialog::wrap(self.description, inner).len();
         let preview = usize::from(crate::widgets::Options::previews_detached(inner, self.rows)) * 2;
-        let note =
-            usize::from((self.reserve_note || !self.note.is_empty()) && !self.note_inline(inner))
-                * 2;
+        let note = usize::from(!self.note.is_empty()) * 2;
         let height = if self.large {
             (viewport.1 * DIRECTORY_HEIGHT_PERCENT / 100)
                 .max(description + 1 + usize::from(self.editor.is_some()) * 4 + 4)
@@ -179,24 +159,19 @@ impl Choices<'_> {
         if self.editor.is_some() && size.height % 2 != viewport.1 % 2 {
             size.height = size.height.saturating_sub(1);
         }
-        size.note_width = self.inline_note_width;
         size
     }
     /// Polling never changes geometry. Only the selected, visible detail may
     /// increase the opening budget; keep this growth until close or resize.
     pub fn grow_for_selection(&mut self, opened: Size, selected: usize) -> Size {
         use unicode_width::UnicodeWidthStr;
-        self.inline_note_width = opened.note_width;
-        if self.editor.is_some() {
+        if self.editor.is_some() || self.fit_description {
             return opened;
         }
-        let note = UnicodeWidthStr::width(self.note);
         let mut required = opened.width;
-        if self.reserve_note && note > opened.note_width {
-            self.inline_note_width = note;
-            if let Some(row) = self.rows.get(selected) {
-                required = required.max(Self::row_end(row, usize::MAX / 2) + 1 + note + 4);
-            }
+        // Statuses are always visible, so polling must reserve every row's width.
+        for row in self.rows.iter().filter(|r| r.status.is_some()) {
+            required = required.max(row.content_end() + 4);
         }
         if let Some(row) = self.rows.get(selected) {
             required = required.max(UnicodeWidthStr::width(row.label.as_str()) + 4);
@@ -205,7 +180,7 @@ impl Choices<'_> {
             }
         }
         let width = required.min(opened.viewport.0.saturating_sub(4));
-        if width > opened.width || self.inline_note_width > opened.note_width {
+        if width > opened.width {
             let mut next = self.fit_width(opened.viewport, width);
             next.height = next.height.max(opened.height);
             next
@@ -230,7 +205,13 @@ pub fn paint_choices(
         };
         let description = crate::dialog::wrap(view.description, local.width);
         let minimum = description.len() + 1 + usize::from(view.editor.is_some()) * 4 + 1;
-        if local.height < minimum {
+        if local.height < minimum
+            || view
+                .rows
+                .iter()
+                .filter_map(|r| r.status.as_ref())
+                .any(|(s, _)| unicode_width::UnicodeWidthStr::width(s.as_str()) + 3 > local.width)
+        {
             local.text(
                 0,
                 0,
@@ -250,43 +231,37 @@ pub fn paint_choices(
             editor.paint_box(local, 0, top, local.width, palette, true);
             top += 4;
         }
-        let inline = view.note_inline(local.width);
-        let note_height = (usize::from((view.reserve_note || !view.note.is_empty()) && !inline)
-            * 2)
-        .min(local.height.saturating_sub(
-            top + usize::from(view.large)
-                + 2
-                + usize::from(crate::widgets::Options::previews_detached(
-                    local.width,
-                    view.rows,
-                )) * 2,
-        ));
+        let note_height =
+            (usize::from(!view.note.is_empty()) * 2).min(local.height.saturating_sub(
+                top + usize::from(view.large)
+                    + 2
+                    + usize::from(crate::widgets::Options::previews_detached(
+                        local.width,
+                        view.rows,
+                    )) * 2,
+            ));
         let menu_bottom = local.height.saturating_sub(usize::from(view.large));
         let bottom = menu_bottom.saturating_sub(note_height);
         options.back = false;
-        let (_, capacity) = options.paint_menu(local, view.rows, top, bottom, bottom + 1);
+        let footer = usize::from(view.editor.is_some()) * 2;
+        let (_, capacity) = if footer > 0 {
+            options.paint_footer_menu(local, view.rows, top, menu_bottom, bottom + 1)
+        } else {
+            options.paint_menu(local, view.rows, top, bottom, bottom + 1)
+        };
         if !view.note.is_empty() {
-            let selected_y = options
-                .selected
-                .checked_sub(options.scroll)
-                .filter(|i| *i < capacity)
-                .map(|i| top + i);
-            let (x, y) = if inline {
-                view.rows
-                    .get(options.selected)
-                    .zip(selected_y)
-                    .map(|(r, y)| (Choices::row_end(r, local.width) + 1, y))
-                    .unwrap_or((0, local.height))
-            } else {
-                let y = top
-                    + view.rows.len().min(capacity)
-                    + usize::from(view.rows.len() > capacity)
-                    + 1;
-                (
-                    (local.width.saturating_sub(view.note.chars().count())) / 2,
-                    y.min(menu_bottom.saturating_sub(1)),
-                )
-            };
+            let y = top
+                + view
+                    .rows
+                    .len()
+                    .saturating_sub(footer)
+                    .min(capacity.saturating_sub(footer))
+                + usize::from(view.rows.len() > capacity)
+                + 1;
+            let (x, y) = (
+                (local.width.saturating_sub(view.note.chars().count())) / 2,
+                y.min(menu_bottom.saturating_sub(footer + 1)),
+            );
             local.text(
                 x,
                 y,
@@ -402,47 +377,36 @@ mod tests {
         }
     }
     #[test]
-    fn account_status_has_exactly_one_trailing_space_on_open_and_growth() {
+    fn description_width_fits_a_sentence_with_one_space_before_the_border() {
         use crate::widgets::{Options, Row};
-        let rows = vec![
-            Row::yes("personal")
-                .with_column_preview("90% wk", 11, false)
-                .preview_gap(1)
-                .popup_option(),
-            Row::separator().popup_option(),
-            Row::yes("Cancel").popup_option(),
-        ];
-        let mut view = Choices {
-            title: "Choose Account",
-            description: "Choose an account for this session.",
-            rows: &rows,
-            editor: None,
-            note: "Ready",
-            note_accent: true,
-            reserve_note: true,
-            inline_note_width: 5,
-            large: false,
-            browse_hint: false,
-        };
-        let mut options = Options {
-            selected: 0,
-            ..Options::default()
-        };
-        let opened = view.measure((100, 30));
-        let mut canvas = Canvas::new(100, 30);
-        paint_choices(
-            &mut canvas,
-            &Palette::default(),
-            &view,
-            &mut options,
-            opened,
-        );
-        assert_one_space_before_border(&canvas, "Ready");
-        view.note = "Login required";
-        let grown = view.grow_for_selection(opened, 0);
-        let mut canvas = Canvas::new(100, 30);
-        paint_choices(&mut canvas, &Palette::default(), &view, &mut options, grown);
-        assert_one_space_before_border(&canvas, "Login required");
+        for (title, sentence) in [
+            ("Choose Account", "Choose an account for this session."),
+            ("Choose Space", "Choose a destination Space."),
+        ] {
+            let rows = with_cancel([Row::yes("Example").popup_option()]);
+            let view = Choices {
+                title,
+                description: sentence,
+                rows: &rows,
+                editor: None,
+                note: "",
+                note_accent: false,
+                large: false,
+                fit_description: true,
+                browse_hint: false,
+            };
+            let size = view.measure((120, 30));
+            assert_eq!(size.width, sentence.len() + 4);
+            let mut c = Canvas::new(120, 30);
+            paint_choices(
+                &mut c,
+                &Palette::default(),
+                &view,
+                &mut Options::default(),
+                size,
+            );
+            assert_one_space_before_border(&c, sentence);
+        }
     }
     #[test]
     fn space_ids_are_inline_with_one_trailing_space_unless_viewport_is_too_thin() {
@@ -464,9 +428,8 @@ mod tests {
             editor: None,
             note: "",
             note_accent: false,
-            reserve_note: false,
-            inline_note_width: 0,
             large: false,
+            fit_description: false,
             browse_hint: false,
         };
         let size = view.measure((100, 30));
@@ -492,14 +455,13 @@ mod tests {
         ];
         let mut view = Choices {
             title: "Choose Space",
-            description: "A long description wraps instead of making the popup wide.",
+            description: "Choose.",
             rows: &rows,
             editor: None,
             note: "",
             note_accent: false,
-            reserve_note: false,
-            inline_note_width: 0,
             large: false,
+            fit_description: false,
             browse_hint: false,
         };
         let opened = view.measure((100, 30));
@@ -529,14 +491,13 @@ mod tests {
             crate::dialog::Field::new("Directory", format!("/{}", "long-component/".repeat(30)));
         let mut view = Choices {
             title: "Start directory",
-            description: "Choose a directory. Directories are only created during Start.",
+            description: "Choose a directory.\nDirectories are only created during Start.",
             rows: &rows,
             editor: Some(&editor),
             note: "",
             note_accent: false,
-            reserve_note: false,
-            inline_note_width: 0,
             large: true,
+            fit_description: false,
             browse_hint: false,
         };
         for height in 16..45 {
@@ -545,9 +506,9 @@ mod tests {
             assert!(measured.height <= height - 4);
         }
         let opened = view.measure((100, 30));
-        assert_eq!((opened.width, opened.height), (60, 26));
+        assert_eq!((opened.width, opened.height), (46, 26));
         let larger = view.measure((200, 40));
-        assert_eq!((larger.width, larger.height), (120, 36));
+        assert_eq!((larger.width, larger.height), (46, 36));
         assert_eq!(view.grow_for_selection(opened, 4).width, opened.width);
     }
     #[test]
@@ -568,9 +529,8 @@ mod tests {
                 editor: None,
                 note: "",
                 note_accent: false,
-                reserve_note: false,
-                inline_note_width: 0,
                 large: false,
+                fit_description: false,
                 browse_hint: false,
             };
             let size = view.measure(viewport);

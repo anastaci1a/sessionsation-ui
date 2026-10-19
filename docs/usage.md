@@ -65,17 +65,17 @@ agent or cancelling a backend operation. Prefixes are read from the same HERDR
 configuration as the theme when opening the popup; absent/invalid bindings use
 HERDR’s default Ctrl-B. Nested directory/Space creation
 remains staged until Start. Choice popups measure their labels and currently known
-details on opening; explanatory text wraps within that width. Polling alone does
-not enlarge them for unseen details. Hovering a newly longer account status, Space
-ID grows the frame only as needed, up to the main popup’s available width; it
-retains that space until close or terminal resize. Known Space names and IDs
-are allocated together on the right at opening; only a genuinely narrow main
-popup moves IDs below. Other dialogs keep
-their opening dimensions through live updates. Long directory paths scroll inside
-the editor with a leading `…` for hidden characters; they never widen the popup.
-The directory picker uses 60% of the main popup’s width and 90% of its height,
-rounded to leave equal top/bottom margins, with a usable minimum and a small-terminal bound.
-Other pickers fit their content.
+details on opening. Account and Space pickers use the width of their opening
+sentence, with exactly one space after its period before the border. Every account
+keeps its status beside its name/usage, regardless of selection; constrained rows
+give status priority over optional usage. Space IDs use the shared below-list
+preview if they cannot fit beside the name. Other dialogs retain their cached
+opening dimensions; a newly hovered longer detail may grow them within the viewport.
+Long directory paths scroll inside the editor with a leading `…` for hidden text.
+The directory description has two lines: “Choose a directory.” and the explanation
+of deferred creation. That second line sets its normal maximum width; narrow
+terminals shrink it. Height remains 90% of the main popup, rounded for equal
+top/bottom margins and bounded by the terminal.
 Popup frames supply exactly one outer padding cell; previews do not add another.
 Fixed-choice heights fit their description, choices and Cancel button exactly.
 Forms share the boxed account-name editor; all popup choices are left aligned,
@@ -86,8 +86,10 @@ reserve a fixed body viewport and scroll updates within it. Long lists scroll
 and selected previews can move below them. Action groups use sentence case and a
 blank bullet spacer. Choice pickers end with Cancel after exactly one bullet
 spacer; it follows the last choice directly rather than the bottom of the frame.
-All choices, including actions and Cancel, scroll together. Directory action labels
-and `[create new space]` use lowercase brackets. Space creation is the first row,
+Choice lists scroll together. The directory picker alone mounts Cancel and its
+bullet spacer at the bottom; all actions above it scroll away. Directory actions
+use `[use this directory]`, `[leave unset]` and `<new>/`; Space creation uses
+`[create new space]`. Space creation is the first row,
 with Space choices immediately after it. Account selection opens on
 the current selection (including a prefilled default), or the first account when
 there is no matching selection; refreshed lists retain the hovered account by ID.
@@ -185,7 +187,7 @@ line length (one cell less than the rendered width). Percentages precede period 
 observations show Disabled, Login required or Usage unavailable as appropriate;
 stale observations are marked. New/resume account pickers use standard bullets
 with white/gray names and an aligned `x% 5h / x% wk` block one space after the longest name, omitting the short period and
-slash for weekly-only accounts. The selected account’s status follows its right-side usage block when every account’s detail can fit at that width; otherwise it appears one blank line below the list or range counter, without repeating its name. Ready uses the popup accent, unbolded; other statuses remain unbolded gray. Account names accept at most 30 ASCII characters;
+slash for weekly-only accounts. Every account’s status stays visible on the right of its row, independently of selection. Optional usage gives way when width is constrained. Ready uses the popup accent, unbolded; other statuses remain unbolded gray. Account names accept at most 30 ASCII characters;
 typing and paste stop at the limit.
 Duplicate names immediately invalidate the editor and disable confirmation.
 Session creation/resume/rename accepts at most 30 Unicode scalar values, also
@@ -306,7 +308,7 @@ follows after another space when it fits inline, otherwise uses the shared hover
 panel. Read-only state refreshes once per second, one request at a time; idle, exit,
 unknown activity or discovery failure removes the spinner. Active session account tags use the normal bullet hue on row hover and the dimmer
 hue otherwise and bold on row selection. Inactive rows omit account tags and put
-a muted, unbolded asterisk at the start of the account column. Their `(inactive)`
+a normal deselected-gray, unbolded asterisk at the start of the account column. Their `(inactive)`
 preview has a separate list-wide fit calculation from active timers: it can appear
 inline farther left, otherwise below the list. Only an inline parenthetical replaces
 the asterisk. Back hides previews. Timers use normal deselected gray.
@@ -321,13 +323,14 @@ Menu bottom controls and pagination share the reference soft accent and sweep
 top, Down at the bottom). Holds begun elsewhere stop at the edge; release and
 press again there to wrap. Home, management menus, directory pickers and dialog
 buttons share this selection-navigation implementation. Terminals
-without repeat/release events use a 150 ms quiet gap to estimate gesture boundaries.
-This fallback cannot distinguish a physical release from an equally long pause
-in repeated bytes (including an initial repeat delay or transport stall). Native
-repeat/release events provide exact hold boundaries. Unrelated releases never
-rearm a held arrow. The same navigation core handles either axis; existing
+without repeat/release events use a 150 ms quiet gap plus a 100 ms lookahead
+for an ambiguous delayed first repeat (up to 1.2 seconds). A following repeat
+continues the original hold; a distinct tap resolves when that short window ends.
+Native repeat/release events provide exact boundaries without this lookahead.
+Legacy byte streams cannot report physical release directly. Unrelated releases
+never rearm a held arrow. The same navigation core handles either axis; existing
 Left/Right menu actions are unchanged. The first press always moves immediately; repeat timing comes from the
-terminal, with no UI hold-delay timer. Home/End jump to the first/last list option
+terminal; only ambiguous legacy follow-up events use the lookahead. Home/End jump to the first/last list option
 (including directory lists); text editors retain cursor Home/End. These shortcuts
 do not add footer hints.
 Centering with Back/Close rounds
@@ -374,12 +377,16 @@ launch flow. The UI never creates directories or starts an agent before confirma
 
 The default Space is
 the one currently focused in HERDR; no focus leaves it unset. Pickers preserve the
-draft on Cancel/Esc. Existing automatic paths require explicit selection. Directory Enter
+draft on Cancel/Esc. Before a session has a name, the directory picker starts at
+the configured projects root, using the global root for browsing if the selected
+Space has none, rather than HERDR’s Space working directory. This does not select
+a directory or stage a named child. Existing automatic paths require explicit
+selection. Directory Enter
 selects the current option. In an unfamiliar directory, focus starts on the first
 subdirectory, or the non-activating `(none)` placeholder when empty; revisiting restores its selection.
-[use this directory], [leave unset] (for defaults) and [create subdirectory] start
-the scrolling list. A bullet spacer separates these actions from subdirectories;
-another single bullet spacer separates the last subdirectory from Cancel.
+[use this directory], [leave unset] (for defaults) and <new>/ start the scrolling
+list, immediately followed by subdirectories without a bullet spacer. Cancel and
+its one bullet spacer remain fixed below the scrolling list and range counter.
 Left on `(none)` navigates to the parent; Enter does nothing. Actions can scroll
 out of view at every terminal size. Directory popup dimensions stay fixed through
 browsing and path editing, with equal outer padding above and below. Wraparound

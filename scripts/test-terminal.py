@@ -70,7 +70,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
   t.send(b'\x1b[H');time.sleep(.06);t.drain();assert not t.screen.contains('Parent/Open')
   t.send(b'\x1b');t.wait('Account:');assert not (root/'start.json').exists()
  finally:t.close()
- # Long directory lists scroll actions and Cancel together and synchronize both wrap directions.
+ # Long directory lists scroll all top actions while keeping Cancel mounted and synchronize both wrap directions.
  children=[root/'projects'/f'dir{i:02}' for i in range(40)]
  for child in children:child.mkdir()
  t=Terminal(root)
@@ -84,9 +84,10 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
   lines=[''.join(r) for r in t.screen.grid]
   last=next(i for i,l in enumerate(lines) if 'dir39/' in l)
   cancel=next(i for i,l in enumerate(lines) if 'Cancel' in l)
-  assert cancel==last+2 and '•' in lines[last+1], 'Cancel must follow one bullet spacer'
+  assert cancel==last+3 and '•' in lines[cancel-1] and ' of ' in lines[cancel-2], 'Cancel and spacer must follow the scrolling range'
   t.send(b'\x1b[B');t.wait('[use this directory]',selected=True);t.wait('dir00/');t.drain()
   assert not t.screen.contains('dir39/')
+  assert t.screen.contains('Cancel'), 'Cancel scrolled away at the top'
   t.send(b'\x1b[F');t.wait('Cancel',selected=True);t.wait('dir39/')
   t.send(b'\x1b[H');t.wait('[use this directory]',selected=True);t.wait('dir00/')
   t.send(b'\x1b[F');t.wait('Cancel',selected=True);t.send(b'\r');t.wait('Account:')
@@ -141,4 +142,4 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  finally:t.close()
 def report(a):
  s=sorted(a);return {'samples':len(s),'p50_ms':s[len(s)//2],'p95_ms':s[min(len(s)-1,int(len(s)*.95))],'max_ms':max(s)}
-print(json.dumps({'startup':report(starts),'input':report(keys),'checks':'delayed backend, summary, paste, staged directory, request identity, shared-directory warning/cancel/confirm, scrollaway actions, adjacent Cancel and directory wrap/Home/End viewports, resize/cancel, exact TTY restoration, atomic preferences through config symlink','models':0},indent=2))
+print(json.dumps({'startup':report(starts),'input':report(keys),'checks':'delayed backend, summary, paste, staged directory, request identity, shared-directory warning/cancel/confirm, scrollaway actions, mounted Cancel and directory wrap/Home/End viewports, resize/cancel, exact TTY restoration, atomic preferences through config symlink','models':0},indent=2))

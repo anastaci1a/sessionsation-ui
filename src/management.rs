@@ -1933,9 +1933,8 @@ impl Manager {
                 editor: None,
                 note: &self.note,
                 note_accent: false,
-                reserve_note: false,
-                inline_note_width: 0,
                 large: false,
+                fit_description: true,
                 browse_hint: false,
             };
             if self

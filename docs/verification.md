@@ -91,7 +91,7 @@ cp .demo/output/demo.gif docs/assets/demo.gif
 npm run check
 ```
 
-The checked-in demo is about 1.1 MiB, 46 seconds and 313 frames at a 10 FPS cap;
+The checked-in demo is about 1.1 MiB, 46 seconds and 312 frames at a 10 FPS cap;
 its 128×40 terminal renders to 1096×718 pixels. It shows bars/limits, session
 activity/details, the staged directory picker and an inert normal-tab handoff.
 The contact sheet and loop seam were inspected before README promotion. No real
@@ -107,7 +107,7 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 ## Verification record and limits
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **176 Rust tests** (174 unit and two visual tests covering
+passed formatting, Clippy, **181 Rust tests** (179 unit and two visual tests covering
 25 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
@@ -121,35 +121,34 @@ tests cover editor focus, Unicode positions, overlay ownership and visibility
 without shape/color changes or per-frame visibility toggling. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
-The README capture and tested release artifact use SHA-256
-`72fbe93a851ec37f2417bb5aaf8127ccda1c7204bf43bf67ebd587b958e4c3a9`.
-Exact cell regressions verify one space between the longest inline status/Space
-ID and the popup border, including growth after hover. Known Space names/IDs are
-allocated together at opening; fallback below is reserved for narrow main popups.
-Account statuses remain below the list when usage cannot fit in a very narrow popup.
-All three PTY scripts and the owned HERDR popup test passed against the release artifact. Shared
-form, choice, information and progress regressions cover exact fixed-choice
-height, left alignment, Cancel/history restoration, one/multiple-input cursor
-ownership, Enter/Esc information dismissal and locked geometry through live
-body/status changes, loading-to-confirmation transitions and completion. Choice
-popups additionally cache their opening detail budget: polling a hidden longer
-status or Space ID does not resize the frame, while hovering it can grow the
-frame up to the viewport limit. Long directory paths scroll with a leading
-ellipsis rather than determining popup width. Directory viewport checks assert
-60% main-popup width and 90% height, with small-terminal bounds. Archived IDs
-use parenthesized gray/unbolded previews with a list-wide decision including
-offscreen rows; wide/compact goldens verify both placements. Account selection restores the
-current/default ID or first account, keeps Cancel last after one bullet spacer, and retains
-that identity through reordered inventory. Resize refits the frame; long content
-scrolls inside it. Directory goldens cover one scrolling list including top
-actions and Cancel, exact single-row bullet separation, wraparound/Home/End
-viewport synchronization, equal vertical margins, and loading
-without stale children and the non-activating `(none)` row with its normal hover
-bullet and Left-to-parent. Directory actions and [create new space] use lowercase brackets; forms and
-confirmations retain sentence case. Account selection and switch regressions bind
-the visible row to the correct account and retain Cancel through inventory growth.
-Width-fitting and one-blank-line field spacing, inline/detached account statuses,
-and hidden lone Close buttons with preserved background progress are covered. Other
+The README capture uses SHA-256
+`2e290aef4d141ec4ef1a0374eab1f64b26b42879d94e6efa67934c10c9794ec4`;
+the final tested release uses
+`b19aae115595a3aca92ee7eec0b8f3d9ce4008753c846e0b4ff4ff4590595f41`.
+Cell regressions verify that Account and Space opening sentences end one space
+before the border. Every visible account has a persistent, unbolded inline status,
+including unselected rows and updates received while Cancel is selected. Ready
+uses the flat popup accent; other statuses stay gray. Optional usage gives way to
+status in constrained rows. Space IDs use the shared all-or-nothing fallback below
+the choices when their description-sized popup cannot fit them inline.
+All three PTY scripts and the owned HERDR popup test passed against the release
+artifact. Forms and choices cover exact heights, left alignment, Cancel/history
+restoration, native cursor ownership, locked open geometry, loading-to-confirmation
+transitions and progress completion. Long paths scroll with a leading ellipsis.
+Directory tests cover its explicit two-line description, second-line maximum
+width, 90% height, equal vertical margins, no spacer after the top action rows,
+scrollaway actions and a mounted Cancel/spacer footer. Empty directories retain
+the non-activating `(none)` row and Left-to-parent. An unnamed session opens the
+configured projects root instead of HERDR’s Space directory, without creating
+anything or adding the Space label. Native and legacy navigation tests cover a
+500 ms delayed first repeat from one row before either boundary, both axes,
+unrelated release handling, one-wrap permission, and Home/End synchronization.
+The isolated HERDR test exercises both delayed-repeat directions through the
+actual host encoder. Session marker regressions keep the collapsed asterisk in
+normal deselected gray while `(inactive)` retains its darker gray.
+Archived IDs retain gray/unbolded parenthesized previews with a list-wide fit
+decision, including offscreen rows. Selection/switch tests bind visible account
+rows to stable IDs and retain Cancel through inventory growth. Other
 coverage includes inactive account-label hiding, independent preview fit, Space
 lookup cancellation, confirmation, one captured-generation mutation and return
 to the selected session. Configured-prefix tests close Home, summary, editor

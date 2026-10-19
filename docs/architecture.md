@@ -51,17 +51,18 @@ Its reusable components are:
   markers, status-only accounts and shared columns across responsive layouts.
 - `popup`: shared frame, measured size and choice-list template (optional boxed
   editor, one scrollable choice list, selected preview and status). A shared
-  list finisher places Cancel after exactly one bullet spacer; actions and Cancel
-  scroll with the choices. Callers supply
+  list finisher places Cancel after one bullet spacer. A footer renderer mounts
+  that group for directory browsing while every action above it still scrolls. Callers supply
   content and handle actions; they do not duplicate layout. Pickers preserve the
   opening screen and cache geometry/detail budgets until terminal resize. Labels
-  and known statuses determine opening width; descriptions wrap and path editors
-  scroll with a leading ellipsis. Polling cannot grow the frame for hidden details.
+  determine ordinary opening width. Account/Space pickers fit their description;
+  persistent per-row statuses reserve their own trailing cells and take priority
+  over optional usage. Path editors scroll with a leading ellipsis.
   A hovered detail may increase the cached budget, retaining that space until
-  close. Directory browsing instead uses 60% width/90% height independently of
-  path length. Popup rows reuse the frame’s outer padding; borderless previews
-  own one edge cell. Known Space IDs are included in opening width. Account
-  statuses and archived IDs keep the shared list-wide inline/detached fit rule.
+  close. Directory browsing uses its explanatory second line for normal width and
+  90% height, independently of path length. Popup rows reuse the frame’s outer padding; borderless previews
+  own one edge cell. Space IDs and archived IDs retain the list-wide
+  inline/detached fit rule; persistent account statuses always stay inline.
   Compositing translates
   the native cursor and keeps background star lifetimes independent.
 - `dialog`: shared one/multiple-field forms, confirmations, information and

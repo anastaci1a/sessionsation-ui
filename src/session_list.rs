@@ -388,7 +388,7 @@ pub fn paint_with_archives(
                         y,
                         "*",
                         crate::render::Cell {
-                            fg: crate::widgets::MUTED,
+                            fg: crate::widgets::SECONDARY,
                             ..crate::render::Cell::default()
                         },
                         false,
@@ -834,7 +834,7 @@ mod tests {
                     assert_eq!(c.cells[240 + x + 10].glyph, " ");
                     let marker = &c.cells[240 + x + 11];
                     assert_eq!(marker.glyph, "*");
-                    assert_eq!(marker.fg, crate::widgets::MUTED);
+                    assert_eq!(marker.fg, crate::widgets::SECONDARY);
                     assert!(!marker.bold);
                 }
             }
@@ -866,7 +866,7 @@ mod tests {
                     .collect::<String>();
                 assert_eq!(text.contains('*'), !row.contains("(inactive)"));
                 for cell in c.cells.iter().filter(|c| c.glyph == "*") {
-                    assert_eq!(cell.fg, crate::widgets::MUTED);
+                    assert_eq!(cell.fg, crate::widgets::SECONDARY);
                     assert!(!cell.bold);
                 }
             }
@@ -911,7 +911,7 @@ mod tests {
                 .iter()
                 .find(|c| c.glyph == "*")
                 .unwrap();
-            assert_eq!(marker.fg, crate::widgets::MUTED);
+            assert_eq!(marker.fg, crate::widgets::SECONDARY);
             assert!(!marker.bold);
         }
     }

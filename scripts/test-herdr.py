@@ -107,6 +107,17 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-popup-host-') as tmp:
   key(b'\x1b[1;1:3A')
   key(b'\x1b[F');focus_wait('fixture',account=True)
   key(b'\x1b[H');focus_wait('New Session')
+  # Legacy first repeat arrives after the OS delay, often without a Repeat tag.
+  # Starting one row from either edge must clamp there throughout that hold.
+  key(b'\x1b[H\x1b[B');focus_wait('Manage Sessions')
+  key(b'\x1b[A');focus_wait('New Session');pump(.5)
+  key(b'\x1b[A');pump(.03);key(b'\x1b[A'*20);pump(.15)
+  assert screen.contains('New Session',selected=True),'delayed first Up repeat rearmed wrap'
+  key(b'\x1b[F\x1b[A');focus_wait('Settings')
+  key(b'\x1b[B');focus_wait('fixture',account=True);pump(.5)
+  key(b'\x1b[B');pump(.03);key(b'\x1b[B'*20);pump(.15)
+  assert screen.contains('▶ fixture'),'delayed first Down repeat rearmed wrap'
+  key(b'\x1b[H');focus_wait('New Session')
   # Enhanced press/repeat/release must survive the actual HERDR pane encoder.
   key(b'\x1b[1;1:1B'+b'\x1b[1;1:2B'*20);focus_wait('fixture',account=True)
   key(b'\x1b[1;1:3B\x1b[1;1:1B');focus_wait('New Session')
@@ -170,7 +181,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-popup-host-') as tmp:
    key(b'\x02');wait_closed();pump(.1)
   assert host('pane','process-info','--pane',origin_pane)['process_info']['shell_pid']==origin_pid
   key_samples.sort()
-  print(json.dumps({'keybind_startup':{'samples':len(key_samples),'p50_ms':key_samples[10],'p95_ms':key_samples[19],'max_ms':max(key_samples)},'first_press_ms':first_press_ms,'installed_herdr':host('--version') if False else '0.9.5','plugin_to_first_paint_ms':elapsed,'popup_size':popup['size'],'checks':['origin context without pane ID','90% width / 65% height popup','ui_busy refusal','first press moves before repeat/release','Home/End jump to first/last option','held arrows and release/press wrap through installed HERDR','mixed ordinary/enhanced repeats clamp both boundaries; unrelated release does not rearm','real host resize preserves draft','selected destination normal tab','staged directory','exact name/account','focus then popup exit','second popup cancel preserves new terminal','host prefix closes Home, summary and editor','origin shell unchanged'],'models':0},indent=2))
+  print(json.dumps({'keybind_startup':{'samples':len(key_samples),'p50_ms':key_samples[10],'p95_ms':key_samples[19],'max_ms':max(key_samples)},'first_press_ms':first_press_ms,'installed_herdr':host('--version') if False else '0.9.5','plugin_to_first_paint_ms':elapsed,'popup_size':popup['size'],'checks':['origin context without pane ID','90% width / 65% height popup','ui_busy refusal','first press moves before repeat/release','Home/End jump to first/last option','held arrows and release/press wrap through installed HERDR','delayed first legacy repeat clamps when the hold starts one row from either edge','mixed ordinary/enhanced repeats clamp both boundaries; unrelated release does not rearm','real host resize preserves draft','selected destination normal tab','staged directory','exact name/account','focus then popup exit','second popup cancel preserves new terminal','host prefix closes Home, summary and editor','origin shell unchanged'],'models':0},indent=2))
  finally:
   host('server','stop')
   if client is not None:
