@@ -491,12 +491,8 @@ mod tests {
             d.selected = selected;
             let mut canvas = Canvas::new(80, 32);
             d.paint(&mut canvas, &Palette::default());
-            let cursors = canvas
-                .cells
-                .iter()
-                .filter(|c| c.bg == Some([238; 3]))
-                .count();
-            assert_eq!(cursors, usize::from(selected < 2));
+            assert_eq!(canvas.cursor.is_some(), selected < 2);
+            assert!(canvas.cells.iter().all(|c| c.bg != Some([238; 3])));
             assert!(canvas.cells.iter().all(|c| c.glyph != "▶"));
         }
     }
@@ -510,14 +506,8 @@ mod tests {
             d.key(KeyEvent::new(KeyCode::Char(letter), KeyModifiers::NONE));
             let mut canvas = Canvas::new(80, 32);
             d.paint(&mut canvas, &Palette::default());
-            assert_eq!(
-                canvas
-                    .cells
-                    .iter()
-                    .filter(|c| c.bg == Some([238; 3]))
-                    .count(),
-                1
-            );
+            assert!(canvas.cursor.is_some());
+            assert!(canvas.cells.iter().all(|c| c.bg != Some([238; 3])));
             assert!(canvas.cells.iter().all(|c| c.glyph != "▶"));
         }
         assert_eq!(d.values(), vec!["ab"]);

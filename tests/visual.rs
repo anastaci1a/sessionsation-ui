@@ -37,7 +37,7 @@ fn fixed_seed_time_and_geometry_match_cell_goldens() {
             })
             .collect();
         let actual = serde_json::to_string_pretty(
-            &serde_json::json!({"width":width,"height":height,"time":time,"cells":cells}),
+            &serde_json::json!({"width":width,"height":height,"time":time,"cursor":c.cursor,"cells":cells}),
         )
         .unwrap()
             + "\n";

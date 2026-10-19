@@ -28,6 +28,8 @@ pub struct Canvas {
     pub height: usize,
     pub cells: Vec<Cell>,
     pub theme: Option<Theme>,
+    /// Native terminal cursor, in zero-based cells; no shape/color override.
+    pub cursor: Option<(usize, usize)>,
     background: Option<[u8; 3]>,
     transient: Vec<bool>,
     baseline_blocked: Vec<bool>,
@@ -40,6 +42,7 @@ impl Canvas {
             height: h,
             cells: vec![Cell::default(); w * h],
             theme: None,
+            cursor: None,
             background: None,
             transient: vec![false; w * h],
             baseline_blocked: vec![false; w * h],
@@ -50,6 +53,7 @@ impl Canvas {
     pub fn overlay(&mut self, paint: impl FnOnce(&mut Self)) {
         let baseline = self.baseline_blocked.clone();
         let foreground = self.foreground.clone();
+        self.cursor = None;
         paint(self);
         self.baseline_blocked = baseline;
         self.foreground = foreground;
@@ -113,6 +117,13 @@ impl Canvas {
     pub fn diff(&self, old: Option<&Self>) -> String {
         let old = old.filter(|o| o.width == self.width && o.height == self.height);
         let mut out = String::new();
+        let cursor = self
+            .cursor
+            .filter(|(x, y)| *x < self.width && *y < self.height);
+        let old_cursor = old.and_then(|o| o.cursor);
+        if cursor.is_none() && (old.is_none() || old_cursor.is_some()) {
+            out.push_str("\x1b[?25l");
+        }
         let mut last_style = None;
         let mut previous: Option<(usize, usize)> = None;
         for (i, c) in self.cells.iter().enumerate() {
@@ -141,6 +152,14 @@ impl Canvas {
             }
             out.push_str(&c.glyph);
             previous = Some((x + UnicodeWidthStr::width(c.glyph.as_str()), y));
+        }
+        if let Some((x, y)) = cursor {
+            if !out.is_empty() || cursor != old_cursor {
+                let _ = write!(out, "\x1b[{};{}H", y + 1, x + 1);
+            }
+            if old_cursor.is_none() {
+                out.push_str("\x1b[?25h");
+            }
         }
         out
     }
@@ -619,6 +638,33 @@ impl Field {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_cursor_follows_frames_without_overriding_terminal_style_or_blink() {
+        let mut frame = Canvas::new(20, 4);
+        frame.cursor = Some((5, 2));
+        let first = frame.diff(None);
+        assert!(first.ends_with("\x1b[3;6H\x1b[?25h"));
+        assert!(!first.contains(" q"));
+        assert!(frame.diff(Some(&frame)).is_empty());
+        let mut moved = frame.clone();
+        moved.cursor = Some((6, 2));
+        assert_eq!(moved.diff(Some(&frame)), "\x1b[3;7H");
+        moved.cells[0].glyph = "*".into();
+        let update = moved.diff(Some(&frame));
+        assert!(update.ends_with("\x1b[3;7H"));
+        assert!(!update.contains("?25")); // Background frames must not toggle blinking.
+        frame.cursor = None;
+        assert!(frame.diff(Some(&moved)).starts_with("\x1b[?25l"));
+    }
+    #[test]
+    fn overlay_owns_native_cursor_instead_of_exposing_the_covered_editor() {
+        let mut c = Canvas::new(20, 4);
+        c.cursor = Some((2, 2));
+        c.overlay(|_| {});
+        assert!(c.cursor.is_none());
+        c.overlay(|c| c.cursor = Some((4, 1)));
+        assert_eq!(c.cursor, Some((4, 1)));
+    }
     #[test]
     fn audited_accent_palette_and_sweep_peak_are_shared_without_hint_bold() {
         let mut field = Field::new(80, 24, 1967);

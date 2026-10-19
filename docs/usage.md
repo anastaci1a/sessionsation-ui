@@ -153,6 +153,10 @@ typing and paste stop at the limit.
 Duplicate names immediately invalidate the editor and disable confirmation.
 Session creation/resume/rename accepts at most 30 Unicode scalar values, also
 enforced by the CLI.
+Inputs use the terminal's native cursor without overriding its shape, color or
+blink settings. Only the focused editor shows it; a single-field dialog keeps it
+editable while its buttons are selected. Menus hide it, and closing the popup
+restores normal terminal cursor visibility.
 Dialogs cover the animated star field without changing its generation or lifetimes;
 closing a dialog reveals the continuing animation. Valid confirmation does not
 require scrolling explanatory text to the bottom.

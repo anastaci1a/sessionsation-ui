@@ -21,7 +21,7 @@ import json,os,pathlib
 print(json.dumps({'result':{'workspaces':[{'workspace_id':'w1','label':'Fixture','focused':not pathlib.Path(os.environ['FIXTURE_ROOT'],'no-focused').exists()}]}}))
 '''
 class Screen:
- def __init__(self): self.grid=[[' ']*200 for _ in range(100)];self.x=0;self.y=0;self.pending='';self.decoder=codecs.getincrementaldecoder('utf8')('replace')
+ def __init__(self): self.grid=[[' ']*200 for _ in range(100)];self.x=0;self.y=0;self.cursor_visible=False;self.pending='';self.decoder=codecs.getincrementaldecoder('utf8')('replace')
  def feed(self,data):
   self.pending+=self.decoder.decode(data)
   while self.pending:
@@ -36,6 +36,7 @@ class Screen:
      values=[int(x) if x.isdigit() else 0 for x in match[1].lstrip('?><=').split(';')];command=match[2]
      if command in ['H','f']:self.y=max(0,(values[0] or 1)-1);self.x=max(0,((values[1] if len(values)>1 else 1) or 1)-1)
      elif command=='J' and values[0]==2:self.grid=[[' ']*200 for _ in range(100)]
+     elif command in ['h','l'] and match[1]=='?25':self.cursor_visible=command=='h'
      self.pending=self.pending[match.end():];continue
     if self.pending[1] in ']P_^':
      end=re.search(r'\x07|\x1b\\',self.pending[2:])

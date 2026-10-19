@@ -16,6 +16,16 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
   t.wait('fixture');t.drain()
   assert t.screen.contains('Add Account') and not t.screen.contains('Manage Accounts')
  finally:t.close()
+ # Native terminal cursor: hidden on menus, visible in the editor, Unicode-aware.
+ t=Terminal(root)
+ try:
+  t.wait('New Session');t.drain();assert not t.screen.cursor_visible
+  t.send(b'\r');t.wait('Account:');t.send(b'\x1b[B\x1b[B\r');t.wait('Session name');t.drain()
+  assert t.screen.cursor_visible
+  before=t.screen.x;t.send('界'.encode());time.sleep(.06);t.drain()
+  assert t.screen.cursor_visible and t.screen.x==before+2
+  t.send(b'\x1b');t.wait('Account:');t.drain();assert not t.screen.cursor_visible
+ finally:t.close()
  for i in range(args.samples):
   t=Terminal(root,delay=2 if i==0 else 0)
   try:

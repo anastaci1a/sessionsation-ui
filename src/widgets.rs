@@ -126,22 +126,13 @@ impl TextInput {
             .collect();
         canvas.text(x, y, &format!("> {visible}"), style.clone(), true);
         let cursor = x + 2 + UnicodeWidthStr::width(before).saturating_sub(removed);
-        if focused && cursor < x + width {
+        if focused && cursor < x + width && cursor < canvas.width && y < canvas.height {
             let glyph = self.value[self.cursor..]
                 .graphemes(true)
                 .next()
                 .unwrap_or(" ");
-            canvas.text(
-                cursor,
-                y,
-                glyph,
-                Cell {
-                    fg: [0; 3],
-                    bg: Some(style.fg),
-                    ..style
-                },
-                false,
-            );
+            canvas.text(cursor, y, glyph, style, false);
+            canvas.cursor = Some((cursor, y));
         }
     }
 }
@@ -985,11 +976,12 @@ mod tests {
         assert_eq!(options.selected, 0);
     }
     #[test]
-    fn input_viewport_preserves_wide_characters_and_cursor_cell() {
+    fn input_viewport_preserves_wide_characters_and_native_cursor() {
         let input = TextInput::new("界界界界界".into());
         let mut canvas = Canvas::new(10, 1);
         input.paint(&mut canvas, 0, 0, 9, true);
-        assert_eq!(canvas.cells.iter().filter(|c| c.bg.is_some()).count(), 1);
+        assert_eq!(canvas.cursor, Some((8, 0)));
+        assert!(canvas.cells.iter().all(|c| c.bg.is_none()));
         assert_eq!(canvas.cells[9], Cell::default());
     }
     #[test]
