@@ -30,7 +30,7 @@ install -m 755 target-ui/release/sessionsation-ui .runtime/sessionsation-ui
 herdr plugin link "$PWD" --enabled
 ```
 
-The repository must be accessible to your Git identity while it remains private.
+The repository is public; cloning and building do not require GitHub authentication.
 Keep the checkout/plugin and executable available. These steps do not configure
 provider accounts or automatically change your terminal startup.
 
@@ -52,4 +52,4 @@ For a credential-free preview, see the [isolated demo](docs/verification.md#anim
 See [usage/configuration](docs/usage.md), [architecture](docs/architecture.md),
 [checks/demo regeneration](docs/verification.md), and [contributing](agents/README.md).
 MIT licensed; [NOTICE](NOTICE) records upstream palette/reference attribution and
-an unresolved reference-license release gate.
+unresolved reference-license provenance; public visibility does not resolve it.

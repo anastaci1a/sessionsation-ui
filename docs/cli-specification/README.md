@@ -19,5 +19,5 @@ its entry is a HERDR popup, and new agents open in normal tabs.
 Current product behavior belongs to [usage](../usage.md); implementation structure
 to [architecture](../architecture.md); checks/demo to [verification](../verification.md).
 Reference glitches are not compatibility requirements. [NOTICE](../../NOTICE)
-records the unresolved reference-license release gate. No reference images are
+records the unresolved reference-license provenance. No reference images are
 redistributed as demo assets.

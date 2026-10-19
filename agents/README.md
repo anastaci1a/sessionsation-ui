@@ -58,7 +58,7 @@ existing authoritative section and remove stale copies. Do not retain machine
 inventories, private rollback paths, session logs or duplicated feature lists.
 Keep operational evidence/configuration backups outside public Git.
 
-Before making a release public, review tracked files AND reachable history. This
+This repository is public. Before each release, review tracked files AND reachable history. This
 pass's bounded token/private-key scan found no credential-like matches, but it is
 not a security certification. History still contains private host/deployment paths,
 account/session metadata and earlier operational records, including a removed
@@ -67,7 +67,8 @@ Do not rewrite history or change visibility without an explicit owner decision.
 
 Retain [LICENSE](../LICENSE), [NOTICE](../NOTICE) and the HERDR palette license.
 The unlicensed cli-main-menu reference needs owner provenance/permission review
-before public distribution, including translated visual algorithms. A matching
+for distribution, including translated visual algorithms. Public visibility does
+not resolve that permission. A matching
 author name or a public repository is not a license grant. New demo assets must
 contain synthetic values only; inspect the contact sheet and loop before promotion.
 CI uploads review artifacts with read-only repository permissions and never commits
