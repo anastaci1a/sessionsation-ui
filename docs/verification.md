@@ -2,7 +2,7 @@
 
 ## Rust popup
 
-The expanded popup passes **120 Rust tests** (118 unit tests and two tests covering
+The expanded popup passes **123 Rust tests** (121 unit tests and two tests covering
 21 complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
 regressions**. Syntax, manifest fields and documentation links pass. The goldens
 exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,
@@ -15,7 +15,9 @@ random star coordinates intentionally use a deterministic Rust generator.
 `scripts/test-terminal.py --binary PATH` uses isolated fake APIs and real PTYs:
 20 process startups, 238 key events, two-second backend delays, summary edits,
 bracketed paste, Close/Right focus restoration, unset Space without focus, staged directory/request identity, resize/cancel and exact TTY
-restoration. ANSI updates are decoded into cells. Simultaneous resize/input exposed
+restoration. The shared-directory extension verifies warning, Cancel without
+submission, and confirmed launch with a synthetic inactive session in the same
+directory. ANSI updates are decoded into cells. Simultaneous resize/input exposed
 an intermittent key-readiness loss in the default Crossterm Mio reader; the
 level-triggered TTY reader passes this regression. The cell decoder also recovers
 at the next ESC when HERDR interrupts an output sequence during popup teardown.

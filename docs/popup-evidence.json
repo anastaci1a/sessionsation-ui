@@ -2,13 +2,13 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "9aee2c908b79ae460ae9debe7ceebb6cd8e9980f",
+    "ui": "5ae5ffafcd40082a349194665c839566732afe94",
     "backend": "51764d216830bb9623c877abb2ef325d1c2231fd",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
   "checks": {
     "rust": {
-      "unit_passed": 118,
+      "unit_passed": 121,
       "visual_snapshot_test_passed": 2,
       "golden_frames": 21,
       "failed": 0,
@@ -277,5 +277,28 @@
     },
     "archive_restore_delete": "Wired through public CLI only; Archived Sessions entry appears only when nonempty; empty session list contains Operations alone",
     "account_picker": "Standard bullets and white/gray names for new and resume; transient receipt freshness errors use Checking session state…"
+  },
+  "directory_warning": {
+    "source_ui": "5ae5ffafcd40082a349194665c839566732afe94",
+    "startup": {
+      "samples": 3,
+      "p50_ms": 5.367664038203657,
+      "p95_ms": 6.812872947193682,
+      "max_ms": 6.812872947193682
+    },
+    "input": {
+      "samples": 204,
+      "p50_ms": 0.38752600084990263,
+      "p95_ms": 0.8420250378549099,
+      "max_ms": 1.18056102655828
+    },
+    "checks": "delayed backend, summary, paste, staged directory, request identity, shared-directory warning/cancel/confirm, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
+    "models": 0,
+    "unit_coverage": [
+      "global/per-Space/unset top-bar root",
+      "hover-only shared-directory hint",
+      "cancel preserves draft; confirm emits one start",
+      "initial session load selects first row; later refresh preserves selection"
+    ]
   }
 }
