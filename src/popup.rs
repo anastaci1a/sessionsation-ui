@@ -1,6 +1,6 @@
 //! Shared flat popup surface. Content uses the normal editors/options in local cells.
 const DIRECTORY_WIDTH_PERCENT: usize = 60;
-const DIRECTORY_HEIGHT_PERCENT: usize = 80;
+const DIRECTORY_HEIGHT_PERCENT: usize = 90;
 
 use crate::{
     dialog::Palette,
@@ -161,6 +161,10 @@ impl Choices<'_> {
             description + 1 + self.rows.len().max(1) + preview + note + 2
         };
         let mut size = Size::fit(viewport, width, height);
+        // Match viewport parity so centering leaves identical top/bottom margins.
+        if self.editor.is_some() && size.height % 2 != viewport.1 % 2 {
+            size.height = size.height.saturating_sub(1);
+        }
         size.note_width = self.inline_note_width;
         size
     }
@@ -243,12 +247,11 @@ pub fn paint_choices(
                     view.rows,
                 )) * 2,
         ));
-        let bottom = local
-            .height
-            .saturating_sub(usize::from(view.large) + note_height);
+        let menu_bottom = local.height.saturating_sub(usize::from(view.large));
+        let bottom = menu_bottom.saturating_sub(note_height);
         options.back = false;
         let (_, capacity) = if view.pinned > 0 {
-            options.paint_pinned_menu(local, view.rows, view.pinned, top, bottom, bottom + 1)
+            options.paint_pinned_menu(local, view.rows, view.pinned, top, menu_bottom, bottom + 1)
         } else {
             options.paint_menu(local, view.rows, top, bottom, bottom + 1)
         };
@@ -276,13 +279,27 @@ pub fn paint_choices(
                     .map(|(r, y)| (Choices::row_end(r, local.width) + 1, y))
                     .unwrap_or((0, local.height))
             } else {
+                let footer = usize::from(
+                    view.pinned > 0
+                        && available.saturating_sub(usize::from(view.rows.len() > available)) > 5
+                        && view.rows.last().is_some_and(|r| r.label == "Cancel")
+                        && view
+                            .rows
+                            .get(view.rows.len().saturating_sub(2))
+                            .is_some_and(|r| r.separator)
+                        && available > view.pinned + 3,
+                ) * 2;
                 let y = top
-                    + view.rows.len().min(capacity)
+                    + view
+                        .rows
+                        .len()
+                        .saturating_sub(footer)
+                        .min(capacity.saturating_sub(footer))
                     + usize::from(view.rows.len() > capacity)
                     + 1;
                 (
                     (local.width.saturating_sub(view.note.chars().count())) / 2,
-                    y.min(local.height.saturating_sub(usize::from(view.large) + 1)),
+                    y.min(menu_bottom.saturating_sub(footer + 1)),
                 )
             };
             local.text(
@@ -503,9 +520,10 @@ mod tests {
         let rows = vec![
             Row::yes("Use this directory"),
             Row::yes("Create subdirectory"),
-            Row::yes("Cancel"),
             Row::separator(),
             Row::placeholder("(none)"),
+            Row::separator(),
+            Row::yes("Cancel"),
         ];
         let editor =
             crate::dialog::Field::new("Directory", format!("/{}", "long-component/".repeat(30)));
@@ -519,13 +537,18 @@ mod tests {
             reserve_note: false,
             inline_note_width: 0,
             large: true,
-            pinned: 4,
+            pinned: 3,
             browse_hint: false,
         };
+        for height in 16..45 {
+            let measured = view.measure((100, height));
+            assert_eq!((height - measured.height) % 2, 0);
+            assert!(measured.height <= height - 4);
+        }
         let opened = view.measure((100, 30));
-        assert_eq!((opened.width, opened.height), (60, 24));
+        assert_eq!((opened.width, opened.height), (60, 26));
         let larger = view.measure((200, 40));
-        assert_eq!((larger.width, larger.height), (120, 32));
+        assert_eq!((larger.width, larger.height), (120, 36));
         assert_eq!(view.grow_for_selection(opened, 4).width, opened.width);
     }
     #[test]

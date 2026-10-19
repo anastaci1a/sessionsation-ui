@@ -73,8 +73,9 @@ are allocated together on the right at opening; only a genuinely narrow main
 popup moves IDs below. Other dialogs keep
 their opening dimensions through live updates. Long directory paths scroll inside
 the editor with a leading `…` for hidden characters; they never widen the popup.
-The directory picker uses 60% of the main popup’s width and 80% of its height,
-with a usable minimum and a small-terminal bound. Other pickers fit their content.
+The directory picker uses 60% of the main popup’s width and 90% of its height,
+rounded to leave equal top/bottom margins, with a usable minimum and a small-terminal bound.
+Other pickers fit their content.
 Popup frames supply exactly one outer padding cell; previews do not add another.
 Fixed-choice heights fit their description, choices and Cancel button exactly.
 Forms share the boxed account-name editor; all popup choices are left aligned,
@@ -83,7 +84,8 @@ Information-only dialogs, including a dialog whose only action is Close, hide
 that action and all bottom controls; Enter/Esc dismisses them. Progress and loading dialogs
 reserve a fixed body viewport and scroll updates within it. Long lists scroll
 and selected previews can move below them. Action groups use sentence case and a
-blank bullet spacer. Where top actions exist, Cancel belongs to that same group.
+blank bullet spacer. Directory and Space pickers keep Cancel below their list
+with a bullet separator.
 Account selection puts Cancel first, followed by a bullet separator. It opens on
 the current selection (including a prefilled default), or the first account when
 there is no matching selection; refreshed lists retain the hovered account by ID.
@@ -373,11 +375,14 @@ the one currently focused in HERDR; no focus leaves it unset. Pickers preserve t
 draft on Cancel/Esc. Existing automatic paths require explicit selection. Directory Enter
 selects the current option. In an unfamiliar directory, focus starts on the first
 subdirectory, or the non-activating `(none)` placeholder when empty; revisiting restores its selection.
-Use this directory, Leave unset (for defaults), Create subdirectory and Cancel stay above the scrolling
-subdirectory list and its range counter, separated from it by a blank bullet row
+Use this directory, Leave unset (for defaults) and Create subdirectory stay above the scrolling
+subdirectory list; Cancel stays below its range counter. Both groups are separated
+from the list by a blank bullet row
 even when empty. Left on `(none)` navigates to the parent; Enter does nothing.
 If at most five rows fit, the whole list
-scrolls instead. Directory popup dimensions stay fixed through browsing and path editing. Pending navigation clears
+scrolls instead. Directory popup dimensions stay fixed through browsing and path
+editing, with equal outer padding above and below. Wraparound and Home/End move
+the list viewport to the matching end. Pending navigation clears
 old child rows and shows Loading… one blank line below the actions. Right browses
 child rows only; Left returns to their parent and does nothing on action rows.
 Only child rows show the Parent/Open hint. Tab and Ctrl-U have no directory-picker

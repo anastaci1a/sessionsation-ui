@@ -443,14 +443,14 @@ impl App {
                     }))
                     .collect()
             }
-            Page::Spaces => [Row::yes("Create new space"), Row::yes("Cancel")]
-                .into_iter()
+            Page::Spaces => std::iter::once(Row::yes("Create new space"))
                 .chain((!self.spaces.is_empty()).then(Row::separator))
                 .chain(self.spaces.iter().map(|s| {
                     Row::yes(&s.label)
                         .with_selected_preview(format!("({})", s.workspace_id))
                         .preview_gap(1)
                 }))
+                .chain([Row::separator(), Row::yes("Cancel")])
                 .collect(),
             Page::Name => vec![Row::gate("Continue", self.name_valid(&self.input.value))],
             Page::SpaceName => vec![Row::gate(
@@ -469,7 +469,6 @@ impl App {
                         "Create subdirectory",
                         self.listing.existing || self.listing.creatable,
                     )))
-                    .chain(std::iter::once(Row::yes("Cancel")))
                     .chain(std::iter::once(Row::separator()))
                     .chain(
                         (self.listing.children.is_empty() && !self.listing_pending)
@@ -481,6 +480,7 @@ impl App {
                             p.file_name().unwrap_or_default().to_string_lossy()
                         ))
                     }))
+                    .chain([Row::separator(), Row::yes("Cancel")])
                     .collect()
             }
             Page::Launching => vec![Row::gate("Starting session…", false)],
@@ -516,7 +516,7 @@ impl App {
             && let Some(Space::Existing { id, .. }) = &self.draft.space
             && let Some(index) = self.spaces.iter().position(|s| s.workspace_id == *id)
         {
-            self.options.selected = index + 3;
+            self.options.selected = index + 2;
         }
         self.options.scroll = 0;
         self.options.back = false;
@@ -678,7 +678,7 @@ impl App {
         let picker_space = if self.page == Page::Spaces {
             self.options
                 .selected
-                .checked_sub(3)
+                .checked_sub(2)
                 .and_then(|i| self.spaces.get(i))
                 .map(|s| s.workspace_id.clone())
         } else {
@@ -692,7 +692,7 @@ impl App {
                 .spaces
                 .iter()
                 .position(|s| s.workspace_id == id)
-                .map(|i| i + 3)
+                .map(|i| i + 2)
                 .unwrap_or(0);
         }
         if self.auto_space {
@@ -827,7 +827,7 @@ impl App {
         }
     }
     fn directory_children_offset(&self) -> usize {
-        self.directory_action_count() + 2
+        self.directory_action_count() + 1
     }
     fn directory_parent(&mut self) -> Vec<Effect> {
         if let Some(path) = self.listing.path.clone()
@@ -1042,7 +1042,7 @@ impl App {
                     self.push(Page::SpaceName, String::new())
                 } else {
                     self.auto_space = false;
-                    let s = &self.spaces[self.options.selected - 3];
+                    let s = &self.spaces[self.options.selected - 2];
                     self.draft.space = Some(Space::Existing {
                         id: s.workspace_id.clone(),
                         label: s.label.clone(),
@@ -1475,10 +1475,10 @@ impl App {
             large: editor.is_some(),
             pinned: if editor.is_some() {
                 self.directory_children_offset()
-            } else if self.page == Page::Accounts {
+            } else if self.page == Page::Accounts
+                || (self.page == Page::Spaces && !self.spaces.is_empty())
+            {
                 2
-            } else if self.page == Page::Spaces && !self.spaces.is_empty() {
-                3
             } else {
                 0
             },
@@ -1898,7 +1898,10 @@ mod tests {
             .position(|s| s.contains("Create subdirectory"))
             .unwrap();
         let loading = lines.iter().position(|s| s.contains("Loading…")).unwrap();
-        assert_eq!(loading, create + 4);
+        assert_eq!(loading, create + 3);
+        let cancel = lines.iter().position(|s| s.contains("Cancel")).unwrap();
+        assert!(cancel > loading);
+        assert_eq!(cancel, (30 - size.height) / 2 + size.height - 3);
         assert_eq!(a.popup_size.as_ref().unwrap().1.height, size.height);
         a.listing(
             a.revision,
@@ -1951,7 +1954,8 @@ mod tests {
             assert_eq!(a.rows()[parent].label, "(none)");
             assert!(!a.rows()[parent].enabled);
             assert!(a.rows()[parent - 1].separator);
-            assert_eq!(a.rows()[parent - 2].label, "Cancel");
+            assert_eq!(a.rows().last().unwrap().label, "Cancel");
+            assert!(a.rows()[a.rows().len() - 2].separator);
             a.options.selected = parent;
             assert!(!a.control_tokens().contains(&"◀/▶: Parent/Open"));
             assert!(
@@ -2692,8 +2696,8 @@ mod tests {
         let rows = a.rows();
         assert!(rows.iter().all(|row| row.preview_column.is_none()));
         assert_eq!(rows[0].label, "Create new space");
-        assert_eq!(rows[3].preview.as_deref(), Some("(w1)"));
-        for selected in [3, 4] {
+        assert_eq!(rows[2].preview.as_deref(), Some("(w1)"));
+        for selected in [2, 3] {
             a.options.selected = selected;
             let mut field = Field::new(100, 24, 1);
             let c = a.paint(&mut field, 1000, 100, 24);
@@ -2723,7 +2727,7 @@ mod tests {
             assert_eq!(c.cells.iter().filter(|c| c.glyph == "(").count(), 1);
         }
         assert!(Options::previews_detached(36, &rows));
-        a.options.selected = 3;
+        a.options.selected = 2;
         let mut field = Field::new(36, 24, 1);
         let c = a.paint(&mut field, 1000, 36, 24);
         let index = c.cells.iter().position(|c| c.glyph == "(").unwrap();
@@ -2737,7 +2741,7 @@ mod tests {
                     .contains("Create new space")
             })
             .unwrap();
-        assert_eq!(index / 36, first_row + rows.len() + 1);
+        assert_eq!(index / 36, first_row + rows.len() - 1);
         assert_eq!(index % 36, (36 - "(w1)".len()) / 2);
         a.options.selected = 1;
         let c = a.paint(&mut field, 1050, 36, 24);
@@ -2765,11 +2769,11 @@ mod tests {
         a.inventory(vec![], spaces.clone(), 0);
         assert!(matches!(&a.draft.space,Some(Space::Existing {id,..}) if id=="w2"));
         a.push(Page::Spaces, String::new());
-        assert_eq!(a.options.selected, 4);
+        assert_eq!(a.options.selected, 3);
         let mut reordered = spaces.clone();
         reordered.reverse();
         a.inventory(vec![], reordered, 0);
-        assert_eq!(a.options.selected, 3);
+        assert_eq!(a.options.selected, 2);
         let none = spaces
             .iter()
             .cloned()
@@ -2781,7 +2785,7 @@ mod tests {
         a.inventory(vec![], none, 0);
         assert_eq!(a.draft.space, None);
         a.inventory(vec![], spaces.clone(), 0);
-        a.options.selected = 3;
+        a.options.selected = 2;
         a.activate();
         a.inventory(vec![], spaces, 0);
         assert!(matches!(&a.draft.space,Some(Space::Existing {id,..}) if id=="w1"));

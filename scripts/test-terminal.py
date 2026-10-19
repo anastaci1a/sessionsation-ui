@@ -70,6 +70,25 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
   t.send(b'\x1b[H');time.sleep(.06);t.drain();assert not t.screen.contains('Parent/Open')
   t.send(b'\x1b');t.wait('Account:');assert not (root/'start.json').exists()
  finally:t.close()
+ # Long directory lists keep Cancel mounted and synchronize both wrap directions.
+ children=[root/'projects'/f'dir{i:02}' for i in range(40)]
+ for child in children:child.mkdir()
+ t=Terminal(root)
+ try:
+  t.wait('New Session');t.drain();t.send(b'\r');t.wait('Account:')
+  t.send(b'\x1b[B'*3+b'\r');t.wait('Start directory');t.wait('dir00/')
+  t.send(b'\x1b[H');t.wait('Use this directory',selected=True)
+  t.send(b'\x1b[A');t.wait('Cancel',selected=True);t.wait('dir39/');t.drain()
+  assert not t.screen.contains('dir00/')
+  t.send(b'\x1b[B');t.wait('Use this directory',selected=True);t.wait('dir00/');t.drain()
+  assert not t.screen.contains('dir39/')
+  t.send(b'\x1b[F');t.wait('Cancel',selected=True);t.wait('dir39/')
+  t.send(b'\x1b[H');t.wait('Use this directory',selected=True);t.wait('dir00/')
+  t.send(b'\x1b[F');t.wait('Cancel',selected=True);t.send(b'\r');t.wait('Account:')
+  assert not (root/'start.json').exists()
+ finally:
+  t.close()
+  for child in children:child.rmdir()
  # Complete the inert handoff through the summary's separated Start action.
  t=Terminal(root)
  try:
@@ -117,4 +136,4 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  finally:t.close()
 def report(a):
  s=sorted(a);return {'samples':len(s),'p50_ms':s[len(s)//2],'p95_ms':s[min(len(s)-1,int(len(s)*.95))],'max_ms':max(s)}
-print(json.dumps({'startup':report(starts),'input':report(keys),'checks':'delayed backend, summary, paste, staged directory, request identity, shared-directory warning/cancel/confirm, resize/cancel, exact TTY restoration, atomic preferences through config symlink','models':0},indent=2))
+print(json.dumps({'startup':report(starts),'input':report(keys),'checks':'delayed backend, summary, paste, staged directory, request identity, shared-directory warning/cancel/confirm, mounted Cancel and directory wrap/Home/End viewports, resize/cancel, exact TTY restoration, atomic preferences through config symlink','models':0},indent=2))

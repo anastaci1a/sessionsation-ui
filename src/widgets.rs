@@ -576,11 +576,17 @@ impl Options {
             return;
         }
         self.back = false;
+        let before = self.selected;
         self.selected = self
             .navigation
             .step(self.selected, count, previous, wrap, |index| {
                 index == rows.len() || !rows[index].separator
             });
+        if previous && self.selected > before {
+            self.scroll = rows.len();
+        } else if !previous && self.selected < before {
+            self.scroll = 0;
+        }
     }
     pub fn boundary(&mut self, rows: &[Row], bottom_action: bool, last: bool) {
         self.back = false;
@@ -590,6 +596,7 @@ impl Options {
             last,
             |i| i == rows.len() || !rows[i].separator,
         );
+        self.scroll = if last { rows.len() } else { 0 };
     }
     pub fn left(width: usize, rows: &[Row]) -> usize {
         if rows.iter().any(|r| r.left_aligned) {
@@ -737,6 +744,7 @@ impl Options {
         (left, capacity)
     }
     /// Scroll a list body independently while retaining its action header.
+    /// A trailing separator + Cancel forms a mounted footer, including while empty.
     /// Very short viewports use ordinary whole-list scrolling instead.
     pub fn paint_pinned_menu(
         &mut self,
@@ -752,7 +760,17 @@ impl Options {
             .saturating_sub(top);
         let overflow = rows.len() > available;
         let capacity = available.saturating_sub(usize::from(overflow));
-        if !overflow || capacity <= 5 || pinned >= rows.len() {
+        let footer = usize::from(
+            rows.last().is_some_and(|r| r.label == "Cancel")
+                && rows
+                    .get(rows.len().saturating_sub(2))
+                    .is_some_and(|r| r.separator),
+        ) * 2;
+        if (!overflow && footer == 0)
+            || capacity <= 5
+            || pinned + footer > rows.len()
+            || available <= pinned + footer + 1
+        {
             return self.paint_menu(canvas, rows, top, bottom, controls_start);
         }
         let left = Self::left(canvas.width, rows);
@@ -765,19 +783,33 @@ impl Options {
                 self.back,
             );
         }
+        let body_end = rows.len() - footer;
+        for (i, row) in rows.iter().enumerate().skip(body_end) {
+            row.paint(
+                canvas,
+                left,
+                bottom - footer + i - body_end,
+                self.selected == i && !self.back,
+                self.back,
+            );
+        }
         let mut body = self.clone();
-        body.selected = self.selected.checked_sub(pinned).unwrap_or(usize::MAX);
+        body.selected = self
+            .selected
+            .checked_sub(pinned)
+            .filter(|i| *i < body_end - pinned)
+            .unwrap_or(usize::MAX);
         body.scroll = self.scroll.saturating_sub(pinned);
         let (_, body_capacity) = body.paint_menu(
             canvas,
-            &rows[pinned..],
+            &rows[pinned..body_end],
             top + pinned,
-            bottom,
-            controls_start,
+            bottom.saturating_sub(footer),
+            controls_start.saturating_sub(footer),
         );
         self.scroll = body.scroll + pinned;
         self.preview_visible = body.preview_visible;
-        (left, pinned + body_capacity)
+        (left, pinned + body_capacity + footer)
     }
     pub fn paint_range(&self, canvas: &mut Canvas, count: usize, capacity: usize, y: usize) {
         if capacity == 0 || count <= capacity {
@@ -909,6 +941,88 @@ mod tests {
             .collect::<String>();
         assert!(!text.contains("Use this directory"));
         assert!(text.contains("directory29/"));
+    }
+    #[test]
+    fn mounted_cancel_and_header_wrap_move_the_body_to_each_end() {
+        let mut rows = vec![Row::yes("Use this directory"), Row::separator()];
+        rows.extend((0..30).map(|i| Row::yes(format!("directory{i:02}/"))));
+        rows.extend([Row::separator(), Row::yes("Cancel")]);
+        let mut options = Options::default();
+        let paint = |o: &mut Options, bottom| {
+            let mut c = Canvas::new(60, 24);
+            o.paint_pinned_menu(&mut c, &rows, 2, 1, bottom, bottom + 1);
+            c.cells
+                .chunks(60)
+                .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
+                .collect::<Vec<_>>()
+        };
+        options.boundary(&rows, false, true);
+        let lines = paint(&mut options, 19);
+        assert!(lines[1].contains("Use this directory"));
+        assert!(lines[18].contains("Cancel"));
+        assert!(lines[17].contains('•'));
+        assert!(lines.iter().any(|l| l.contains("directory29/")));
+        options.step(&rows, false, false);
+        let lines = paint(&mut options, 19);
+        assert_eq!(options.selected, 0);
+        assert!(lines.iter().any(|l| l.contains("directory00/")));
+        assert!(!lines.iter().any(|l| l.contains("directory29/")));
+        options.step(&rows, false, true);
+        let lines = paint(&mut options, 19);
+        assert_eq!(options.selected, rows.len() - 1);
+        assert!(lines.iter().any(|l| l.contains("directory29/")));
+        options.boundary(&rows, false, false);
+        assert!(
+            paint(&mut options, 19)
+                .iter()
+                .any(|l| l.contains("directory00/"))
+        );
+        // Footer remains mounted even when the body has room to fit, and resize
+        // can fall back to whole-list scrolling without losing Cancel.
+        options.selected = rows.len() - 1;
+        assert!(paint(&mut options, 7).iter().any(|l| l.contains("Cancel")));
+        let short = vec![
+            Row::yes("Action"),
+            Row::separator(),
+            Row::placeholder("(none)"),
+            Row::separator(),
+            Row::yes("Cancel"),
+        ];
+        let mut c = Canvas::new(40, 20);
+        options.selected = 2;
+        options.paint_pinned_menu(&mut c, &short, 2, 1, 16, 17);
+        let text = |y: usize| {
+            c.cells[y * 40..(y + 1) * 40]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+        };
+        assert!(text(3).contains("(none)"));
+        assert!(text(15).contains("Cancel"));
+    }
+    #[test]
+    fn pinned_header_wrap_and_boundaries_reset_scroll_without_a_footer() {
+        let mut rows = vec![Row::yes("Action"), Row::separator()];
+        rows.extend((0..30).map(|i| Row::yes(format!("Child {i}"))));
+        let mut o = Options::default();
+        for (last, expected) in [(true, "Child 29"), (false, "Child 0")] {
+            o.boundary(&rows, false, last);
+            let mut c = Canvas::new(40, 16);
+            o.paint_pinned_menu(&mut c, &rows, 2, 0, 12, 13);
+            assert!(c.cells.chunks(40).any(|r| {
+                r.iter()
+                    .map(|c| c.glyph.as_str())
+                    .collect::<String>()
+                    .contains(expected)
+            }));
+        }
+        o.step(&rows, false, true);
+        let mut c = Canvas::new(40, 16);
+        o.paint_pinned_menu(&mut c, &rows, 2, 0, 12, 13);
+        o.step(&rows, false, false);
+        let mut c = Canvas::new(40, 16);
+        o.paint_pinned_menu(&mut c, &rows, 2, 0, 12, 13);
+        assert_eq!(o.scroll, 2);
     }
     #[test]
     fn held_arrows_stop_at_edges_and_release_rearms_wrap() {

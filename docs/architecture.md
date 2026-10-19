@@ -50,13 +50,13 @@ Its reusable components are:
 - `usage`: one measurement/rendering system for remaining-allowance bars, limit
   markers, status-only accounts and shared columns across responsive layouts.
 - `popup`: shared frame, measured size and choice-list template (optional boxed
-  editor, pinned action group including Cancel, selected preview and status). Callers supply
+  editor, pinned action header and Cancel footer, selected preview and status). Callers supply
   content and handle actions; they do not duplicate layout. Pickers preserve the
   opening screen and cache geometry/detail budgets until terminal resize. Labels
   and known statuses determine opening width; descriptions wrap and path editors
   scroll with a leading ellipsis. Polling cannot grow the frame for hidden details.
   A hovered detail may increase the cached budget, retaining that space until
-  close. Directory browsing instead uses 60% width/80% height independently of
+  close. Directory browsing instead uses 60% width/90% height independently of
   path length. Popup rows reuse the frame’s outer padding; borderless previews
   own one edge cell. Known Space IDs are included in opening width. Account
   statuses and archived IDs keep the shared list-wide inline/detached fit rule.

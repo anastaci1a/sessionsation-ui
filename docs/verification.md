@@ -91,7 +91,7 @@ cp .demo/output/demo.gif docs/assets/demo.gif
 npm run check
 ```
 
-The checked-in demo is about 1.1 MiB, 46 seconds and 314 frames at a 10 FPS cap;
+The checked-in demo is about 1.1 MiB, 46 seconds and 315 frames at a 10 FPS cap;
 its 128×40 terminal renders to 1096×718 pixels. It shows bars/limits, session
 activity/details, the staged directory picker and an inert normal-tab handoff.
 The contact sheet and loop seam were inspected before README promotion. No real
@@ -107,7 +107,7 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 ## Verification record and limits
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **174 Rust tests** (172 unit and two visual tests covering
+passed formatting, Clippy, **176 Rust tests** (174 unit and two visual tests covering
 25 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
@@ -136,13 +136,13 @@ popups additionally cache their opening detail budget: polling a hidden longer
 status or Space ID does not resize the frame, while hovering it can grow the
 frame up to the viewport limit. Long directory paths scroll with a leading
 ellipsis rather than determining popup width. Directory viewport checks assert
-60% main-popup width and 80% height, with small-terminal bounds. Archived IDs
+60% main-popup width and 90% height, with small-terminal bounds. Archived IDs
 use parenthesized gray/unbolded previews with a list-wide decision including
 offscreen rows; wide/compact goldens verify both placements. Account selection restores the
 current/default ID or first account below the Cancel/separator group and retains
 that identity through reordered inventory. Resize refits the frame; long content
 scrolls inside it. Directory goldens cover pinned
-actions with Cancel in the same group, the five-row scrolling fallback, loading
+headers and a bottom-mounted Cancel, wraparound/Home/End viewport synchronization, equal vertical margins, the five-row scrolling fallback, loading
 without stale children and the non-activating `(none)` row with its normal hover
 bullet and Left-to-parent. Popup actions use sentence case; directory choices
 read Use this directory and Create subdirectory.
