@@ -62,6 +62,8 @@ require scrolling explanatory text to the bottom.
 Menus initially focus the first non-separator option, even if unavailable.
 Session action hints such as `(tmux)` or `(missing directory)` appear only on
 hover and hide on Back; resume reasons come from the public CLI state.
+An unfinished conversation offers Start Session with an explicit warning first.
+Confirming acknowledges only unfinished history, not active writers or conflicting copies.
 Input focus is shown by the cursor alone, with no triangle. Only the focused input
 shows a cursor in multi-input dialogs; single-input dialogs
 stay editable while navigating buttons. Menu account names are ellipsized on cell 12, session titles on cell 16; full values remain

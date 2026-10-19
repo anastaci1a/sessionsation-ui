@@ -1644,6 +1644,9 @@ mod resume_tests {
         assert!(request.get("directory").is_none());
         assert_eq!(request["session_id"], "stable");
         assert_eq!(request["expected_generation"], "fresh");
+        assert!(request.get("confirm_unfinished").is_none());
+        a.resume.as_mut().unwrap()["confirm_unfinished"] = json!(true);
+        assert_eq!(a.creation_request().unwrap()["confirm_unfinished"], true);
         assert_eq!(a.draft.directory.path(), Some(Path::new("/saved/path")));
         let revision = a.draft.revision;
         a.pop();
