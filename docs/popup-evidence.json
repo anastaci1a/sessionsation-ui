@@ -2,13 +2,13 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "07a1ad88ecec713810bd6319375c79ec11144180",
-    "backend": "e4b821f88965cea18180a9b3f157c4950b04d239",
+    "ui": "1468c7d45f8fc91e1ce526e3ac9641fc8851e671",
+    "backend": "aea768160343b21e575e12394c5662f049d50433",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
   "checks": {
     "rust": {
-      "unit_passed": 91,
+      "unit_passed": 99,
       "visual_snapshot_test_passed": 2,
       "golden_frames": 21,
       "failed": 0,
@@ -24,15 +24,15 @@
       "command": "npm run check"
     },
     "backend": {
-      "standard_tests_passed": 239,
+      "standard_tests_passed": 243,
       "installed_herdr_test_passed": 3,
       "failed": 0,
       "standard_command": "scripts/check.sh",
-      "standard_source": "e4b821f88965cea18180a9b3f157c4950b04d239",
+      "standard_source": "aea768160343b21e575e12394c5662f049d50433",
       "tests": {
         "unit": 127,
         "cli": 8,
-        "external_move": 58,
+        "external_move": 62,
         "external_move_ignored": 3,
         "messaging_cli": 8,
         "persistence": 6,
@@ -81,28 +81,30 @@
   "pty": {
     "startup": {
       "samples": 20,
-      "p50_ms": 5.246543907560408,
-      "p95_ms": 5.929715000092983,
-      "max_ms": 5.929715000092983
+      "p50_ms": 5.658071022480726,
+      "p95_ms": 6.3134810188785195,
+      "max_ms": 6.3134810188785195
     },
     "input": {
       "samples": 238,
-      "p50_ms": 0.34160097129642963,
-      "p95_ms": 0.47849398106336594,
-      "max_ms": 0.5881160032004118
+      "p50_ms": 0.3480929881334305,
+      "p95_ms": 0.4591679899021983,
+      "max_ms": 0.5588720086961985
     },
     "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
-    "models": 0
+    "models": 0,
+    "source_ui": "1f30e96d6944373182efa196160eec9ff16c680a"
   },
   "herdr": {
     "keybind_startup": {
       "samples": 20,
-      "p50_ms": 174.63497503194958,
-      "p95_ms": 178.48960706032813,
-      "max_ms": 178.48960706032813
+      "p50_ms": 176.50194000452757,
+      "p95_ms": 194.84711799304932,
+      "max_ms": 194.84711799304932
     },
+    "first_press_ms": 32.43502206169069,
     "installed_herdr": "0.9.5",
-    "plugin_to_first_paint_ms": 289.1963020665571,
+    "plugin_to_first_paint_ms": 415.8500100020319,
     "popup_size": [
       117,
       28
@@ -111,6 +113,8 @@
       "origin context without pane ID",
       "90% width / 65% height popup",
       "ui_busy refusal",
+      "first press moves before repeat/release",
+      "Home/End jump to first/last option",
       "held arrows and release/press wrap through installed HERDR",
       "real host resize preserves draft",
       "selected destination normal tab",
@@ -156,7 +160,7 @@
       "initial_handoff": "The latest owner update retained 26/27 captured native process identities. One codex process exited during the interval; cause not established. No agent-stop API or direct signal was invoked.",
       "wait": "Registry lock release checked separately from socket disappearance"
     },
-    "backend_client": "/mnt/user/live/packages/sessionsation/popup/e4b821f88965cea18180a9b3f157c4950b04d239/sessionsation"
+    "backend_client": "/mnt/user/live/packages/sessionsation/popup/aea768160343b21e575e12394c5662f049d50433/sessionsation"
   },
   "layout_regressions": [
     "Configuration labels and complete-fit optional directory previews",
@@ -174,9 +178,13 @@
     "Home usage focus: white triangle after one space, selected colors retained, other bars darkened without desaturation",
     "Default Dir global/per-Space pickers offer leave unset; three action rows focus Back on Left",
     "Unavailable options can receive focus without activation; separators skipped",
-    "All session account tags permanently dim/unbolded, no triangle marker",
+    "Active session account tags brighten on hover; inactive tags stay dim with one-space gray asterisk, neither bold",
     "Menu hints/ranges use reference soft accent; dialog hints readable gray",
-    "Inherited popup background unchanged; nonblocking OSC 11 reply filters without typed-input corruption"
+    "Inherited popup background unchanged; nonblocking OSC 11 reply filters without typed-input corruption",
+    "Shared list and dialog navigation: hold-origin wrapping, immediate first press, Home/End boundaries without footer hints",
+    "Compact Manage Accounts uses normal circle bullets and white/gray names; usage text unbolded",
+    "Home status focus opens Enable/Login/Restore confirmations and preserves focus",
+    "Ellipsis survives responsive title reclipping; sole Esc dialog hint hidden"
   ],
   "management": {
     "passed": true,
@@ -198,8 +206,9 @@
     "Claude preparation only",
     "HERDR outer border cannot follow animated status bar",
     "Dynamic/terminal HERDR themes use explicit configured-base approximation",
-    "External CLI plugin invocation measured 282.44ms; configured keybind p95 was 183.61ms",
-    "Original startup configuration is preserved; an old owner started after reboot gates deletion until selected owner activation"
+    "Original startup configuration is preserved; an old owner started after reboot gates deletion until selected owner activation",
+    "Archive/Restore/Delete CLI verified; UI actions not yet wired",
+    "Provider-login cancellation action pending"
   ],
   "activity": {
     "passed": true,
@@ -213,10 +222,11 @@
       "TTY restoration"
     ],
     "transition_ms": {
-      "idle": 1009.63,
-      "busy": 41.01,
-      "saved": 1002.71,
-      "failure": 969.07
-    }
+      "idle": 980,
+      "busy": 989.5,
+      "saved": 1012.1,
+      "failure": 1009.46
+    },
+    "source_ui": "1f30e96d6944373182efa196160eec9ff16c680a"
   }
 }
