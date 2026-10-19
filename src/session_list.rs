@@ -163,7 +163,7 @@ pub fn paint(
         })
         .max()
         .unwrap_or(0);
-    let max_name = canvas.width.saturating_sub(account_width + 9);
+    let max_name = canvas.width.saturating_sub(account_width + 8);
     let show_accounts = !sessions.is_empty() && max_name >= 4;
     let name_width = sessions
         .iter()
@@ -177,7 +177,7 @@ pub fn paint(
         } else {
             canvas.width.saturating_sub(8)
         });
-    let table_width = name_width + if show_accounts { account_width + 1 } else { 0 };
+    let table_width = name_width + if show_accounts { account_width } else { 0 };
     let prefix = 1;
     for (i, session) in sessions.iter().enumerate() {
         rows[prefix + i].label = ellipsize(
@@ -254,7 +254,7 @@ pub fn paint(
                 short_name(session["account_id"].as_str().unwrap_or("?"))
             );
             let pad = account_width.saturating_sub(UnicodeWidthStr::width(account.as_str()) + 4);
-            let x = left + 2 + name_width + 1 + pad;
+            let x = left + 2 + name_width + pad;
             let y = 3 + index - options.scroll;
             canvas.accent_text(
                 x + 2,

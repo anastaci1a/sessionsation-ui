@@ -32,20 +32,27 @@ pub struct Usage {
 impl Usage {
     pub fn account(a: &Account) -> Self {
         let stale = a.details.get("usage_fresh").and_then(|v| v.as_bool()) != Some(true);
-        let status = if a.details.get("membership").and_then(|v| v.as_str()) == Some("removed") {
-            "Deregistered"
-        } else if a.details.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
-            "Disabled"
-        } else if a.details.get("auth_required").and_then(|v| v.as_bool()) == Some(true) {
-            "Login required"
-        } else if a.usage["observed_at"].as_i64().is_none() {
-            "Usage unavailable"
-        } else if stale {
-            "Usage stale"
-        } else {
-            "Ready"
-        }
-        .to_owned();
+        let status =
+            if let Some(deletion) = a.details.get("deletion").filter(|v| v["id"].is_string()) {
+                if deletion["phase"] == "failed" {
+                    "Deletion failed"
+                } else {
+                    "Deleting"
+                }
+            } else if a.details.get("membership").and_then(|v| v.as_str()) == Some("removed") {
+                "Deregistered"
+            } else if a.details.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
+                "Disabled"
+            } else if a.details.get("auth_required").and_then(|v| v.as_bool()) == Some(true) {
+                "Login required"
+            } else if a.usage["observed_at"].as_i64().is_none() {
+                "Usage unavailable"
+            } else if stale {
+                "Usage stale"
+            } else {
+                "Ready"
+            }
+            .to_owned();
         let windows = {
             [
                 ("short", "5h", "short_percent", 300),
@@ -85,7 +92,7 @@ impl Usage {
     pub fn status_only(&self) -> bool {
         matches!(
             self.status.as_str(),
-            "Disabled" | "Login required" | "Deregistered"
+            "Disabled" | "Login required" | "Deregistered" | "Deleting" | "Deletion failed"
         ) || self.windows.iter().all(|w| w.remaining.is_none())
     }
     pub fn height(&self) -> usize {

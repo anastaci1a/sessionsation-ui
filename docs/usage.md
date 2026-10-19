@@ -94,6 +94,11 @@ the dialog without cancelling or resending the operation. The CLI owns every
 preservation/deletion step. An older account owner gates deletion until explicitly
 updated; changing the popup's client binary alone does not replace that owner.
 
+Deletion reservations replace ordinary account actions with the original operation;
+failed cleanup offers Recover only when the backend reports it safe to request.
+Operation menus respect explicit cancellation/recovery capabilities, rather than
+assuming every failed operation supports the same recovery command.
+
 Session Details opens from cached state immediately and refreshes on the one-second
 read-only state poll, retaining the last details during discovery failures. It shows
 the native creation timestamp and saved rollout size when reported; older or

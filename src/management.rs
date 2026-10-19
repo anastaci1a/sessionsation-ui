@@ -197,6 +197,9 @@ impl Manager {
     fn activate_usage(&mut self) -> Vec<Intent> {
         let key = self.selected_account().unwrap();
         let a = self.account(&key).unwrap().clone();
+        if let Some(operation) = a.details.get("deletion").filter(|v| v["id"].is_string()) {
+            return self.deletion_operation(operation.clone());
+        }
         let usage = Usage::account(&a);
         match usage.status.as_str() {
             "Disabled" => self.show(
@@ -222,6 +225,13 @@ impl Manager {
             _ => self.show_usage(&a),
         }
         vec![]
+    }
+    fn deletion_operation(&mut self, operation: Value) -> Vec<Intent> {
+        let key = id(&operation).to_owned();
+        self.operations.retain(|o| id(o) != key);
+        self.operations.push(operation);
+        self.go(Page::Operation(key));
+        self.refresh()
     }
     pub fn inventory(&mut self, accounts: Vec<Account>) {
         let selected = self.selected_account();
@@ -350,6 +360,13 @@ impl Manager {
             }
             Page::Account(key) => {
                 let a = self.account(key);
+                if a.is_some_and(|a| {
+                    a.details
+                        .get("deletion")
+                        .is_some_and(|v| v["id"].is_string())
+                }) {
+                    return vec![Row::yes("Deletion operation")];
+                }
                 let removed =
                     a.is_some_and(|a| a.details.get("membership").is_some_and(|v| v == "removed"));
                 let mut rows = vec![
@@ -438,14 +455,40 @@ impl Manager {
                     } else {
                         "Progress"
                     }),
-                    Row::gate("Respond yes", phase.starts_with("awaiting")),
-                    Row::gate("Respond no", phase.starts_with("awaiting")),
+                    Row::gate(
+                        "Respond yes",
+                        o["can_respond"]
+                            .as_bool()
+                            .unwrap_or(phase.starts_with("awaiting")),
+                    ),
+                    Row::gate(
+                        "Respond no",
+                        o["can_respond"]
+                            .as_bool()
+                            .unwrap_or(phase.starts_with("awaiting")),
+                    ),
                     Row::separator(),
                     Row::gate(
                         "Cancel operation",
                         !terminal(phase) && o["can_cancel"] != false,
                     ),
-                    Row::gate("Recover", matches!(phase, "failed" | "cancelled")),
+                    Row::gate(
+                        "Recover",
+                        o["can_recover"].as_bool().unwrap_or(
+                            phase == "failed"
+                                && matches!(
+                                    o["kind"].as_str(),
+                                    Some(
+                                        "account_delete"
+                                            | "account"
+                                            | "restart"
+                                            | "directory"
+                                            | "pause"
+                                            | "terminate"
+                                    )
+                                ),
+                        ),
+                    ),
                 ]
             }
         }
@@ -803,6 +846,9 @@ impl Manager {
                     self.note = "Account is no longer available".into();
                     return vec![];
                 };
+                if let Some(operation) = a.details.get("deletion").filter(|v| v["id"].is_string()) {
+                    return self.deletion_operation(operation.clone());
+                }
                 let index =
                     if a.details.get("auth_required").is_some_and(|v| v == true) || index < 3 {
                         index
@@ -1573,6 +1619,29 @@ impl Manager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn deletion_reservation_routes_to_original_operation_and_recovery_capabilities() {
+        let mut m = super::Manager { accounts: vec![serde_json::from_value(serde_json::json!({"id":"codex:fixture","selectable":false,"enabled":false,"usage":{},"deletion":{"id":"original","kind":"account_delete","phase":"failed","can_recover":true,"can_cancel":false}})).unwrap()], page: super::Page::Account("codex:fixture".into()), ..Default::default() };
+        assert_eq!(
+            m.rows()
+                .iter()
+                .map(|r| r.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Deletion operation"]
+        );
+        m.activate();
+        assert_eq!(m.page, super::Page::Operation("original".into()));
+        assert!(m.rows()[5].enabled);
+        assert!(!m.rows()[4].enabled);
+        m.operations[0]["can_recover"] = serde_json::json!(false);
+        assert!(!m.rows()[5].enabled);
+        m.operations[0] =
+            serde_json::json!({"id":"original","kind":"archive_session","phase":"failed"});
+        assert!(
+            !m.rows()[5].enabled,
+            "unsupported recovery must not be guessed"
+        );
+    }
     use super::*;
     #[test]
     fn unfinished_resume_warning_requires_confirmation_and_cancel_is_side_effect_free() {
