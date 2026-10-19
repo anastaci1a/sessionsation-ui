@@ -19,22 +19,47 @@ pub enum Action {
 }
 pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     let c = &s["capabilities"];
+    let inactive = s["availability"] != "running";
+    let focus = Row::gate(
+        "Focus Session",
+        s["availability"] == "running" && s["attachment"]["host"] == "herdr",
+    );
+    let focus = if s["availability"] == "running" && s["attachment"]["host"] == "tmux" {
+        focus
+            .with_column_preview("(tmux)", 16, false)
+            .preview_gap(1)
+            .preview_color(crate::widgets::SECONDARY)
+    } else {
+        focus
+    };
     let mut rows = vec![
-        (
-            Row::gate(
-                "Focus Session",
-                s["availability"] == "running" && s["attachment"]["host"] == "herdr",
-            ),
-            Action::Focus,
-        ),
+        if inactive {
+            (
+                Row::gate("Start Session", resume && c["resume"] == true),
+                Action::Resume,
+            )
+        } else {
+            (focus, Action::Focus)
+        },
         (Row::yes("Session Details"), Action::Details),
         (
             Row::gate("Rename Session", c["rename"] == true),
             Action::Rename,
         ),
     ];
-    if c["resume"] == true {
-        rows.push((Row::gate("Resume Session", resume), Action::Resume));
+    if inactive {
+        rows.extend([
+            (Row::separator(), Action::Unavailable),
+            (
+                Row::gate("Archive Session", c["archive"] == true),
+                Action::Unavailable,
+            ),
+            (
+                Row::gate("Delete Session", c["delete"] == true),
+                Action::Unavailable,
+            ),
+        ]);
+        return rows;
     }
     rows.extend([
         (Row::separator(), Action::Unavailable),
@@ -166,14 +191,7 @@ pub fn paint(
                 .and_then(|i| sessions.get(i))
                 .filter(|_| show_accounts)
             {
-                table_width
-                    - if busy(session) {
-                        0
-                    } else if session["availability"] != "running" {
-                        1
-                    } else {
-                        2
-                    }
+                table_width - if busy(session) { 0 } else { 2 }
             } else {
                 table_width
             };
@@ -209,7 +227,6 @@ pub fn paint(
             if index < options.scroll || index >= options.scroll + capacity {
                 continue;
             }
-            let selected = options.selected == index && !options.back;
             let account = format!(
                 "[{}]",
                 short_name(session["account_id"].as_str().unwrap_or("?"))
@@ -217,27 +234,18 @@ pub fn paint(
             let pad = account_width.saturating_sub(UnicodeWidthStr::width(account.as_str()) + 4);
             let x = left + 2 + name_width + 1 + pad;
             let y = 3 + index - options.scroll;
-            if selected {
-                canvas.accent_text(x, y, "▸", Accent::default());
-            }
             canvas.accent_text(
                 x + 2,
                 y,
                 &account,
                 Accent {
-                    brightness: 1000,
-                    bold: selected,
+                    brightness: 600,
+                    bold: false,
+                    flash: false,
                     ..Accent::default()
                 },
             );
-            if session["availability"] != "running" {
-                canvas.accent_text(
-                    x + 2 + UnicodeWidthStr::width(account.as_str()),
-                    y,
-                    "*",
-                    Accent::default(),
-                );
-            } else if busy(session) {
+            if busy(session) {
                 let end = x + 2 + UnicodeWidthStr::width(account.as_str());
                 let now_ms = canvas.theme.as_ref().map_or(0, |t| t.now);
                 let mut style = canvas.cells[y * canvas.width + end - 1].clone();
@@ -255,6 +263,34 @@ pub fn paint(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn inactive_actions_start_with_history_and_hide_live_controls() {
+        let rows = actions(
+            &serde_json::json!({"availability":"saved","capabilities":{"resume":true,"rename":true}}),
+            true,
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|(r, _)| r.label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Start Session",
+                "Session Details",
+                "Rename Session",
+                "",
+                "Archive Session",
+                "Delete Session"
+            ]
+        );
+        assert_eq!(rows[0].1, Action::Resume);
+        assert!(rows[0].0.enabled);
+        let rows = actions(
+            &serde_json::json!({"availability":"running","attachment":{"host":"tmux"}}),
+            true,
+        );
+        assert_eq!(rows[0].0.preview.as_deref(), Some("(tmux)"));
+        assert_eq!(rows[0].0.preview_fg, crate::widgets::SECONDARY);
+    }
     #[test]
     fn reference_spinner_is_persistent_but_disappears_on_idle_exit_or_unknown() {
         for (i, glyph) in ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -333,7 +369,8 @@ mod tests {
                 .iter()
                 .all(|c| !c.bold && c.fg == crate::widgets::SECONDARY)
         );
-        assert!(text(&c, 5).contains("[work]*"));
+        assert!(text(&c, 5).contains("[work]"));
+        assert!(!text(&c, 5).contains("[work]*"));
         options.selected = 2;
         let mut c = Canvas::new(38, 20);
         paint(&mut c, &mut options, &sessions, true, 16, 90062, 19);
@@ -400,7 +437,8 @@ mod tests {
                 .iter()
                 .find(|c| c.glyph == "[")
                 .unwrap();
-            assert!(selected_account.bold);
+            assert!(!selected_account.bold);
+            assert_eq!(selected_account.fg, other_account.fg);
             assert!(!other_account.bold);
         }
     }

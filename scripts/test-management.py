@@ -26,7 +26,7 @@ elif api[:2]==['account','remove']:
  time.sleep(2);result={'account_id':api[2],'revision':'preview','can_remove':True,'affected_sessions':[],'stored_data':{'files':3,'bytes':20,'history_files':1}}
 elif api[:2]==['account','limits']:result={'limits':{'short_percent':80,'weekly_percent':90}}
 elif api[:1] in [['launch'],['resume-launch']]:
- if api[1]=='list':result=[receipt] if receipt else []
+ if api[1]=='list':result=[receipt] if receipt and api[0]=='resume-launch' else []
  elif api[1]=='status':result=receipt
  elif api[1]=='validate':json.load(sys.stdin);result={'valid':True}
  elif api[1]=='start':
@@ -63,8 +63,8 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
   weekly=next(row for row in rows if 'fixture2' in row);assert '/' not in weekly and 'wk' in weekly
   t.send(b'\x1b');t.wait('Account:');t.send(b'\x1b');t.wait('Manage Sessions')
   # Select a saved session, then Resume (selection itself never attaches).
-  t.send(b'\x1b[B\r');t.wait('Savedfixture');t.send(b'\x1b[B\r');t.wait('Resume');t.send(b'\x1b[B\x1b[B\r');t.wait('Resume Session');t.wait('Directory:');time.sleep(.2);t.drain()
-  t.send(b'\x1b[B\x1b[B\x1b[B\r');t.wait('Continue in background');t.send(b'\x1b');t.wait('Manage Sessions')
+  t.send(b'\x1b[B\r');t.wait('Savedfixture');t.send(b'\x1b[B\r');t.wait('Start Session');t.send(b'\r');t.wait('Resume Session');t.wait('Dir:');time.sleep(.2);t.drain()
+  t.send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r');t.wait('Continue in background');t.send(b'\x1b');t.wait('Manage Sessions')
   deadline=time.monotonic()+3
   while not (root/'start.json').exists() and time.monotonic()<deadline:t.drain();time.sleep(.01)
   request=json.loads((root/'start.json').read_text())

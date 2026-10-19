@@ -96,6 +96,7 @@ pub struct Dialog {
     pub visible: usize,
     pub wrapped: usize,
     pub busy: bool,
+    pub compact: bool,
     pub status: Option<String>,
 }
 pub enum Event {
@@ -115,6 +116,7 @@ impl Dialog {
             visible: 0,
             wrapped: 0,
             busy: false,
+            compact: false,
             status: None,
         }
     }
@@ -214,7 +216,34 @@ impl Dialog {
     pub fn paint(&mut self, canvas: &mut Canvas, palette: &Palette) {
         let width = canvas.width.saturating_sub(4).min(76);
         let max_height = canvas.height.saturating_sub(4);
-        let reserved = self.fields.len() * 3 + self.buttons.len() + 6;
+        let mut lines: Vec<_> = self
+            .body
+            .iter()
+            .flat_map(|l| wrap(l, width.saturating_sub(4)))
+            .collect();
+        if let Some(status) = &self.status {
+            lines.extend(wrap(status, width.saturating_sub(4)));
+        }
+        let mut normalized = Vec::new();
+        for line in lines {
+            if !line.trim().is_empty()
+                || normalized
+                    .last()
+                    .is_some_and(|l: &String| !l.trim().is_empty())
+            {
+                normalized.push(line);
+            }
+        }
+        while normalized.last().is_some_and(|l| l.trim().is_empty()) {
+            normalized.pop();
+        }
+        let lines = normalized;
+        let compact_scroll = self.compact && lines.len() > max_height.saturating_sub(2);
+        let reserved = if self.compact {
+            if compact_scroll { 4 } else { 2 }
+        } else {
+            self.fields.len() * 3 + self.buttons.len() + if self.fields.is_empty() { 5 } else { 6 }
+        };
         if width < 20 || max_height < reserved + 1 {
             self.visible = 0;
             self.wrapped = 1;
@@ -228,10 +257,6 @@ impl Dialog {
             return;
         }
         let x = (canvas.width - width) / 2;
-        let mut lines: Vec<_> = self.body.iter().flat_map(|l| wrap(l, width - 4)).collect();
-        if let Some(status) = &self.status {
-            lines.extend(wrap(status, width - 4));
-        }
         let height = max_height.min(lines.len().max(1) + reserved);
         let y = (canvas.height - height) / 2;
         let body_height = height - reserved;
@@ -278,79 +303,92 @@ impl Dialog {
         for (i, line) in lines.iter().skip(self.offset).take(body_height).enumerate() {
             canvas.text(x + 2, y + 1 + i, line, style.clone(), false);
         }
-        let mut row = y + 2 + body_height;
-        for (index, field) in self.fields.iter().enumerate() {
-            let field_style = Cell {
-                fg: if field.valid() { palette.text } else { INVALID },
-                ..style.clone()
-            };
-            let label = clip(&format!(" {} ", field.label), width - 8);
-            let label_width = UnicodeWidthStr::width(label.as_str());
-            canvas.text(
-                x + 2,
-                row,
-                &format!(
-                    "┌─{}{}┐",
-                    label,
-                    "─".repeat((width - 7).saturating_sub(label_width))
-                ),
-                field_style.clone(),
-                false,
-            );
-            canvas.text(x + 2, row + 1, "│", field_style.clone(), false);
-            canvas.text(x + width - 3, row + 1, "│", field_style.clone(), false);
-            field.input.paint_focused(
-                canvas,
-                x + 3,
-                row + 1,
-                width - 7,
-                field.valid(),
-                self.editor() == Some(index),
-            );
-            canvas.text(
-                x + 2,
-                row + 2,
-                &format!("└{}┘", "─".repeat(width - 6)),
-                field_style.clone(),
-                false,
-            );
-            if !field.valid() {
-                for col in x + 2..x + width - 2 {
-                    let cell = &mut canvas.cells[(row + 1) * canvas.width + col];
-                    if cell.bg.is_some_and(|bg| bg != palette.panel) {
-                        cell.bg = Some(INVALID);
-                    } else {
-                        cell.fg = INVALID;
+        if !self.compact {
+            let mut row = y + 1 + body_height + usize::from(!self.fields.is_empty());
+            for (index, field) in self.fields.iter().enumerate() {
+                let field_style = Cell {
+                    fg: if field.valid() { palette.text } else { INVALID },
+                    ..style.clone()
+                };
+                let label = clip(&format!(" {} ", field.label), width - 8);
+                let label_width = UnicodeWidthStr::width(label.as_str());
+                canvas.text(
+                    x + 2,
+                    row,
+                    &format!(
+                        "┌─{}{}┐",
+                        label,
+                        "─".repeat((width - 7).saturating_sub(label_width))
+                    ),
+                    field_style.clone(),
+                    false,
+                );
+                canvas.text(x + 2, row + 1, "│", field_style.clone(), false);
+                canvas.text(x + width - 3, row + 1, "│", field_style.clone(), false);
+                field.input.paint_focused(
+                    canvas,
+                    x + 3,
+                    row + 1,
+                    width - 7,
+                    field.valid(),
+                    self.editor() == Some(index),
+                );
+                canvas.text(
+                    x + 2,
+                    row + 2,
+                    &format!("└{}┘", "─".repeat(width - 6)),
+                    field_style.clone(),
+                    false,
+                );
+                if !field.valid() {
+                    for col in x + 2..x + width - 2 {
+                        let cell = &mut canvas.cells[(row + 1) * canvas.width + col];
+                        if cell.bg.is_some_and(|bg| bg != palette.panel) {
+                            cell.bg = Some(INVALID);
+                        } else {
+                            cell.fg = INVALID;
+                        }
                     }
                 }
+                // Single editors stay active. Multi-field selection is still visible.
+                if self.fields.len() > 1 && self.selected == index {
+                    canvas.text(x + 3, row, "▶", field_style, false);
+                }
+                row += 3;
             }
-            // Single editors stay active. Multi-field selection is still visible.
-            if self.fields.len() > 1 && self.selected == index {
-                canvas.text(x + 3, row, "▶", field_style, false);
+            row += 1;
+            let slots = self.field_slots();
+            for (index, button) in self.buttons.iter().enumerate() {
+                let mut button = button.clone();
+                if !self.dismiss_button(index) && !self.fields.iter().all(Field::valid) {
+                    button.enabled = false;
+                }
+                button.paint(
+                    canvas,
+                    x + 2,
+                    row + index,
+                    self.selected == slots + index,
+                    false,
+                );
             }
-            row += 3;
-        }
-        row += 1;
-        let slots = self.field_slots();
-        for (index, button) in self.buttons.iter().enumerate() {
-            let mut button = button.clone();
-            if !self.dismiss_button(index) && !self.fields.iter().all(Field::valid) {
-                button.enabled = false;
-            }
-            button.paint(
-                canvas,
-                x + 2,
-                row + index,
-                self.selected == slots + index,
-                false,
-            );
         }
         let hint = if self.wrapped > self.visible {
             "Esc: Back   PgUp/PgDn: Scroll"
         } else {
             "Esc: Back"
         };
-        crate::widgets::paint_hint(canvas, x + 2, y + height - 2, &clip(hint, width - 4));
+        if !self.compact || compact_scroll {
+            canvas.text(
+                x + 2,
+                y + height - 2,
+                &clip(hint, width - 4),
+                Cell {
+                    fg: crate::widgets::SECONDARY,
+                    ..style.clone()
+                },
+                false,
+            );
+        }
         for row in y..y + height {
             for col in x..x + width {
                 let cell = &mut canvas.cells[row * canvas.width + col];
@@ -359,7 +397,7 @@ impl Dialog {
                 }
                 if matches!(cell.glyph.as_str(), "○" | "●") {
                     cell.fg = palette.accent;
-                } else if cell.fg == [238; 3] || cell.fg == [188; 3] {
+                } else if cell.fg == [238; 3] || cell.fg == [188; 3] && row != y + height - 2 {
                     cell.fg = palette.text;
                 }
             }
@@ -429,6 +467,22 @@ mod tests {
                 .filter(|c| c.bg == Some([238; 3]))
                 .count();
             assert_eq!(cursors, usize::from(selected < 2));
+        }
+    }
+    #[test]
+    fn dialog_hints_stay_readable_gray_when_the_menu_theme_animates() {
+        let mut d = Dialog::new(
+            "Confirm",
+            vec!["Keep history.".into()],
+            &["Confirm", "Cancel"],
+        );
+        let mut field = crate::render::Field::new(80, 24, 1967);
+        for now in [0, 1467, 4700] {
+            let mut c = field.paint(now);
+            d.paint(&mut c, &Palette::default());
+            let cell = c.cells.iter().find(|cell| cell.glyph == "E").unwrap();
+            assert_eq!(cell.fg, crate::widgets::SECONDARY);
+            assert!(!cell.bold);
         }
     }
     #[test]

@@ -16,3 +16,5 @@ pub mod usage;
 pub mod widgets;
 
 pub mod session_list;
+
+pub mod terminal_color;

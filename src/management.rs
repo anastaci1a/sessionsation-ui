@@ -367,8 +367,10 @@ impl Manager {
                 entries
                     .into_iter()
                     .map(|(kind, key, label, record)| {
+                        let label = format!("{label}:");
+                        let width = width + 1;
                         let row = Row::yes(format!(
-                            "{label:<width$}: {}",
+                            "{label:<width$} {}",
                             if kind == "operation" {
                                 record["phase"].as_str().unwrap_or("unknown")
                             } else {
@@ -543,6 +545,19 @@ impl Manager {
             format!("Name: {}", value["name"].as_str().unwrap_or("")),
             format!("Account: {}", value["account_id"].as_str().unwrap_or("")),
             format!(
+                "Created: {}",
+                value["conversation_created_at"]
+                    .as_str()
+                    .unwrap_or("Unknown")
+            ),
+            format!(
+                "Saved history: {}",
+                value["history_file_bytes"]
+                    .as_u64()
+                    .map(|n| format!("{n} bytes"))
+                    .unwrap_or_else(|| "Unknown".into())
+            ),
+            format!(
                 "Directory: {}",
                 value["directory"].as_str().unwrap_or("unavailable")
             ),
@@ -564,7 +579,10 @@ impl Manager {
         ])
     }
     fn show(&mut self, title: &str, body: Vec<String>, buttons: &[&str], form: Form) {
-        self.dialog = Some(Dialog::new(title, body, buttons));
+        let mut dialog = Dialog::new(title, body, buttons);
+        dialog.compact =
+            buttons == ["Close"] && matches!(form, Form::None | Form::SessionDetails(_));
+        self.dialog = Some(dialog);
         self.form = form;
     }
     fn mutate(&mut self, args: Vec<String>) -> Vec<Intent> {
@@ -1122,15 +1140,22 @@ impl Manager {
                 self.sessions = value["sessions"].as_array().cloned().unwrap_or_default();
                 self.sessions_known = true;
                 self.validate_dialog_names();
-                self.sessions.sort_by_key(|s| {
-                    (
-                        match s["availability"].as_str() {
-                            Some("running") => 0,
-                            Some("saved") => 1,
-                            _ => 2,
-                        },
-                        s["name"].as_str().unwrap_or("").to_lowercase(),
-                    )
+                let rank = |s: &Value| {
+                    if s["availability"] == "running" {
+                        if s["activity"] == "busy" { 0 } else { 1 }
+                    } else {
+                        2
+                    }
+                };
+                self.sessions.sort_by(|a, b| {
+                    rank(a)
+                        .cmp(&rank(b))
+                        .then_with(|| {
+                            b["last_accessed"]
+                                .as_i64()
+                                .cmp(&a["last_accessed"].as_i64())
+                        })
+                        .then_with(|| id(a).cmp(id(b)))
                 });
                 if let Some(key) = chosen {
                     self.options.selected = self
@@ -1544,7 +1569,11 @@ mod tests {
         assert!(rows[0].label.ends_with("complete"));
         assert!(
             rows.iter()
-                .all(|r| r.label.find(": ") == rows[0].label.find(": "))
+                .all(|r| !r.label.split_once(':').unwrap().0.ends_with(' '))
+        );
+        assert!(
+            rows.iter()
+                .all(|r| r.label.rfind(' ').unwrap() + 1 == rows[0].label.rfind(' ').unwrap() + 1)
         );
         assert!(rows.iter().all(|r| r.preview_gap == 1
             && r.preview_selected_only
@@ -1644,6 +1673,39 @@ mod tests {
         );
         m.submit(0, vec![]);
         assert_eq!(m.page, Page::Session("one".into()));
+    }
+    #[test]
+    fn live_sessions_sort_by_busy_idle_inactive_then_recent_access_and_keep_identity() {
+        let mut m = setup();
+        m.page = Page::Sessions;
+        m.sessions_known = true;
+        m.sessions = vec![json!({"id":"saved","name":"Saved","availability":"saved"})];
+        m.options.selected = 1;
+        let sent = m.refresh_sessions();
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        let entries = json!({"sessions":[
+            {"id":"saved","name":"Saved","availability":"saved","last_accessed":900},
+            {"id":"idle-old","name":"Idle old","availability":"running","activity":"idle","last_accessed":10},
+            {"id":"busy-old","name":"Busy old","availability":"running","activity":"busy","last_accessed":2},
+            {"id":"idle-new","name":"Idle new","availability":"running","activity":"idle","last_accessed":20},
+            {"id":"busy-new","name":"Busy new","availability":"running","activity":"busy","last_accessed":3},
+            {"id":"saved-old","name":"Saved old","availability":"saved","last_accessed":8}
+        ]});
+        m.response(token, Ok(entries));
+        assert_eq!(
+            m.sessions.iter().map(id).collect::<Vec<_>>(),
+            vec![
+                "busy-new",
+                "busy-old",
+                "idle-new",
+                "idle-old",
+                "saved",
+                "saved-old"
+            ]
+        );
+        assert_eq!(m.sessions[m.options.selected - 1]["id"], "saved");
     }
     #[test]
     fn stale_target_uses_centered_status_lane_and_reserves_menu_space() {
@@ -2132,8 +2194,7 @@ mod tests {
         m.options.selected = 1;
         m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(m.options.selected, 3);
-        let s =
-            json!({"id":"stable","name":"Test","generation":"old","capabilities":{"stop":true}});
+        let s = json!({"id":"stable","name":"Test","generation":"old","availability":"running","capabilities":{"stop":true}});
         m.sessions = vec![s];
         m.go(Page::Session("stable".into()));
         m.options.selected = m

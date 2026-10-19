@@ -98,9 +98,11 @@ Fix pasted-newline activation, wide-text misalignment, tiny-window overlap, bloc
 reads and lost draft state. Staged mkdir, summary flow and full-height fixed stars
 are intentional adaptations. Current text masks include internal spaces: baseline
 stars and transient twinkles never appear inside labels, input text or controls.
-The star gradient, twinkle/replacement fades and shimmer blend from the explicitly
-painted HERDR panel background. Text inherits that background outside status bars
-and dialogs. Configured/fallback theme limitations remain as documented.
+The star gradient and twinkle/replacement fades blend from the terminal background
+reported through a nonblocking OSC 11 query. The inherited background is never
+repainted. Terminals without a reply use a dark fallback (16,16,16); host palette
+limitations remain as documented. Color replies are filtered from keyboard input;
+unmatched or incomplete input is replayed.
 Tests separate reference geometry from target geometry.
 
 ## Performance and verification
@@ -133,7 +135,7 @@ height and bottom hints. Bars share a start derived from the longest displayed
 name; preferred width is 24 cells, minimum 12. Existing long names are ellipsized
 to 12 display cells, never renamed; details show the full ID. New names are limited
 to 24 ASCII characters excluding the provider prefix; session names allow 24 Unicode
-scalar values, with 12 display cells in menus. Disabled/removed accounts
+scalar values, with session titles ellipsized on display cell 16. Disabled/removed accounts
 remain selectable for management.
 
 Verified five-hour accounts show adjacent 5h/weekly remaining bars, then one blank
@@ -184,9 +186,8 @@ capability-gated; Stop/Restart/Switch require confirmation. Switch uses the shar
 account picker. Focus tab explicitly verifies the current generation, HERDR target
 and foreground PID, then focuses the existing tab and exits. No messaging/steering
 controls belong here. Session `[account]` suffixes use the shared animated accent,
-full color and unbolded when unselected, full/bold when selected, with a triangle
-selection marker. Inactive sessions add an accent asterisk immediately after the
-account; `(inactive)` is an unbolded muted-gray hover detail. Timers are unbolded
+permanently dimmer and never bold, without a triangle selection marker or
+asterisk; `(inactive)` is an unbolded muted-gray hover detail. Timers are unbolded
 deselected gray. Busy sessions use the reference ten-frame spinner from
 `cli-main-menu/select.bash` at 100 ms per frame, persistent regardless of selection,
 one space after the account, followed by one space before an inline timer. Only
@@ -215,9 +216,8 @@ If any cannot fit inline, show only the selected detail centered below the list
 or range counter, one blank line above and below. Back/Close focus hides it
 without changing layout. Details stay gray and never bold; overly long detached
 text is ellipsized to one line, and insufficient height hides it. Operation IDs
-have exactly one space after the status when inline. Status columns align left. Range counters
-are centered and use the same readable gray as bottom controls. Dialog
-hints use the same readable gray renderer (RGB 188), without hue shift.
+have exactly one space after the status when inline. Status columns align left. Range counters are centered and share the bottom controls’ animated soft accent
+at brightness 550 without a bold flash. Dialog hints stay readable gray.
 Operations combine New/Resume receipts and jobs by immutable creation date, newest
 first. Unknown legacy creation dates come last with stable kind/ID ties; progress
 updates never reorder them. The launch receipt phase `running` means successful
@@ -247,6 +247,5 @@ time format when the backend reports verified `active_since`.
 Home usage focus moves Right from the selected account name only when public
 account-limit support and a reported allowance are available. Enter/Space opens
 the CLI-backed Limits form without changing the underlying page or account.
-Cancel/save/close restore that same bar focus; Left returns to the name. Focus
-blends the colored line 20% toward its mean channel value, raises spent gray from
-144 to 188, and bolds bar glyphs. It adds no arrow or layout shift.
+Cancel/save/close restore that same bar focus; Left returns to the name. Only bar focus selects percentage text. The focused bar retains normal color and
+bolds its glyphs; other bars retain their saturation and scale brightness to 65%. It adds no arrow or layout shift.

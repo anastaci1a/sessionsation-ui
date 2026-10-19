@@ -84,6 +84,7 @@ impl Drop for Terminal {
 enum Message {
     Input(Event),
     InputError(String),
+    Background([u8; 3]),
     Inventory(Result<(Vec<Account>, Vec<Workspace>, Value), String>),
     Managed(u64, Result<Value, String>),
     SessionFocused(Result<(), String>),
@@ -321,15 +322,31 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(64);
     let input = tx.clone();
     let terminal = Terminal::enter()?;
+    std::io::stderr().write_all(b"\x1b]11;?\x1b\\")?;
+    std::io::stderr().flush()?;
     std::thread::spawn(move || {
+        let mut colors = sessionsation_ui::terminal_color::BackgroundReply::default();
         loop {
+            for e in colors.expire() {
+                if input.blocking_send(Message::Input(e)).is_err() {
+                    return;
+                }
+            }
             if !event::poll(Duration::from_millis(50)).unwrap_or(true) {
                 continue;
             }
             match event::read() {
                 Ok(e) => {
-                    if input.blocking_send(Message::Input(e)).is_err() {
+                    let (events, color) = colors.event(e);
+                    if let Some(color) = color
+                        && input.blocking_send(Message::Background(color)).is_err()
+                    {
                         break;
+                    }
+                    for e in events {
+                        if input.blocking_send(Message::Input(e)).is_err() {
+                            return;
+                        }
                     }
                 }
                 Err(e) => {
@@ -405,6 +422,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
          _=session_refresh.tick()=>{let intents=app.manager.refresh_live();next=app.management(intents);},
          _=receipt.tick(),if app.request.is_some()&&!app.success&&!receipt_pending=>{receipt_pending=true;effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
          message=rx.recv()=>match message.context("Input channel closed")? {
+         Message::Background(color)=>{app.terminal_background=color;app.dirty=true;},
          Message::Input(Event::Key(k))=>{next=app.key(k);},
           Message::Input(Event::Paste(s))=>{next=app.paste(&s);},
           Message::Input(Event::Resize(w,h))=>{dimensions=(w as usize,h as usize);app.dirty=true;},

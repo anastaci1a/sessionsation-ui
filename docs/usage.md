@@ -27,8 +27,10 @@ the appropriate current layout without losing their account selection.
 
 On Home, Right from an account with available usage selects its bars; Enter/Space
 opens Limits directly. Left returns to the name. Cancel, close and save retain the
-same account and bar focus. Focus slightly reduces accent saturation, brightens the
-gray segment and bolds the line characters, without adding another selector.
+same account and bar focus. Only usage focus selects its percentages. The focused bar keeps its normal colors
+and bolds its line characters; other bars darken without adding
+another selector. A white `◀`, separated by one space, follows the first usage
+value when it has focus.
 Disabled, signed-out and unavailable-usage accounts do not offer this shortcut.
 
 Bars show remaining allowance for the periods the backend reports: 5h/weekly or
@@ -43,7 +45,7 @@ Duplicate names immediately invalidate the editor and disable confirmation.
 Session creation/resume/rename accepts at most 24 Unicode scalar values, also
 enforced by the CLI.
 Only the focused input shows a cursor in multi-input dialogs; single-input dialogs
-stay editable while navigating buttons. Menu account/session names are ellipsized to 12 display cells; full values remain
+stay editable while navigating buttons. Menu account names are ellipsized on cell 12, session titles on cell 16; full values remain
 editable and exact confirmation IDs remain intact. See the
 [rendering specification](cli-specification/architecture.md#account-and-session-management)
 for the precise glyph, alignment and motion rules.
@@ -63,13 +65,16 @@ preservation/deletion step. An older account owner gates deletion until explicit
 updated; changing the popup's client binary alone does not replace that owner.
 
 Session Details opens from cached state immediately and refreshes on the one-second
-read-only state poll, retaining the last details during discovery failures. It does
+read-only state poll, retaining the last details during discovery failures. It shows
+the native creation timestamp and saved rollout size when reported; older or
+missing data shows Unknown. Shared account databases are excluded from that size. It does
 not use a stale generation for reads or weaken generation checks on mutations.
 Renaming to the existing name remains valid; other sessions’ names remain excluded.
 
 Manage Sessions selects an action menu, never implicitly attaches. Lifecycle
 actions carry the captured backend ID/generation. Stop, Restart, Switch, Disable
-and account deregistration/deletion require confirmation. Internal modal dialogs preserve their underlying
+and account deregistration/deletion require confirmation. New Session labels and values use aligned columns with space padding and the
+short label Dir. Internal modal dialogs preserve their underlying
 page; Continue in background dismisses progress without cancelling backend work.
 Operations shows progress, fresh confirmation prompts and supported recovery.
 Hover details are selected-only and disappear on Back/Close. Fit is decided for
@@ -95,26 +100,34 @@ account uses the backend safe transfer, preserving conversation history and ID.
 Uncertain responses are not automatically retried. Focus tab selects an existing
 HERDR tab in this instance after rechecking its catalog identity.
 
-Manage Sessions keeps busy activity visible with the reference ten-frame Braille
+Manage Sessions sorts busy, idle, then inactive sessions, newest access first
+within each group. Refreshes retain selection by stable ID. It keeps busy activity visible with the reference ten-frame Braille
 spinner, advancing every 100 ms after one space following the account. The timer
 follows after another space when it fits inline, otherwise uses the shared hover
 panel. Read-only state refreshes once per second, one request at a time; idle, exit,
-unknown activity or discovery failure removes the spinner. Inactive sessions show
-an accent asterisk directly after their account; their hover marker stays muted
-and unbolded. Timers use the normal deselected gray.
+unknown activity or discovery failure removes the spinner. All session account tags stay at the dimmer hueshift brightness, never bold or
+marked with an asterisk. Inactive hover markers stay muted and unbolded. Timers use normal deselected gray.
 
 Errors and status notices use a centered bottom line, separated from controls by
 one blank line. Menus reserve the status lane before calculating scroll capacity.
 A failed preview/mutation closes its waiting dialog and shows the error there,
 without an automatic retry.
 
-Bottom controls and pagination use readable gray. Held arrows stop at menu ends; release and press again to wrap. Terminals
+Menu bottom controls and pagination share the reference soft accent and sweep
+(55% brightness, regular weight). Dialog hints stay readable gray. Held arrows stop at menu ends; release and press again to wrap. Terminals
 without repeat/release events use a 750 ms quiet gap to distinguish gestures.
 Centering with Back/Close rounds
 right; six spare columns use four on the left to keep the arrow one cell from the
 edge. Options scroll only when they cannot fit with one blank line before controls;
-range/detail rows reserve space only when required. Unavailable options strike
+range/detail rows reserve space only when required. Unavailable options accept
+hover/keyboard focus but cannot be activated; separators are skipped. They strike
 only their text, never the bullet, and their text never becomes bold.
+
+Informational dialogs hide their sole Esc/Close hint and shrink to their content;
+scrolling dialogs retain scroll hints. Dialog items have at most one blank line
+between them. Stars never appear within text or its spaces. Fades and the vertical
+gradient blend from the terminal’s OSC 11 background reply without changing that
+background; unanswered queries use a dark fallback.
 
 Dialogs use read-only HERDR theme configuration and bundled attributed palette
 tokens. Configured built-ins and RGB overrides are supported; dynamic/terminal
@@ -158,8 +171,11 @@ account does not rewrite its limits.
 The Back arrow is beside the top visible option. Left selects and expands it only
 when the expanded label retains a left padding cell;
 Right returns to the option. On the main page its expanded label is **Close**.
-Configuration uses short labels and shows a directory preview only when the full
-path fits beside its label.
+Settings’ **Default Dir:** chooses global or per-Space defaults. In either default-directory
+picker, `[leave unset]` clears that default and its pending creation plan. Left from
+any of its top three actions focuses Back; Right does nothing on those actions.
+The session-directory picker retains its two top actions. Configuration uses short
+labels; path previews follow the shared hover-only, list-wide fit rule.
 
 HERDR owns the outer popup border. Installed 0.9.5 draws it using the shared theme
 accent and exposes no per-popup color override, so it cannot track the launcher's
@@ -261,7 +277,9 @@ Account deregistration previews open immediately while data loads. The confirmat
 shows the friendly provider-name label (for example `codex-personal`), which the UI
 maps to the backend ID only after an exact match. Signed-in accounts omit Login; it
 appears only when authentication is required. Session action ordering/groups follow
-Codex Switcher, with Focus Session, Session Details and Rename Session first.
+Codex Switcher, with Focus Session (Start Session for saved history), Session Details
+and Rename Session first. Inactive sessions hide running-session/experimental
+controls. Active tmux-only attachments show an unbolded gray `(tmux)` after Focus.
 Unsupported public capabilities remain disabled. Session account columns appear
 for the complete list together; selected live sessions show the reference elapsed
 time format when the backend reports verified `active_since`.

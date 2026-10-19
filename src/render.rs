@@ -513,12 +513,7 @@ impl Field {
         let next = self.rotate(cycle);
         let phase = (now % 4000) as i64;
         let mut canvas = Canvas::new(self.w, self.h);
-        canvas.background = self.background;
-        if let Some(bg) = self.background {
-            for cell in &mut canvas.cells {
-                cell.bg = Some(bg);
-            }
-        }
+
         canvas.theme = Some(Theme {
             now,
             previous,
@@ -598,7 +593,6 @@ impl Field {
             canvas.cells[index] = Cell {
                 glyph: glyph.to_string(),
                 fg,
-                bg: self.background,
                 bold: white >= 900,
                 ..Cell::default()
             };
@@ -675,7 +669,7 @@ mod tests {
         for now in (0..10000).step_by(20) {
             let c = f.paint(now);
             for cell in &c.cells {
-                assert_eq!(cell.bg, Some([26; 3]));
+                assert_eq!(cell.bg, None);
                 if matches!(cell.glyph.as_str(), "*" | "." | "+") {
                     assert!(cell.fg.iter().all(|v| *v >= 26));
                 }
@@ -683,7 +677,7 @@ mod tests {
         }
         let mut c = f.paint(10001);
         c.text(2, 3, "Login required", Cell::default(), false);
-        assert_eq!(c.cells[3 * 80 + 7].bg, Some([26; 3]));
+        assert_eq!(c.cells[3 * 80 + 7].bg, None);
         assert_eq!(mix([26; 3], [150, 180, 200], 0), [26; 3]);
     }
     #[test]

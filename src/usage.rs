@@ -8,16 +8,19 @@ use unicode_width::UnicodeWidthStr;
 
 pub fn short_name(id: &str) -> String {
     let name = id.split_once(':').map_or(id, |(_, n)| n);
-    display_name(name)
+    clipped_name(name, 12)
 }
 pub fn display_name(name: &str) -> String {
+    clipped_name(name, 16)
+}
+fn clipped_name(name: &str, limit: usize) -> String {
     let clean: String = name.chars().filter(|c| !c.is_control()).collect();
-    if UnicodeWidthStr::width(clean.as_str()) <= 12 {
+    if UnicodeWidthStr::width(clean.as_str()) <= limit {
         return clean;
     }
     let mut out = String::new();
     for g in clean.graphemes(true) {
-        if UnicodeWidthStr::width(out.as_str()) + UnicodeWidthStr::width(g) > 11 {
+        if UnicodeWidthStr::width(out.as_str()) + UnicodeWidthStr::width(g) > limit - 1 {
             break;
         }
         out.push_str(g);
@@ -134,14 +137,51 @@ impl Usage {
                     break;
                 }
                 let cell = &mut canvas.cells[(y + row) * canvas.width + col];
-                let [r, g, b] = cell.fg;
-                if r == g && g == b {
-                    cell.fg = [188; 3];
-                } else {
-                    let mean = (u16::from(r) + u16::from(g) + u16::from(b)) / 3;
-                    cell.fg = cell.fg.map(|v| ((u16::from(v) * 4 + mean) / 5) as u8);
-                }
                 cell.bold = true;
+            }
+        }
+        if let Some(row) = self.windows.iter().position(|w| w.remaining.is_some()) {
+            canvas.text(
+                x + self.width(bar, digits),
+                y + row,
+                " ◀",
+                Cell {
+                    fg: crate::widgets::SELECTED,
+                    bold: true,
+                    ..Cell::default()
+                },
+                false,
+            );
+        }
+    }
+    pub fn paint_deemphasized(
+        &self,
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        bar: usize,
+        digits: usize,
+    ) {
+        self.paint_selected(canvas, x, y, bar, digits, false);
+        if matches!(
+            self.status.as_str(),
+            "Disabled" | "Login required" | "Deregistered"
+        ) {
+            return;
+        }
+        for (row, _) in self
+            .windows
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| w.remaining.is_some())
+        {
+            for col in x..(x + bar).min(canvas.width) {
+                if y + row >= canvas.height {
+                    break;
+                }
+                let cell = &mut canvas.cells[(y + row) * canvas.width + col];
+                cell.fg = cell.fg.map(|v| (u16::from(v) * 65 / 100) as u8);
+                cell.bold = false;
             }
         }
     }
@@ -309,7 +349,7 @@ impl AccountsLayout {
             .max()
             .unwrap_or(0);
         let digits = uses.iter().map(Usage::digits).max().unwrap_or(2);
-        let right = uses.iter().map(|u| u.width(12, digits)).max().unwrap_or(0);
+        let right = uses.iter().map(|u| u.width(12, digits)).max().unwrap_or(0) + 2;
         // Two-column selection lane, then one space between the name and bar.
         let prefix = names + 3;
         let min_width = prefix + right;
@@ -354,8 +394,17 @@ impl AccountsLayout {
             let usage = Usage::account(account);
             if active && usage_focus {
                 usage.paint_focused(canvas, self.bars, y, self.bar_width, self.digits);
+            } else if usage_focus && !back {
+                usage.paint_deemphasized(canvas, self.bars, y, self.bar_width, self.digits);
             } else {
-                usage.paint_selected(canvas, self.bars, y, self.bar_width, self.digits, active);
+                usage.paint_selected(
+                    canvas,
+                    self.bars,
+                    y,
+                    self.bar_width,
+                    self.digits,
+                    active && usage.status == "Login required",
+                );
             }
             y += usage.height() + 1;
         }
@@ -367,7 +416,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
-    fn focused_bar_bolds_lines_brightens_gray_and_desaturates_accent() {
+    fn focused_bar_keeps_colors_and_dims_other_bars() {
         let u = Usage {
             windows: vec![Window {
                 label: "wk",
@@ -379,21 +428,24 @@ mod tests {
         };
         let mut plain = Canvas::new(40, 4);
         let mut focus = Canvas::new(40, 4);
+        let mut dim = Canvas::new(40, 4);
+        u.paint_deemphasized(&mut dim, 1, 1, 20, 2);
         u.paint_selected(&mut plain, 1, 1, 20, 2, true);
         u.paint_focused(&mut focus, 1, 1, 20, 2);
+        let arrow = &focus.cells[40 + 1 + u.width(20, 2) + 1];
+        assert_eq!(arrow.glyph, "◀");
+        assert_eq!(arrow.fg, crate::widgets::SELECTED);
+        assert_eq!(focus.cells[40 + 1 + u.width(20, 2)].glyph, " ");
         for x in 1..21 {
             let before = &plain.cells[40 + x];
             let after = &focus.cells[40 + x];
             assert_eq!(before.glyph, after.glyph);
             assert!(after.bold);
-            if before.fg == [144; 3] {
-                assert_eq!(after.fg, [188; 3]);
-            } else {
-                assert!(
-                    after.fg.iter().max().unwrap() - after.fg.iter().min().unwrap()
-                        < before.fg.iter().max().unwrap() - before.fg.iter().min().unwrap()
-                );
-            }
+            assert_eq!(before.fg, after.fg);
+            assert_eq!(
+                dim.cells[40 + x].fg,
+                before.fg.map(|n| (u16::from(n) * 65 / 100) as u8)
+            );
         }
     }
     #[test]
@@ -412,7 +464,8 @@ mod tests {
         assert_eq!(c.cells[61].fg, crate::widgets::MUTED);
         assert!(!c.cells[61].bold);
         assert!(c.cells.iter().all(|c| c.glyph != "━"));
-        assert_eq!(display_name("abcdefghijklmnopqrstuvwx"), "abcdefghijk…");
+        assert_eq!(display_name("abcdefghijklmnopqrstuvwx"), "abcdefghijklmno…");
+        assert_eq!(short_name("codex:abcdefghijklmnopqrstuvwx"), "abcdefghijk…");
         assert_eq!(display_name("my:session"), "my:session");
     }
     fn account() -> Account {

@@ -12,6 +12,8 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
   t=Terminal(root,delay=2 if i==0 else 0)
   try:
    starts.append(t.wait('New Session'));t.drain()
+   if i==0: t.send(b'\x1b]11;rgb:1010/1010/1010\x1b\\');time.sleep(.02);t.drain()
+   assert not t.screen.contains('11;rgb:'),'terminal color response must never become typed input'
    t.send(b'\x1b[D');t.wait('Close');t.send(b'\x1b[C');t.wait('New Session',selected=True)
    for n in range(200 if i==0 else 2):
     t.start=time.perf_counter();t.send(b'\x1b[B' if n%2==0 else b'\x1b[A');keys.append(t.wait('Manage Sessions' if n%2==0 else 'New Session',selected=True));t.drain()
@@ -25,7 +27,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  # Complete the inert handoff through the summary's separated Start action.
  t=Terminal(root)
  try:
-  t.wait('New Session');time.sleep(.2);t.drain();t.send(b'\r');t.wait('Account:');t.send(b'\x1b[B\x1b[B\r');t.wait('Session name');t.send(b'new-session\r');t.wait('Directory:');time.sleep(.15);t.drain();t.send(b'\x1b[B\x1b[B\r')
+  t.wait('New Session');time.sleep(.2);t.drain();t.send(b'\r');t.wait('Account:');t.send(b'\x1b[B\x1b[B\r');t.wait('Session name');t.send(b'new-session\r');t.wait('Dir:');time.sleep(.15);t.drain();t.send(b'\x1b[B\x1b[B\r')
   until=time.monotonic()+3
   while not (root/'start.json').exists() and time.monotonic()<until:
    if select.select([t.master],[],[],.02)[0]:os.read(t.master,65536)
@@ -39,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  (settings/'preferences.json').write_text((root/'prefs.json').read_text());pointer=root/'config-pointer.json';pointer.symlink_to(settings/'popup.json')
  t=Terminal(root,client_config=pointer)
  try:
-  t.wait('New Session');t.send(b'\x1b[B\x1b[B\x1b[B\r');t.wait('Defaults:');t.send(b'\r\x1b');t.wait('New Session')
+  t.wait('New Session');t.send(b'\x1b[B\x1b[B\x1b[B\r');t.wait('Default Dir:');t.send(b'\r\x1b');t.wait('New Session')
   until=time.monotonic()+2
   while json.loads((settings/'preferences.json').read_text())['mode']!='per_space' and time.monotonic()<until:
    t.drain();time.sleep(.01)
@@ -49,7 +51,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  # Existing Spaces with no focused Space must leave the default unset.
  (root/'no-focused').touch();t=Terminal(root)
  try:
-  t.wait('New Session');time.sleep(.2);t.drain();t.send(b'\r');t.wait('Space: [unset]')
+  t.wait('New Session');time.sleep(.2);t.drain();t.send(b'\r');t.wait('Space:   [unset]')
  finally:t.close()
 def report(a):
  s=sorted(a);return {'samples':len(s),'p50_ms':s[len(s)//2],'p95_ms':s[min(len(s)-1,int(len(s)*.95))],'max_ms':max(s)}

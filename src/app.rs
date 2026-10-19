@@ -66,6 +66,7 @@ pub struct App {
     pub instance: String,
     pub host: Value,
     pub error: String,
+    pub terminal_background: [u8; 3],
     pub pending: bool,
     pub request: Option<Value>,
     pub revision: u64,
@@ -115,6 +116,7 @@ impl App {
             instance,
             host,
             error: String::new(),
+            terminal_background: [16; 3],
             pending: false,
             request: None,
             revision: 0,
@@ -262,40 +264,54 @@ impl App {
         };
         match &self.page {
             Page::Home | Page::Management => self.manager.rows(),
-            Page::Summary => vec![
-                Row::yes(format!(
-                    "Account: {}",
-                    self.draft
-                        .account
-                        .as_deref()
-                        .map(crate::usage::short_name)
-                        .unwrap_or_else(|| "[unset]".into())
-                )),
-                Row::yes(format!(
-                    "Space: {}",
-                    self.draft
-                        .space
-                        .as_ref()
-                        .map(Space::label)
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or("[unset]")
-                )),
-                Row::yes(format!(
-                    "Name: {}",
-                    if self.draft.name.is_empty() {
-                        "[unset]".to_owned()
-                    } else {
-                        crate::usage::display_name(&self.draft.name)
-                    }
-                )),
-                Row::gate(
-                    format!("Directory: {}", path(self.draft.directory.path())),
-                    self.resume.is_none(),
-                ),
-            ],
+            Page::Summary => {
+                let fields = [
+                    (
+                        "Account",
+                        self.draft
+                            .account
+                            .as_deref()
+                            .map(crate::usage::short_name)
+                            .unwrap_or_else(|| "[unset]".into()),
+                    ),
+                    (
+                        "Space",
+                        self.draft
+                            .space
+                            .as_ref()
+                            .map(Space::label)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("[unset]")
+                            .to_owned(),
+                    ),
+                    (
+                        "Name",
+                        if self.draft.name.is_empty() {
+                            "[unset]".into()
+                        } else {
+                            crate::usage::display_name(&self.draft.name)
+                        },
+                    ),
+                    ("Dir", path(self.draft.directory.path())),
+                ];
+                let width = fields
+                    .iter()
+                    .map(|(label, _)| label.len())
+                    .max()
+                    .unwrap_or(0);
+                fields
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (label, value))| {
+                        let mut row = Row::field(label, value, width);
+                        row.enabled = i != 3 || self.resume.is_none();
+                        row
+                    })
+                    .collect()
+            }
             Page::Config => vec![
                 Row::yes(format!(
-                    "Defaults: {}",
+                    "Default Dir: {}",
                     if self.prefs.mode == Mode::Global {
                         "Global"
                     } else {
@@ -351,6 +367,7 @@ impl App {
                         "[create dir]",
                         self.listing.existing || self.listing.creatable,
                     )))
+                    .chain((self.directory_action_count() == 3).then(|| Row::yes("[leave unset]")))
                     .chain(self.listing.children.iter().map(|p| {
                         Row::yes(format!(
                             "{}/",
@@ -592,7 +609,7 @@ impl App {
                 if let Some(child) = self.pending_child.take()
                     && let Some(index) = self.listing.children.iter().position(|p| *p == child)
                 {
-                    self.options.selected = index + 2;
+                    self.options.selected = index + self.directory_action_count();
                 }
             }
             Err(e) => {
@@ -601,14 +618,37 @@ impl App {
             }
         }
         let rows = self.rows();
-        if !rows.get(self.options.selected).is_some_and(|r| r.enabled) {
-            self.options.selected = rows.iter().position(|r| r.enabled).unwrap_or(0);
+        if self.options.selected >= rows.len() {
+            self.options.selected = 0;
         }
         self.dirty = true;
     }
+    fn directory_action_count(&self) -> usize {
+        if matches!(
+            self.page,
+            Page::Directory(Target::Global | Target::Space(_))
+        ) {
+            3
+        } else {
+            2
+        }
+    }
     fn choose_directory(&mut self, target: Target, directory: Directory) -> Vec<Effect> {
         let Some(path) = directory.path().map(Path::to_path_buf) else {
-            return vec![];
+            match target {
+                Target::Draft => return vec![],
+                Target::Global => {
+                    self.prefs.global_root = None;
+                    self.prefs.root_plans.remove("global");
+                }
+                Target::Space(id) => {
+                    let key = Preferences::key(&self.instance, &id);
+                    self.prefs.space_roots.remove(&key);
+                    self.prefs.root_plans.remove(&key);
+                }
+            }
+            self.pop();
+            return self.revalidate();
         };
         match target {
             Target::Draft => self.draft.directory = directory,
@@ -758,6 +798,9 @@ impl App {
                 self.revalidate()
             }
             Page::Directory(target) => {
+                if self.directory_action_count() == 3 && self.options.selected == 2 {
+                    return self.choose_directory(target, Directory::Unset);
+                }
                 if self.options.selected == 1 {
                     let path = self.listing.path.clone().unwrap();
                     let (parent, name) = if self.listing.existing {
@@ -775,10 +818,15 @@ impl App {
                     } else {
                         self.listing
                             .resolved
-                            .get(&self.listing.children[self.options.selected - 2])
+                            .get(
+                                &self.listing.children
+                                    [self.options.selected - self.directory_action_count()],
+                            )
                             .cloned()
                             .unwrap_or_else(|| {
-                                self.listing.children[self.options.selected - 2].clone()
+                                self.listing.children
+                                    [self.options.selected - self.directory_action_count()]
+                                .clone()
                             })
                     };
                     self.choose_directory(target, Directory::Existing(path))
@@ -910,7 +958,11 @@ impl App {
                     self.options.back = false;
                     return vec![];
                 }
-                let Some(index) = self.options.selected.checked_sub(2) else {
+                let Some(index) = self
+                    .options
+                    .selected
+                    .checked_sub(self.directory_action_count())
+                else {
                     return vec![];
                 };
                 if let Some(child) = self.listing.children.get(index).cloned() {
@@ -930,7 +982,8 @@ impl App {
                 }
             }
             KeyCode::Left if matches!(self.page, Page::Directory(_)) => {
-                if self.options.selected < 2 || self.listing.path.as_deref() == Some(Path::new("/"))
+                if self.options.selected < self.directory_action_count()
+                    || self.listing.path.as_deref() == Some(Path::new("/"))
                 {
                     self.options.back = true;
                     return vec![];
@@ -970,7 +1023,7 @@ impl App {
     pub fn paint(&mut self, field: &mut Field, now: u64, width: usize, height: usize) -> Canvas {
         field.resize(width, height);
         field.options_top = if self.is_form() { 5 } else { 3 };
-        field.background = Some(self.manager.palette.panel);
+        field.background = Some(self.terminal_background);
         let mut canvas = field.paint(now);
         let white = Cell {
             fg: [238; 3],
@@ -1335,6 +1388,71 @@ mod tests {
         );
     }
     #[test]
+    fn default_directory_actions_clear_only_the_selected_root() {
+        for target in [Target::Global, Target::Space("w1".into())] {
+            let mut a = app();
+            let space_key = Preferences::key(&a.instance, "w1");
+            a.prefs.global_root = Some("/tmp/global".into());
+            a.prefs
+                .space_roots
+                .insert(space_key.clone(), "/tmp/space".into());
+            a.prefs
+                .root_plans
+                .insert("global".into(), vec!["/tmp/global".into()]);
+            a.prefs
+                .root_plans
+                .insert(space_key.clone(), vec!["/tmp/space".into()]);
+            a.push(Page::Directory(target.clone()), "/tmp".into());
+            a.listing = Listing {
+                path: Some("/tmp".into()),
+                existing: true,
+                children: vec!["/tmp/child".into()],
+                ..Listing::default()
+            };
+            assert_eq!(a.rows()[2].label, "[leave unset]");
+            for row in 0..3 {
+                a.options.selected = row;
+                a.options.back = false;
+                assert!(
+                    a.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+                        .is_empty()
+                );
+                assert_eq!(a.input.value, "/tmp");
+                a.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+                assert!(a.options.back);
+            }
+            a.options.back = false;
+            a.options.selected = 2;
+            a.activate();
+            match target {
+                Target::Global => {
+                    assert!(a.prefs.global_root.is_none());
+                    assert!(!a.prefs.root_plans.contains_key("global"));
+                    assert!(a.prefs.space_roots.contains_key(&space_key));
+                }
+                Target::Space(_) => {
+                    assert!(!a.prefs.space_roots.contains_key(&space_key));
+                    assert!(!a.prefs.root_plans.contains_key(&space_key));
+                    assert!(a.prefs.global_root.is_some());
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+    #[test]
+    fn unavailable_options_can_be_hovered_but_not_activated() {
+        let mut a = app();
+        a.page = Page::Config;
+        a.prefs.mode = Mode::PerSpace;
+        a.options.selected = 0;
+        a.options.step(&a.rows(), false, false);
+        assert_eq!(a.options.selected, 1);
+        assert!(!a.rows()[1].enabled);
+        assert!(a.activate().is_empty());
+        assert_eq!(a.page, Page::Config);
+        assert!(a.rows()[0].label.starts_with("Default Dir:"));
+    }
+    #[test]
     fn space_defaults_to_exact_focused_id_and_never_to_the_first_space() {
         let mut a = app();
         let spaces = vec![
@@ -1401,7 +1519,17 @@ mod tests {
                     .map(|c| c.glyph.as_str())
                     .collect::<String>()
             };
-            assert!(row(6).contains("Directory:"));
+            assert!(row(6).contains("Dir:"));
+            let labels = ["Account:", "Space:", "Name:", "Dir:"];
+            let starts = (3..7)
+                .zip(labels)
+                .map(|(y, label)| {
+                    let text = row(y);
+                    unicode_width::UnicodeWidthStr::width(&text[..text.find(label).unwrap()])
+                })
+                .collect::<Vec<_>>();
+            assert!(starts.iter().all(|x| *x == starts[0]));
+            assert!(a.rows().iter().all(|r| r.label.as_bytes()[8] == b' '));
             assert!(row(7).contains('•'));
             assert!(row(8).contains("Start Session"));
         }

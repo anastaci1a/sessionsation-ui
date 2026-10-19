@@ -193,6 +193,13 @@ pub struct Row {
     pub separator: bool,
 }
 impl Row {
+    pub fn field(label: &str, value: impl std::fmt::Display, label_width: usize) -> Self {
+        Self::yes(format!(
+            "{:<width$} {value}",
+            format!("{label}:"),
+            width = label_width + 1
+        ))
+    }
     pub fn yes(label: impl Into<String>) -> Self {
         Self::gate(label, true)
     }
@@ -405,15 +412,17 @@ pub struct Options {
 
 /// Shared bottom hints: token wrapping never changes the star-field geometry.
 pub fn paint_hint(canvas: &mut Canvas, x: usize, y: usize, text: &str) {
-    canvas.text(
+    canvas.accent_text(
         x,
         y,
         text,
-        Cell {
-            fg: SECONDARY,
-            ..Cell::default()
+        Accent {
+            soft: true,
+            brightness: 550,
+            flash: false,
+            bold: false,
+            ..Accent::default()
         },
-        false,
     );
 }
 /// Shared one-line status lane with one blank row before the actual controls.
@@ -510,7 +519,7 @@ impl Options {
             } else {
                 (probe + 1) % count
             };
-            if probe == rows.len() || rows[probe].enabled {
+            if probe == rows.len() || !rows[probe].separator {
                 self.selected = probe;
                 break;
             }
@@ -692,7 +701,7 @@ mod tests {
                 false,
                 nav.key_at(repeated, start + Duration::from_millis(i * 100)),
             );
-            assert_eq!(options.selected, 1);
+            assert_eq!(options.selected, 2);
         }
         nav.key_at(released, start + Duration::from_millis(2000));
         options.step_with_wrap(
@@ -718,7 +727,7 @@ mod tests {
             true,
             nav.key_at(up, start + Duration::from_millis(2200)),
         );
-        assert_eq!(options.selected, 1);
+        assert_eq!(options.selected, 2);
         let mut legacy = Navigation::default();
         assert!(legacy.key_at(down, start));
         assert!(!legacy.key_at(down, start + Duration::from_millis(500)));
@@ -797,9 +806,11 @@ mod tests {
         assert_eq!(input.value, "aX");
     }
     #[test]
-    fn disabled_rows_skip_and_bottom_action_does_not_scroll_background() {
+    fn disabled_rows_receive_focus_separators_skip_and_bottom_action_keeps_background() {
         let rows = vec![Row::yes("one"), Row::gate("two", false), Row::yes("three")];
         let mut options = Options::default();
+        options.step(&rows, true, false);
+        assert_eq!(options.selected, 1);
         options.step(&rows, true, false);
         assert_eq!(options.selected, 2);
         let mut canvas = Canvas::new(24, 10);
@@ -810,6 +821,19 @@ mod tests {
         options.paint(&mut canvas, &rows, 3, 4);
         assert_eq!(options.scroll, 2);
         assert_eq!(canvas.cells[9 * 24].glyph, "*");
+    }
+    #[test]
+    fn menu_navigation_skips_separators_but_visits_unavailable_rows() {
+        let rows = vec![
+            Row::yes("First"),
+            Row::separator(),
+            Row::gate("Unavailable", false),
+        ];
+        let mut options = Options::default();
+        options.step(&rows, false, false);
+        assert_eq!(options.selected, 2);
+        options.step(&rows, false, true);
+        assert_eq!(options.selected, 0);
     }
     #[test]
     fn input_viewport_preserves_wide_characters_and_cursor_cell() {
@@ -865,7 +889,7 @@ mod tests {
         );
     }
     #[test]
-    fn footer_hints_are_readable_gray_and_centered_at_every_frame() {
+    fn footer_hints_share_readable_soft_accent_and_centering_at_every_frame() {
         let mut field = crate::render::Field::new(80, 24, 1967);
         for time in [0, 1467, 4060, 8000] {
             let mut canvas = field.paint(time);
@@ -873,7 +897,7 @@ mod tests {
             paint_hints(&mut canvas, &hints);
             let cell = &canvas.cells[23 * 80 + 35];
             assert_eq!(cell.glyph, "E");
-            assert_eq!(cell.fg, SECONDARY);
+            assert!(cell.fg.iter().all(|n| *n >= 80));
             assert!(!cell.bold);
         }
     }
