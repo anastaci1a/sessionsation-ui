@@ -31,7 +31,6 @@ fn resume_invalid(error: &str) -> bool {
         "ACCOUNT_UNAVAILABLE",
         "WORKSPACE_NOT_FOUND",
         "WORKSPACE_NAME_EXISTS",
-        "UNFINISHED_HISTORY_CONFIRMATION_REQUIRED",
         "SESSION_OPERATION_IN_PROGRESS",
     ]
     .iter()
@@ -100,6 +99,10 @@ pub enum Effect {
     Api(u64, Vec<String>),
     FocusSession(Value),
 }
+enum StartConfirmation {
+    SharedDirectory(PathBuf),
+    UnfinishedHistory,
+}
 #[derive(Clone)]
 struct Saved {
     page: Page,
@@ -131,7 +134,7 @@ pub struct App {
     pub launch_supported: bool,
     pub launch_background: bool,
     pub launch_dialog: bool,
-    shared_directory_dialog: Option<(crate::dialog::Dialog, PathBuf)>,
+    start_confirmation: Option<(crate::dialog::Dialog, StartConfirmation)>,
     pub resume: Option<Value>,
     resume_validation: Option<String>,
     switch: Option<Value>,
@@ -183,7 +186,7 @@ impl App {
             launch_supported: false,
             launch_background: false,
             launch_dialog: false,
-            shared_directory_dialog: None,
+            start_confirmation: None,
             resume: None,
             resume_validation: None,
             switch: None,
@@ -824,6 +827,17 @@ impl App {
             return self.pop();
         }
         if self.page == Page::Summary && self.options.selected == 4 {
+            if self.start_ready()
+                && self
+                    .resume_validation
+                    .as_deref()
+                    .is_some_and(|e| e.starts_with("UNFINISHED_HISTORY_CONFIRMATION_REQUIRED"))
+            {
+                let mut dialog = crate::dialog::Dialog::new("Unfinished conversation", vec!["This conversation ended during a turn. Start from its saved history in the chosen directory? Review unfinished work before continuing; the interrupted request will not be replayed automatically.".into()], &["Start Session", "Cancel"]);
+                dialog.selected = 1;
+                self.start_confirmation = Some((dialog, StartConfirmation::UnfinishedHistory));
+                return vec![];
+            }
             if self.start_ready() && self.shared_directory() {
                 let mut dialog = crate::dialog::Dialog::new("Existing session in directory", vec![
                     "Another session already uses this directory. Both sessions can change the same project files.".into(),
@@ -831,8 +845,12 @@ impl App {
                     "Start another session here?".into(),
                 ], &["Start Session", "Cancel"]);
                 dialog.selected = 1;
-                self.shared_directory_dialog =
-                    Some((dialog, self.draft.directory.path().unwrap().to_owned()));
+                self.start_confirmation = Some((
+                    dialog,
+                    StartConfirmation::SharedDirectory(
+                        self.draft.directory.path().unwrap().to_owned(),
+                    ),
+                ));
                 return vec![];
             }
             return self.begin_start();
@@ -1018,13 +1036,24 @@ impl App {
             return vec![];
         }
         self.dirty = true;
-        if let Some((dialog, directory)) = &mut self.shared_directory_dialog
+        if let Some((dialog, confirmation)) = &mut self.start_confirmation
             && !key.modifiers.contains(KeyModifiers::CONTROL)
         {
             match dialog.key_with_wrap(key, wrap) {
                 crate::dialog::Event::Choose(0, _) => {
-                    let unchanged = self.draft.directory.path() == Some(directory.as_path());
-                    self.shared_directory_dialog = None;
+                    let unchanged = match confirmation {
+                        StartConfirmation::SharedDirectory(directory) => {
+                            self.draft.directory.path() == Some(directory.as_path())
+                        }
+                        StartConfirmation::UnfinishedHistory => {
+                            if let Some(session) = &mut self.resume {
+                                session["confirm_unfinished"] = json!(true);
+                            }
+                            self.resume_validation = None;
+                            true
+                        }
+                    };
+                    self.start_confirmation = None;
                     if !unchanged {
                         self.error = "Directory changed; review Start Session again.".into();
                         return vec![];
@@ -1032,7 +1061,7 @@ impl App {
                     return self.begin_start();
                 }
                 crate::dialog::Event::Dismiss | crate::dialog::Event::Choose(..) => {
-                    self.shared_directory_dialog = None
+                    self.start_confirmation = None
                 }
                 crate::dialog::Event::None => {}
             }
@@ -1414,7 +1443,7 @@ impl App {
             crate::widgets::paint_status(&mut canvas, footer, &note);
         }
         crate::widgets::paint_hints(&mut canvas, &hints);
-        if let Some((dialog, _)) = &mut self.shared_directory_dialog {
+        if let Some((dialog, _)) = &mut self.start_confirmation {
             dialog.paint(&mut canvas, &self.manager.palette);
         }
         if self.launch_dialog
@@ -1579,7 +1608,7 @@ mod tests {
         }
         assert!(a.activate().is_empty());
         assert!(a.request.is_none());
-        assert!(a.shared_directory_dialog.is_some());
+        assert!(a.start_confirmation.is_some());
         assert!(
             a.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
                 .is_empty()
@@ -1594,7 +1623,7 @@ mod tests {
                 .as_slice(),
             [Effect::Start(_)]
         ));
-        assert!(a.shared_directory_dialog.is_none());
+        assert!(a.start_confirmation.is_none());
         assert!(
             a.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
                 .is_empty()
@@ -2029,6 +2058,45 @@ mod resume_tests {
         assert!(a.ready(), "old validation cannot invalidate edited choices");
         a.options.selected = 4;
         assert!(matches!(a.activate().as_slice(), [Effect::Start(_)]));
+    }
+    #[test]
+    fn late_unfinished_warning_preserves_destination_and_requires_consent() {
+        let mut a = App::new(
+            Preferences::default(),
+            "/projects".into(),
+            "host".into(),
+            json!({}),
+            None,
+        );
+        a.manager.capabilities = json!({"resume":{"version":1,"directory_selection":true}});
+        a.management(vec![Intent::Resume(json!({"id":"stable","generation":"g","name":"Saved","account_id":"codex:a","directory":"/missing"}))]);
+        a.draft.space = Some(Space::New {
+            label: "Chosen".into(),
+        });
+        a.draft.directory = Directory::Existing("/chosen".into());
+        a.revalidate();
+        a.validation(
+            a.draft.revision,
+            Err("UNFINISHED_HISTORY_CONFIRMATION_REQUIRED".into()),
+        );
+        a.options.selected = 4;
+        assert!(a.activate().is_empty());
+        assert!(a.start_confirmation.is_some());
+        assert!(
+            a.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .is_empty()
+        );
+        assert!(a.request.is_none());
+        a.activate();
+        a.paint(&mut Field::new(80, 24, 1), 0, 80, 24);
+        a.key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        let effects = a.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let Effect::Start(request) = &effects[0] else {
+            panic!()
+        };
+        assert_eq!(request["confirm_unfinished"], true);
+        assert_eq!(request["space"]["label"], "Chosen");
+        assert_eq!(request["directory"]["path"], "/chosen");
     }
     #[test]
     fn resume_preserves_draft_and_gates_directory_selection_on_backend_support() {
