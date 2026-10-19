@@ -233,7 +233,7 @@ impl Usage {
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
-            let interior = bar.saturating_sub(2).max(1);
+            let interior = bar.max(1);
             let filled = window.remaining.map(|p| interior as f64 * p / 100.);
             let Some(filled) = filled else {
                 canvas.accent_text(
@@ -254,12 +254,10 @@ impl Usage {
             };
             let marker = window
                 .limit
-                .map(|p| 1 + (interior.saturating_sub(1) as f64 * p / 100.).round() as usize);
+                .map(|p| (interior.saturating_sub(1) as f64 * p / 100.).round() as usize);
             for col in 0..bar {
                 let glyph = bar_glyph(col, bar, filled, marker);
-                if matches!(glyph, "╾" | "┽" | "┼" | "─" | "╶")
-                    || (glyph == "╴" && filled < interior as f64)
-                {
+                if matches!(glyph, "╾" | "┽" | "┼" | "─") {
                     canvas.text(
                         x + col,
                         y + row,
@@ -314,17 +312,11 @@ impl Usage {
     }
 }
 
-// Match horizontal weights at every cell boundary, including 0%/100% caps.
+// Full-width segments, with matching horizontal weights at every cell boundary.
 // Character connections: https://www.unicode.org/charts/PDF/U2500.pdf
 fn bar_glyph(col: usize, width: usize, filled: f64, marker: Option<usize>) -> &'static str {
-    let interior = width.saturating_sub(2).max(1) as f64;
-    if col == 0 {
-        return if filled > 0. { "╺" } else { "╶" };
-    }
-    if col + 1 == width {
-        return if filled >= interior { "╸" } else { "╴" };
-    }
-    let position = (col - 1) as f64;
+    let interior = width as f64;
+    let position = col as f64;
     let left_heavy = filled > position;
     let right_heavy = filled >= interior || filled > position + 1.;
     match (marker == Some(col), left_heavy, right_heavy) {
@@ -639,8 +631,14 @@ mod tests {
         };
         for width in [3, 7, 24] {
             for step in 0..=1000 {
-                let filled = (width - 2) as f64 * step as f64 / 1000.;
-                for marker in std::iter::once(None).chain((1..width - 1).map(Some)) {
+                let filled = width as f64 * step as f64 / 1000.;
+                for marker in std::iter::once(None).chain((0..width).map(Some)) {
+                    for col in 0..width {
+                        assert!(!matches!(
+                            bar_glyph(col, width, filled, marker),
+                            "╺" | "╶" | "╸" | "╴"
+                        ));
+                    }
                     for col in 0..width - 1 {
                         assert_eq!(
                             weights(bar_glyph(col, width, filled, marker)).1,
@@ -688,21 +686,23 @@ mod tests {
         assert!(!text.contains("Ready"));
     }
     #[test]
-    fn capped_line_bars_share_threshold_color_and_align_percentage_labels() {
+    fn full_line_bars_share_threshold_color_and_align_percentage_labels() {
         let mut a = account();
         a.usage["short"]["used_percent"] = json!(74.);
         a.details.remove("switch_thresholds");
         let u = Usage::account(&a);
         let mut c = Canvas::new(50, 5);
         u.paint(&mut c, 1, 1, 10, 2);
-        assert_eq!(c.cells[51].glyph, "╺");
+        assert_eq!(c.cells[51].glyph, "━");
         assert_eq!(c.cells[52].glyph, "━");
-        assert_eq!(c.cells[53].glyph, "━");
-        assert_eq!(c.cells[54].glyph, "╾");
+        assert_eq!(c.cells[53].glyph, "╾");
+        assert_eq!(c.cells[54].glyph, "─");
         assert_eq!(c.cells[54].fg, [144; 3]);
         assert_eq!(c.cells[55].glyph, "─");
         assert_eq!(c.cells[55].fg, [144; 3]);
-        assert_eq!(c.cells[60].glyph, "╴");
+        assert_eq!(c.cells[60].glyph, "─");
+        assert_eq!(c.cells[61].glyph, " ");
+        assert_eq!(c.cells[62].glyph, "2");
         let u = Usage::account(&account());
         u.paint(&mut c, 1, 1, 10, 3);
         let marker = &c.cells[53];
@@ -734,8 +734,8 @@ mod tests {
         assert_eq!(u.digits(), 3);
         let mut c = Canvas::new(60, 6);
         u.paint(&mut c, 3, 1, 11, 3);
-        assert_eq!(c.cells[60 + 6].glyph, "┿");
-        assert_eq!(c.cells[120 + 5].glyph, "┿");
+        assert_eq!(c.cells[60 + 5].glyph, "┿");
+        assert_eq!(c.cells[120 + 4].glyph, "┿");
     }
     #[test]
     fn no_five_hour_window_means_status_and_missing_weekly_is_unknown() {

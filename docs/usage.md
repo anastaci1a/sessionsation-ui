@@ -46,7 +46,7 @@ required, Restore for Deregistered, or usage details otherwise. These dialogs re
 the account and right-side focus when closed; mutations require confirmation.
 
 Bars show remaining allowance for the periods the backend reports: 5h/weekly or
-weekly only. Capped accent lines deplete into visible gray; custom limits appear
+weekly only. Full-width bold line segments (no endcaps) deplete into visible gray; custom limits appear
 inside the bar. Percentages precede period labels in aligned columns. Missing
 observations show Disabled, Login required or Usage unavailable as appropriate;
 stale observations are marked. The account picker uses
