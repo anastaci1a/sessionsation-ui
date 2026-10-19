@@ -38,7 +38,7 @@ impl Status {
                     let n = libc::strftime(
                         buffer.as_mut_ptr(),
                         buffer.len(),
-                        c"%a %b %d  %H:%M:%S".as_ptr(),
+                        c"%a %b %d %-H:%M:%S".as_ptr(),
                         broken.as_ptr(),
                     );
                     self.clock = String::from_utf8_lossy(std::slice::from_raw_parts(
@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn status_preserves_path_tail_and_fits_wide_glyphs() {
         let s = fit(
-            "Thu Oct 15  12:30:00",
+            "Thu Oct 15 12:30:00",
             "Satellite",
             "/long/long/long/界/leaf",
             50,
