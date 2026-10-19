@@ -2,7 +2,7 @@
 
 ## Rust popup
 
-The expanded popup passes **112 Rust tests** (110 unit tests and two tests covering
+The expanded popup passes **120 Rust tests** (118 unit tests and two tests covering
 21 complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
 regressions**. Syntax, manifest fields and documentation links pass. The goldens
 exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,
@@ -25,7 +25,7 @@ network-disabled container, with separate config/socket/state and a synthetic pu
 backend. It verifies the requested percentage popup geometry, origin context without a pane ID,
 selection of a different Space, normal-tab handoff, focus before exit, second-popup
 cancellation, held-arrow clamping/release-and-press wrapping through the actual
-HERDR pane encoder, Home/End list jumps, and unchanged origin shell. The shared navigation release (`3911824`) moves on the first press alone in 12.47 ms, before any repeat or release.
+HERDR pane encoder, Home/End list jumps, and unchanged origin shell. The isolated host fixture (`f8358a7`) moves on the first press alone in 12.00 ms, before any repeat or release.
 A boundary-origin hold wraps once and then clamps; the core tests both axes and
 all starting positions. Mixed ordinary/enhanced bursts clamp at both boundaries.
 Native release/press rearms immediately; press-only streams use the documented
@@ -36,13 +36,13 @@ supervisor handoff. Their details and limits belong to the backend guidance.
 No acceptance test starts a model or changes production accounts/Agent DM state;
 production capability/status previews are read-only.
 
-PTY measurements for source `1f30e96` (before the Home/End-only follow-up), p95: first responsive PTY paint **6.31 ms**, key feedback **0.46 ms**.
-The earlier popup-core host/frame measurement (source `8809571`, recorded in the
-machine-readable results) measured keybind-to-popup paint **183.61 ms**,
-frame computation/diff **0.105 ms** at 80×24 and
-**0.412 ms** at 160×48 (600 frames each). These exclude provider startup/model response.
-CLI-triggered plugin invocation additionally pays the external command round trip;
-the measured invocation was 282.44 ms, whereas the configured key path met 250 ms.
+PTY/host measurements for source `f8358a7`, p95: first responsive PTY paint
+**6.02 ms**, key feedback **0.475 ms**, keybind-to-popup paint **181.79 ms**.
+Frame computation/diff measured **0.123 ms** at 80×24 and **0.384 ms** at
+160×48 (600 frames each; renderer source `7f048ed`). These exclude provider
+startup/model response. External CLI plugin invocation took 318.65 ms; the
+configured key path met 250 ms. Later picker/message changes have separate unit
+and visual coverage and are not claimed as new timing measurements.
 
 `scripts/test-session-activity.py --binary PATH` verifies the cold loading skeleton,
 persistent spinner, live busy/idle/exit/error changes, held-arrow boundaries and
@@ -77,7 +77,9 @@ receipt semantics and sole-root ownership remain intact. Ana approved activation
 of the selected backend owner on the existing root; the original executable and
 startup configuration remain preserved. The latest owner update retained 26 of 27 captured native process identities;
 one codex process exited during the interval, without an agent-stop command. Its
-cause is not established. No account was deleted. After reboot, an old
+cause is not established. Separately, the explicitly confirmed unauthenticated
+account deletion was recovered to completion after the FUSE lease fix; saved
+conversation storage remained separate. After reboot, an old
 owner from the preserved startup configuration gates deletion until activation.
 
 `scripts/test-management.py --binary PATH` exercises compact bars/action groups,

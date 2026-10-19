@@ -2,13 +2,13 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "6bf0a6523c07c3eae863e8fe0afad701fb0ed188",
-    "backend": "043b3f3081b4dc83f50e70232a341761de8922e7",
+    "ui": "9aee2c908b79ae460ae9debe7ceebb6cd8e9980f",
+    "backend": "51764d216830bb9623c877abb2ef325d1c2231fd",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
   "checks": {
     "rust": {
-      "unit_passed": 110,
+      "unit_passed": 118,
       "visual_snapshot_test_passed": 2,
       "golden_frames": 21,
       "failed": 0,
@@ -24,13 +24,13 @@
       "command": "npm run check"
     },
     "backend": {
-      "standard_tests_passed": 245,
-      "installed_herdr_test_passed": 3,
+      "standard_tests_passed": 251,
+      "installed_herdr_test_passed": 2,
       "failed": 0,
       "standard_command": "scripts/check.sh",
-      "standard_source": "043b3f3081b4dc83f50e70232a341761de8922e7",
+      "standard_source": "51764d216830bb9623c877abb2ef325d1c2231fd",
       "tests": {
-        "unit": 129,
+        "unit": 135,
         "cli": 8,
         "external_move": 62,
         "external_move_ignored": 3,
@@ -75,36 +75,38 @@
         "command": "cargo test --offline --locked --test external_move installed_ -- --ignored --nocapture",
         "models": 0,
         "source": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
-      }
+      },
+      "installed_herdr_source": "51764d216830bb9623c877abb2ef325d1c2231fd",
+      "scope": "Current source: 251 standard tests and two installed-HERDR fixtures; owner-handoff evidence separately versioned below"
     }
   },
   "pty": {
     "startup": {
       "samples": 20,
-      "p50_ms": 5.658071022480726,
-      "p95_ms": 6.3134810188785195,
-      "max_ms": 6.3134810188785195
+      "p50_ms": 5.254492978565395,
+      "p95_ms": 6.020247004926205,
+      "max_ms": 6.020247004926205
     },
     "input": {
       "samples": 238,
-      "p50_ms": 0.3480929881334305,
-      "p95_ms": 0.4591679899021983,
-      "max_ms": 0.5588720086961985
+      "p50_ms": 0.3499559825286269,
+      "p95_ms": 0.47479697968810797,
+      "max_ms": 0.589328003115952
     },
     "checks": "delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink",
     "models": 0,
-    "source_ui": "1f30e96d6944373182efa196160eec9ff16c680a"
+    "source_ui": "f8358a79ca330e405b35afd0c65012cfcdba3ec8"
   },
   "herdr": {
     "keybind_startup": {
       "samples": 20,
-      "p50_ms": 173.98429999593645,
-      "p95_ms": 187.65283899847418,
-      "max_ms": 187.65283899847418
+      "p50_ms": 175.75065803248435,
+      "p95_ms": 181.78663402795792,
+      "max_ms": 181.78663402795792
     },
-    "first_press_ms": 12.472485890612006,
+    "first_press_ms": 12.004196061752737,
     "installed_herdr": "0.9.5",
-    "plugin_to_first_paint_ms": 287.36305399797857,
+    "plugin_to_first_paint_ms": 318.64556192886084,
     "popup_size": [
       117,
       28
@@ -123,32 +125,31 @@
       "exact name/account",
       "focus then popup exit",
       "second popup cancel preserves new terminal",
-      "origin shell unchanged",
-      "boundary-origin hold wraps once then clamps without release"
+      "origin shell unchanged"
     ],
     "models": 0,
-    "source_ui": "3911824f7f4b9f507b27cd369b8f868f6620192f"
+    "source_ui": "f8358a79ca330e405b35afd0c65012cfcdba3ec8"
   },
   "frames": [
     {
       "height": 24,
-      "width": 80,
+      "max_ms": 0.453227,
+      "mean_bytes": 1114,
+      "p50_ms": 0.08671,
+      "p95_ms": 0.122807,
       "samples": 600,
-      "p50_ms": 0.079267,
-      "p95_ms": 0.105325,
-      "max_ms": 0.514511,
-      "mean_bytes": 1079,
-      "source_ui": "8809571e0d7970479750b922337e84b012ac95e2"
+      "width": 80,
+      "source_ui": "7f048edf59bead4c74f85bd5942ef1c48bc56714"
     },
     {
       "height": 48,
-      "width": 160,
+      "max_ms": 0.57408,
+      "mean_bytes": 3535,
+      "p50_ms": 0.284134,
+      "p95_ms": 0.38354900000000003,
       "samples": 600,
-      "p50_ms": 0.297921,
-      "p95_ms": 0.412352,
-      "max_ms": 0.575844,
-      "mean_bytes": 3480,
-      "source_ui": "8809571e0d7970479750b922337e84b012ac95e2"
+      "width": 160,
+      "source_ui": "7f048edf59bead4c74f85bd5942ef1c48bc56714"
     }
   ],
   "deployment": {
@@ -163,7 +164,7 @@
       "initial_handoff": "The latest owner update retained 26/27 captured native process identities. One codex process exited during the interval; cause not established. No agent-stop API or direct signal was invoked.",
       "wait": "Registry lock release checked separately from socket disappearance"
     },
-    "backend_client": "/mnt/user/live/packages/sessionsation/popup/aea768160343b21e575e12394c5662f049d50433/sessionsation"
+    "backend_client": "/mnt/user/live/packages/sessionsation/popup/51764d216830bb9623c877abb2ef325d1c2231fd/sessionsation"
   },
   "layout_regressions": [
     "Configuration labels and complete-fit optional directory previews",
@@ -209,12 +210,11 @@
     "source_ui": "1468c7d45f8fc91e1ce526e3ac9641fc8851e671"
   },
   "limitations": [
-    "No live model/account mutation acceptance",
+    "No new live model acceptance; separately approved unauthenticated account deletion recovered to completion with conversations preserved",
     "Claude preparation only",
     "HERDR outer border cannot follow animated status bar",
     "Dynamic/terminal HERDR themes use explicit configured-base approximation",
     "Original startup configuration is preserved; an old owner started after reboot gates deletion until selected owner activation",
-    "Archive/Restore/Delete CLI verified; UI actions not yet wired",
     "Provider-login cancellation action pending"
   ],
   "activity": {
@@ -229,12 +229,12 @@
       "TTY restoration"
     ],
     "transition_ms": {
-      "idle": 979.8,
-      "busy": 980.69,
-      "saved": 1000.21,
-      "failure": 987.7
+      "idle": 979.38,
+      "busy": 988.65,
+      "saved": 981.21,
+      "failure": 1011
     },
-    "source_ui": "694940403344f7b7dd231abb96460e6d356cf7f5"
+    "source_ui": "f8358a79ca330e405b35afd0c65012cfcdba3ec8"
   },
   "navigation": {
     "core": "src/navigation.rs",
@@ -274,6 +274,8 @@
         "conversation identity and origin shell retained",
         "no turn/start or turn/steer"
       ]
-    }
+    },
+    "archive_restore_delete": "Wired through public CLI only; Archived Sessions entry appears only when nonempty; empty session list contains Operations alone",
+    "account_picker": "Standard bullets and white/gray names for new and resume; transient receipt freshness errors use Checking session state…"
   }
 }
