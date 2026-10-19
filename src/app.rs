@@ -4,7 +4,7 @@ use crate::{
     draft::{Directory, Draft, Space, valid_name},
     preferences::{Mode, Preferences},
     render::{Accent, Canvas, Cell, Field},
-    widgets::{Options, Row, TextInput},
+    widgets::{Options, Row, TextInput, UNSET},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
@@ -329,7 +329,7 @@ impl App {
     pub fn rows(&self) -> Vec<Row> {
         let path = |p: Option<&Path>| {
             p.map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "[unset]".into())
+                .unwrap_or_else(|| UNSET.into())
         };
         match &self.page {
             Page::Home | Page::Management => self.manager.rows(),
@@ -341,7 +341,7 @@ impl App {
                             .account
                             .as_deref()
                             .map(crate::usage::short_name)
-                            .unwrap_or_else(|| "[unset]".into()),
+                            .unwrap_or_else(|| UNSET.into()),
                     ),
                     (
                         "Space",
@@ -350,13 +350,13 @@ impl App {
                             .as_ref()
                             .map(Space::label)
                             .filter(|s| !s.is_empty())
-                            .unwrap_or("[unset]")
+                            .unwrap_or(UNSET)
                             .to_owned(),
                     ),
                     (
                         "Name",
                         if self.draft.name.is_empty() {
-                            "[unset]".into()
+                            UNSET.into()
                         } else {
                             crate::usage::display_name(&self.draft.name)
                         },
@@ -1306,7 +1306,7 @@ impl App {
         let root = self
             .prefs
             .root(&self.instance, self.draft.space.as_ref())
-            .unwrap_or(Path::new("<unset>"));
+            .unwrap_or(Path::new(UNSET));
         let status = self.status.line(seconds as i64, root, width);
         let bar = Cell {
             bg: Some(canvas.theme.as_ref().unwrap().bar(false)),
@@ -1598,7 +1598,7 @@ mod tests {
         )
     }
     #[test]
-    fn topbar_uses_configured_root_and_selected_space() {
+    fn topbar_roots_and_summary_share_angle_bracket_unset_placeholders() {
         let mut a = app();
         a.prefs.global_root = Some("/global-projects".into());
         a.prefs
@@ -1630,6 +1630,19 @@ mod tests {
                 .collect::<String>()
                 .contains("<unset>")
         );
+        a.page = Page::Summary;
+        a.draft = Draft::default();
+        assert!(a.rows().iter().all(|row| row.label.ends_with("<unset>")));
+        a.prefs.global_root = None;
+        a.page = Page::Config;
+        assert_eq!(a.rows()[1].preview.as_deref(), Some("<unset>"));
+        a.page = Page::Roots;
+        a.spaces = vec![Workspace {
+            workspace_id: "missing".into(),
+            label: "No root".into(),
+            focused: false,
+        }];
+        assert_eq!(a.rows()[0].preview.as_deref(), Some("<unset>"));
     }
     #[test]
     fn shared_directory_warns_on_hover_and_requires_confirmation_without_mutation() {

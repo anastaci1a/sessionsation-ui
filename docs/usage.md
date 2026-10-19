@@ -313,7 +313,8 @@ gray, and appear as bare paths one space after the option text when inline.
 Open **New Session**, edit Account, Space, Name and Directory in any order, then
 select Start Session directly below the fields and separator. The top bar shows the
 configured global or selected-Space project root, depending on the default-directory
-mode; an unset root displays `<unset>`.
+mode. Unset values throughout the UI use `<unset>`, including the top bar,
+session fields and root previews.
 
 The public CLI session catalog refreshes asynchronously while creating a session.
 When another active or inactive session has the same directory, Start Session shows

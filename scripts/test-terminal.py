@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  # Existing Spaces with no focused Space must leave the default unset.
  (root/'no-focused').touch();t=Terminal(root)
  try:
-  t.wait('New Session');time.sleep(.2);t.drain();t.send(b'\r');t.wait('Space:   [unset]')
+  t.wait('New Session');time.sleep(.2);t.drain();t.send(b'\r');t.wait('Space:   <unset>')
  finally:t.close()
 def report(a):
  s=sorted(a);return {'samples':len(s),'p50_ms':s[len(s)//2],'p95_ms':s[min(len(s)-1,int(len(s)*.95))],'max_ms':max(s)}
