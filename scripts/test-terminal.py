@@ -36,6 +36,22 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
   assert request['directory']['create']==[str(root/'projects'/'new-session')]
   assert not (root/'projects'/'new-session').exists(),'UI created the directory itself'
  finally:t.close()
+ # Shared-directory warning must ask before the fake backend receives Start.
+ (root/'start.json').unlink()
+ (root/'sessions.json').write_text(json.dumps([{'id':'saved','name':'Original','directory':str(root/'projects'/'shared'),'availability':'saved'}]))
+ t=Terminal(root)
+ try:
+  t.wait('New Session');time.sleep(.2);t.drain();t.send(b'\r');t.wait('Account:');t.send(b'\x1b[B\x1b[B\r');t.wait('Session name');t.send(b'shared\r');t.wait('Start Session ⚠');t.send(b'\x1b[B\x1b[B');t.wait('(existing session in dir)');time.sleep(.2);t.drain()
+  t.send(b'\r');t.wait('Existing session in directory');assert not (root/'start.json').exists()
+  t.send(b'\r');t.wait('(existing session in dir)');assert not (root/'start.json').exists()
+  t.send(b'\r');t.wait('Existing session in directory');t.send(b'\x1b[H\r')
+  until=time.monotonic()+3
+  while not (root/'start.json').exists() and time.monotonic()<until:
+   t.drain();time.sleep(.01)
+  assert json.loads((root/'start.json').read_text())['name']=='shared'
+  assert not (root/'projects'/'shared').exists(),'UI created a directory'
+ finally:t.close()
+ (root/'sessions.json').unlink()
  # A deployed config symlink must put atomic Configuration saves beside its target.
  settings=root/'settings';settings.mkdir();(settings/'popup.json').write_text(json.dumps({'binary':str(root/'backend'),'dataDir':str(root/'state')}))
  (settings/'preferences.json').write_text((root/'prefs.json').read_text());pointer=root/'config-pointer.json';pointer.symlink_to(settings/'popup.json')
@@ -55,4 +71,4 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  finally:t.close()
 def report(a):
  s=sorted(a);return {'samples':len(s),'p50_ms':s[len(s)//2],'p95_ms':s[min(len(s)-1,int(len(s)*.95))],'max_ms':max(s)}
-print(json.dumps({'startup':report(starts),'input':report(keys),'checks':'delayed backend, summary, paste, staged directory, request identity, resize/cancel, exact TTY restoration, atomic preferences through config symlink','models':0},indent=2))
+print(json.dumps({'startup':report(starts),'input':report(keys),'checks':'delayed backend, summary, paste, staged directory, request identity, shared-directory warning/cancel/confirm, resize/cancel, exact TTY restoration, atomic preferences through config symlink','models':0},indent=2))

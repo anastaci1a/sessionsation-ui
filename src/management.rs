@@ -637,6 +637,13 @@ impl Manager {
         }
         out
     }
+    pub fn read_sessions(&mut self) -> Vec<Intent> {
+        if !self.pending.values().any(|p| matches!(p, Purpose::State)) {
+            self.request(strings(&["state"]), Purpose::State)
+        } else {
+            vec![]
+        }
+    }
     pub fn refresh_sessions(&mut self) -> Vec<Intent> {
         if matches!(self.page, Page::Sessions | Page::Session(_))
             && !self.pending.values().any(|p| matches!(p, Purpose::State))
@@ -1301,10 +1308,13 @@ impl Manager {
                 }
             }
             Purpose::State => {
-                let archives_selected = self.page == Page::Sessions
+                let initial_sessions = self.page == Page::Sessions && !self.sessions_known;
+                let archives_selected = self.sessions_known
+                    && self.page == Page::Sessions
                     && !self.archives.is_empty()
                     && self.options.selected == self.rows().len().saturating_sub(2);
-                let operations_selected = self.page == Page::Sessions
+                let operations_selected = self.sessions_known
+                    && self.page == Page::Sessions
                     && self.options.selected == self.rows().len().saturating_sub(1);
                 let chosen = if self.page == Page::Sessions && self.sessions_known {
                     self.sessions
@@ -1333,6 +1343,9 @@ impl Manager {
                         })
                         .then_with(|| id(a).cmp(id(b)))
                 });
+                if initial_sessions {
+                    self.options = Options::default();
+                }
                 if let Some(key) = chosen {
                     self.options.selected =
                         self.sessions.iter().position(|s| id(s) == key).unwrap_or(0);
@@ -2053,6 +2066,27 @@ mod tests {
         m.mutate(strings(&["account", "enable", "codex:account1"]));
         m.submit(0, vec![]);
         assert_eq!(m.page, Page::Home);
+    }
+    #[test]
+    fn initial_session_load_selects_top_then_preserves_operations_on_refresh() {
+        let mut m = setup();
+        m.page = Page::Sessions;
+        m.sessions_known = false;
+        m.sessions.clear();
+        let intents = m.refresh_sessions();
+        let Intent::Api(token, _) = &intents[0] else {
+            panic!("state request")
+        };
+        let state = json!({"sessions":[{"id":"first","name":"First","availability":"saved"}],"capabilities":{}});
+        m.response(*token, Ok(state.clone()));
+        assert_eq!(m.options.selected, 0);
+        m.options.selected = m.rows().len() - 1;
+        let intents = m.refresh_sessions();
+        let Intent::Api(token, _) = &intents[0] else {
+            panic!("state request")
+        };
+        m.response(*token, Ok(state));
+        assert_eq!(m.options.selected, m.rows().len() - 1);
     }
     #[test]
     fn completed_progress_uses_close_and_loading_is_not_a_menu_option() {

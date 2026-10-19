@@ -430,7 +430,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
          _=term_signal.recv()=>{app.exit=true;},_ = hup_signal.recv()=>{app.exit=true;},
          _=frame.tick()=>{app.dirty=true;},
          _=refresh.tick(),if !inventory_pending=>{inventory_pending=true;effects.inventory();let intents=app.manager.refresh();next=app.management(intents);},
-         _=session_refresh.tick()=>{let intents=app.manager.refresh_live();next=app.management(intents);},
+         _=session_refresh.tick()=>{next=app.refresh_live();},
          _=receipt.tick(),if app.request.is_some()&&!app.success&&receipt_pending.as_deref()!=app.request.as_ref().and_then(|r|r["request_id"].as_str())=>{receipt_pending=app.request.as_ref().and_then(|r|r["request_id"].as_str()).map(str::to_owned);effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
          message=rx.recv()=>match message.context("Input channel closed")? {
          Message::Background(color)=>{app.terminal_background=color;app.dirty=true;},

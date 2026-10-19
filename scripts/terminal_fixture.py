@@ -7,6 +7,8 @@ args=sys.argv[1:];api=args[args.index('api')+1:];api=api[2:] if api[:1]==['--api
 if api[:1] in [['account'],['capabilities']]: time.sleep(float(os.environ.get('FIXTURE_DELAY','0')))
 if api==['account','list']: result=[{'id':'codex:fixture','selectable':True,'prefill':{'eligible':True,'valid_until':int(time.time())+60},'usage':{}}]
 elif api==['capabilities']: result={'launch':{'version':1}}
+elif api==['state']:
+ path=pathlib.Path(os.environ['FIXTURE_ROOT'],'sessions.json');result={'sessions':json.loads(path.read_text()) if path.exists() else [],'capabilities':{'launch':{'version':1}}}
 elif api[:1]==['launch'] and api[1] in ['validate','start']:
  request=json.load(sys.stdin)
  if api[1]=='start': pathlib.Path(os.environ['FIXTURE_ROOT'],'start.json').write_text(json.dumps(request)); result={'phase':'running','tab_id':'w1:t2'}

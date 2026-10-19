@@ -100,7 +100,8 @@ failed cleanup offers Recover only when the backend reports it safe to request.
 Operation menus respect explicit cancellation/recovery capabilities, rather than
 assuming every failed operation supports the same recovery command.
 
-Manage Sessions lists sessions, then a dot separator and Operations. Archived
+Manage Sessions selects the first session when its initial inventory arrives; later
+refreshes preserve selection. It lists sessions, then a dot separator and Operations. Archived
 Sessions appears above Operations only when archives exist. With neither saved/live
 sessions nor archives, the list contains only Operations, without a separator.
 New Session remains on the home menu. Archive, Restore and permanent Delete call
@@ -215,7 +216,18 @@ A symlink from `.runtime/config.json` therefore keeps writable settings beside t
 real config, rather than attempting to replace a symlink or writing into the checkout.
 
 Open **New Session**, edit Account, Space, Name and Directory in any order, then
-select Start Session directly below the fields and separator. The default Space is
+select Start Session directly below the fields and separator. The top bar shows the
+configured global or selected-Space project root, depending on the default-directory
+mode; an unset root displays `<unset>`.
+
+The public CLI session catalog refreshes asynchronously while creating a session.
+When another active or inactive session has the same directory, Start Session shows
+`⚠` one space after its label. Selecting it reveals `(existing session in dir)`
+after the warning. Activation asks for confirmation (Cancel selected initially);
+Cancel preserves the form, and confirmation follows the normal CLI validation and
+launch flow. The UI never creates directories or starts an agent before confirmation.
+
+The default Space is
 the one currently focused in HERDR; no focus leaves it unset. Pickers preserve the
 draft on Back. Existing automatic paths require explicit selection. Directory Enter
 selects; Right browses child rows only, leaving `[use this dir]` and `[create dir]` unchanged; Left goes

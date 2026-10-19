@@ -128,6 +128,7 @@ pub struct App {
     pub launch_supported: bool,
     pub launch_background: bool,
     pub launch_dialog: bool,
+    shared_directory_dialog: Option<(crate::dialog::Dialog, PathBuf)>,
     pub resume: Option<Value>,
     resume_validation: Option<String>,
     switch: Option<Value>,
@@ -179,6 +180,7 @@ impl App {
             launch_supported: false,
             launch_background: false,
             launch_dialog: false,
+            shared_directory_dialog: None,
             resume: None,
             resume_validation: None,
             switch: None,
@@ -462,7 +464,10 @@ impl App {
         self.listing = Listing::default();
         self.error.clear();
         self.dirty = true;
-        if matches!(self.page, Page::Directory(_) | Page::NewDirectory(..)) {
+        if self.page == Page::Summary && self.resume.is_none() {
+            let intents = self.manager.read_sessions();
+            self.management(intents)
+        } else if matches!(self.page, Page::Directory(_) | Page::NewDirectory(..)) {
             self.inspect()
         } else {
             vec![]
@@ -747,24 +752,61 @@ impl App {
         self.pop();
         self.revalidate()
     }
+    pub fn refresh_live(&mut self) -> Vec<Effect> {
+        let intents = if self.page == Page::Summary && self.resume.is_none() {
+            self.manager.read_sessions()
+        } else {
+            self.manager.refresh_live()
+        };
+        self.management(intents)
+    }
+    fn shared_directory(&self) -> bool {
+        self.resume.is_none()
+            && self.draft.directory.path().is_some_and(|path| {
+                self.manager.sessions.iter().any(|s| {
+                    s["directory"]
+                        .as_str()
+                        .is_some_and(|p| Path::new(p) == path)
+                })
+            })
+    }
+    fn start_ready(&self) -> bool {
+        self.ready()
+            && self.launch_supported()
+            && (!self.pending || self.resume.is_some())
+            && self.request.is_none()
+            && (self.resume.is_some() || self.manager.sessions_known)
+    }
+    fn begin_start(&mut self) -> Vec<Effect> {
+        if !self.start_ready() {
+            return vec![];
+        }
+        if let Some(request) = self.creation_request() {
+            self.request = Some(request.clone());
+            self.launch_background = false;
+            self.launch_dialog = true;
+            self.manager.dialog = Some(crate::dialog::Dialog::progress("Starting session"));
+            return vec![Effect::Start(request)];
+        }
+        vec![]
+    }
     fn activate(&mut self) -> Vec<Effect> {
         if self.options.back {
             return self.pop();
         }
         if self.page == Page::Summary && self.options.selected == 4 {
-            if self.ready()
-                && self.launch_supported()
-                && (!self.pending || self.resume.is_some())
-                && self.request.is_none()
-                && let Some(request) = self.creation_request()
-            {
-                self.request = Some(request.clone());
-                self.launch_background = false;
-                self.launch_dialog = true;
-                self.manager.dialog = Some(crate::dialog::Dialog::progress("Starting session"));
-                return vec![Effect::Start(request)];
+            if self.start_ready() && self.shared_directory() {
+                let mut dialog = crate::dialog::Dialog::new("Existing session in directory", vec![
+                    "Another session already uses this directory. Both sessions can change the same project files.".into(),
+                    self.draft.directory.path().unwrap().display().to_string(),
+                    "Start another session here?".into(),
+                ], &["Start Session", "Cancel"]);
+                dialog.selected = 1;
+                self.shared_directory_dialog =
+                    Some((dialog, self.draft.directory.path().unwrap().to_owned()));
+                return vec![];
             }
-            return vec![];
+            return self.begin_start();
         }
         let rows = self.rows();
         if !rows.get(self.options.selected).is_some_and(|r| r.enabled) {
@@ -947,6 +989,26 @@ impl App {
             return vec![];
         }
         self.dirty = true;
+        if let Some((dialog, directory)) = &mut self.shared_directory_dialog
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            match dialog.key_with_wrap(key, wrap) {
+                crate::dialog::Event::Choose(0, _) => {
+                    let unchanged = self.draft.directory.path() == Some(directory.as_path());
+                    self.shared_directory_dialog = None;
+                    if !unchanged {
+                        self.error = "Directory changed; review Start Session again.".into();
+                        return vec![];
+                    }
+                    return self.begin_start();
+                }
+                crate::dialog::Event::Dismiss | crate::dialog::Event::Choose(..) => {
+                    self.shared_directory_dialog = None
+                }
+                crate::dialog::Event::None => {}
+            }
+            return vec![];
+        }
         if self.launch_dialog && !key.modifiers.contains(KeyModifiers::CONTROL) {
             if let Some(d) = &mut self.manager.dialog
                 && matches!(
@@ -1163,7 +1225,11 @@ impl App {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let status = self.status.line(seconds as i64, &self.initial, width);
+        let root = self
+            .prefs
+            .root(&self.instance, self.draft.space.as_ref())
+            .unwrap_or(Path::new("<unset>"));
+        let status = self.status.line(seconds as i64, root, width);
         let bar = Cell {
             bg: Some(canvas.theme.as_ref().unwrap().bar(false)),
             ..white.clone()
@@ -1194,6 +1260,7 @@ impl App {
         let has_note = !self.error.is_empty()
             || self.pending
             || self.page == Page::Launching
+            || self.page == Page::Summary && self.resume.is_none() && !self.manager.sessions_known
             || self.page == Page::Accounts && !self.options.back;
         let menu_controls = if has_note {
             footer.saturating_sub(2)
@@ -1225,10 +1292,7 @@ impl App {
             self.input.paint(&mut canvas, 2, 3, width - 4, valid);
         }
         if self.page == Page::Summary {
-            let enabled = self.ready()
-                && self.launch_supported()
-                && (!self.pending || self.resume.is_some())
-                && self.request.is_none();
+            let enabled = self.start_ready();
             canvas.accent_text(
                 left,
                 top + rows.len().min(capacity),
@@ -1242,17 +1306,21 @@ impl App {
             Row::gate(
                 if self.resume.is_some() {
                     "Resume Session"
+                } else if self.shared_directory() {
+                    "Start Session ⚠"
                 } else {
                     "Start Session"
                 },
                 enabled,
             )
-            .with_preview(
+            .with_preview(if self.shared_directory() {
+                "(existing session in dir)".into()
+            } else {
                 self.resume_validation
                     .as_deref()
                     .map(resume_explanation)
-                    .unwrap_or_default(),
-            )
+                    .unwrap_or_default()
+            })
             .preview_gap(1)
             .paint(
                 &mut canvas,
@@ -1277,6 +1345,11 @@ impl App {
                     )
                 })
                 .unwrap_or_default()
+        } else if self.page == Page::Summary
+            && self.resume.is_none()
+            && !self.manager.sessions_known
+        {
+            "Checking session directories…".into()
         } else if self.pending {
             "Checking choices…".into()
         } else if self.page == Page::Launching {
@@ -1294,6 +1367,9 @@ impl App {
         };
         crate::widgets::paint_status(&mut canvas, footer, &note);
         crate::widgets::paint_hints(&mut canvas, &hints);
+        if let Some((dialog, _)) = &mut self.shared_directory_dialog {
+            dialog.paint(&mut canvas, &self.manager.palette);
+        }
         if self.launch_dialog
             && let Some(d) = &mut self.manager.dialog
         {
@@ -1392,6 +1468,92 @@ mod tests {
             json!({}),
             None,
         )
+    }
+    #[test]
+    fn topbar_uses_configured_root_and_selected_space() {
+        let mut a = app();
+        a.prefs.global_root = Some("/global-projects".into());
+        a.prefs
+            .space_roots
+            .insert(Preferences::key("test", "space"), "/space-projects".into());
+        a.draft.space = Some(Space::Existing {
+            id: "space".into(),
+            label: "Space".into(),
+        });
+        for (mode, expected) in [
+            (Mode::Global, "/global-projects"),
+            (Mode::PerSpace, "/space-projects"),
+        ] {
+            a.prefs.mode = mode;
+            let c = a.paint(&mut Field::new(120, 30, 1), 0, 120, 30);
+            let line = c.cells[..120]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>();
+            assert!(line.contains(expected), "{line}");
+            assert!(!line.contains("/tmp"));
+        }
+        a.draft.space = None;
+        let c = a.paint(&mut Field::new(120, 30, 1), 0, 120, 30);
+        assert!(
+            c.cells[..120]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+                .contains("<unset>")
+        );
+    }
+    #[test]
+    fn shared_directory_warns_on_hover_and_requires_confirmation_without_mutation() {
+        let mut a = app();
+        a.page = Page::Summary;
+        a.launch_supported = true;
+        a.manager.sessions_known = true;
+        a.manager.sessions =
+            vec![json!({"id":"old", "directory":"/shared", "availability":"saved"})];
+        a.draft = Draft {
+            account: Some("codex:personal".into()),
+            space: Some(Space::Existing {
+                id: "s".into(),
+                label: "Space".into(),
+            }),
+            name: "Another".into(),
+            directory: Directory::Existing("/shared".into()),
+            name_valid: true,
+            directory_valid: true,
+            revision: 1,
+        };
+        for selected in [0, 4] {
+            a.options.selected = selected;
+            let c = a.paint(&mut Field::new(120, 30, 1), 0, 120, 30);
+            let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+            assert!(text.contains("Start Session ⚠"));
+            assert_eq!(text.contains("(existing session in dir)"), selected == 4);
+        }
+        assert!(a.activate().is_empty());
+        assert!(a.request.is_none());
+        assert!(a.shared_directory_dialog.is_some());
+        assert!(
+            a.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .is_empty()
+        );
+        assert!(a.request.is_none());
+        assert_eq!(a.options.selected, 4);
+        a.activate();
+        a.paint(&mut Field::new(60, 22, 1), 0, 60, 22);
+        a.key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        assert!(matches!(
+            a.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .as_slice(),
+            [Effect::Start(_)]
+        ));
+        assert!(a.shared_directory_dialog.is_none());
+        assert!(
+            a.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_empty()
+        );
+        a.resume = Some(json!({"id":"old"}));
+        assert!(!a.shared_directory());
     }
     #[test]
     fn pending_receipt_freshness_uses_plain_language() {
@@ -1815,6 +1977,7 @@ mod resume_tests {
             None,
         );
         a.launch_supported = true;
+        a.manager.sessions_known = true;
         a.draft = Draft {
             account: Some("codex:fixture".into()),
             space: Some(Space::Existing {
