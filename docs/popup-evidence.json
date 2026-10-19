@@ -2,7 +2,7 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "694940403344f7b7dd231abb96460e6d356cf7f5",
+    "ui": "31e73ac095f954e3aaa9ea54794b4b32223c5a0a",
     "backend": "aea768160343b21e575e12394c5662f049d50433",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
@@ -185,7 +185,7 @@
     "Home usage focus: white triangle after one space, selected colors retained, other bars darkened without desaturation",
     "Default Dir global/per-Space pickers offer leave unset; three action rows focus Back on Left",
     "Unavailable options can receive focus without activation; separators skipped",
-    "Active tags brighten on hover; inactive tags stay dim, with muted-gray asterisk only while parenthetical is not visible; neither bold",
+    "Selected session account tags are bold, including inactive; active tags brighten, inactive tags keep dim hue; muted inactive marker remains unbolded and yields to visible parenthetical",
     "Menu hints/ranges use reference soft accent; dialog hints readable gray",
     "Inherited popup background unchanged; nonblocking OSC 11 reply filters without typed-input corruption",
     "Shared list and dialog navigation: hold-origin wrapping, immediate first press, Home/End boundaries without footer hints",

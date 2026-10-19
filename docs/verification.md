@@ -25,7 +25,7 @@ network-disabled container, with separate config/socket/state and a synthetic pu
 backend. It verifies the requested percentage popup geometry, origin context without a pane ID,
 selection of a different Space, normal-tab handoff, focus before exit, second-popup
 cancellation, held-arrow clamping/release-and-press wrapping through the actual
-HERDR pane encoder, Home/End list jumps, and unchanged origin shell. The current release moves on the first press alone in 8.06 ms, before any repeat or release.
+HERDR pane encoder, Home/End list jumps, and unchanged origin shell. The held-arrow fix release (`6949404`) moves on the first press alone in 8.06 ms, before any repeat or release.
 Mixed ordinary/enhanced arrow streams clamp at both boundaries; only a matching
 release rearms the next press. The previous installed build fails that regression. Twenty actual prefix+uppercase-L openings
 passed. Separate backend fixtures cover exact account/UUID/socket handoff, normal exit,
