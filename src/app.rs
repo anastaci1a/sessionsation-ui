@@ -480,9 +480,11 @@ impl App {
             Space::New { label } => json!({"kind":"new","label":label}),
         };
         if let Some(session) = &self.resume {
-            return Some(
-                json!({"version":1,"request_id":uuid::Uuid::new_v4().to_string(),"session_id":session["id"],"expected_generation":session["generation"],"account_id":self.draft.account.as_ref()?,"name":self.draft.name,"host":self.host,"space":space}),
-            );
+            let mut request = json!({"version":1,"request_id":uuid::Uuid::new_v4().to_string(),"session_id":session["id"],"expected_generation":session["generation"],"account_id":self.draft.account.as_ref()?,"name":self.draft.name,"host":self.host,"space":space});
+            if session["confirm_unfinished"] == true {
+                request["confirm_unfinished"] = json!(true);
+            }
+            return Some(request);
         }
         let (path, create, confirmed) = match &self.draft.directory {
             Directory::Unset => return None,

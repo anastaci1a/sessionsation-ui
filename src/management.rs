@@ -52,6 +52,7 @@ enum Form {
     Limits(String),
     Remove(Value),
     Delete(Value),
+    ResumeWarning(Value),
     Rename(Value),
     SessionDetails(String),
     Confirm(Vec<String>),
@@ -1075,6 +1076,11 @@ impl Manager {
                     &(100. - p[1]).to_string(),
                 ])
             }
+            Form::ResumeWarning(mut session) => {
+                session["confirm_unfinished"] = json!(true);
+                self.dismiss();
+                return vec![Intent::Resume(session)];
+            }
             Form::Delete(preview) => {
                 let key = preview["account_id"].as_str().unwrap_or("");
                 if value(0) != account_label(key) {
@@ -1272,7 +1278,11 @@ impl Manager {
                     self.dialog = None;
                     self.form = Form::None;
                     self.foreground = None;
-                    return vec![Intent::Resume(value)];
+                    if value["resume_block_reason"] == "unfinished_history" {
+                        self.show("Unfinished conversation", vec!["This conversation ended during a turn. Start from its saved history? Review unfinished work before continuing; the interrupted request will not be replayed automatically.".into()], &["Start Session", "Cancel"], Form::ResumeWarning(value));
+                    } else {
+                        return vec![Intent::Resume(value)];
+                    }
                 }
             }
             Purpose::Limits(key) => {
@@ -1564,6 +1574,34 @@ impl Manager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unfinished_resume_warning_requires_confirmation_and_cancel_is_side_effect_free() {
+        for confirm in [false, true] {
+            let mut m = setup();
+            m.go(Page::Session("saved".into()));
+            let sent = m.preview("Start Session", vec![], Purpose::Resume("saved".into()));
+            let Intent::Api(token, _) = sent[0] else {
+                panic!()
+            };
+            assert!(
+                m.response(
+                    token,
+                    Ok(json!({"id":"saved","resume_block_reason":"unfinished_history"}))
+                )
+                .is_empty()
+            );
+            assert!(matches!(m.form, Form::ResumeWarning(_)));
+            let intents = m.submit(usize::from(!confirm), vec![]);
+            if confirm {
+                assert!(
+                    matches!(&intents[0], Intent::Resume(s) if s["confirm_unfinished"] == true)
+                );
+            } else {
+                assert!(intents.is_empty());
+            }
+            assert!(m.dialog.is_none());
+        }
+    }
     #[test]
     fn session_menu_initially_focuses_unavailable_first_action() {
         let mut m = setup();
