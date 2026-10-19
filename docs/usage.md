@@ -27,14 +27,16 @@ the visible-range counter when scrolling.
 Growing the screen returns that list to Home; forms remain open and Back chooses
 the appropriate current layout without losing their account selection.
 
-On Home, the name selector uses `▶`. Right from an account with available usage selects its bars; Enter/Space
+On Home, the name selector uses `▶`. While a name is selected, other account names
+use the darker bullet hue. Moving focus away restores their normal hue. Right from an account with available usage selects its bars; Enter/Space
 opens Limits directly. Left returns to the name. Cancel, close and save retain the
 same account and bar focus. Only usage focus selects its percentages. The focused bar keeps its normal colors
 and bolds its line characters; other bars darken without adding
 another selector. A white `◀`, separated by one space, follows the first usage
 value when it has focus.
 Status-only accounts also accept Right. Their status and focused `◀` use the normal
-bullet hue, without bold. Enter/Space opens Enable for Disabled, Login for Login
+bullet hue, without bold. While a usage/status item is focused on the right, other
+text statuses use the darker bullet hue, like the other dimmed usage bars. Enter/Space opens Enable for Disabled, Login for Login
 required, Restore for Deregistered, or usage details otherwise. These dialogs retain
 the account and right-side focus when closed; mutations require confirmation.
 

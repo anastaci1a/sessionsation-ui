@@ -169,13 +169,11 @@ impl Usage {
         bar: usize,
         digits: usize,
     ) {
-        self.paint_selected(canvas, x, y, bar, digits, false);
-        if matches!(
-            self.status.as_str(),
-            "Disabled" | "Login required" | "Deregistered"
-        ) {
+        if self.status_only() {
+            self.paint_status(canvas, x, y, 600);
             return;
         }
+        self.paint_selected(canvas, x, y, bar, digits, false);
         for (row, _) in self
             .windows
             .iter()
@@ -208,6 +206,19 @@ impl Usage {
             }
         }
     }
+    fn paint_status(&self, canvas: &mut Canvas, x: usize, y: usize, brightness: i64) {
+        canvas.accent_text(
+            x,
+            y,
+            &self.status,
+            Accent {
+                brightness,
+                bold: false,
+                flash: false,
+                ..Accent::default()
+            },
+        );
+    }
     pub fn paint_selected(
         &self,
         canvas: &mut Canvas,
@@ -218,17 +229,7 @@ impl Usage {
         selected: bool,
     ) {
         if self.status_only() {
-            canvas.accent_text(
-                x,
-                y,
-                &self.status,
-                Accent {
-                    brightness: 1000,
-                    bold: false,
-                    flash: false,
-                    ..Accent::default()
-                },
-            );
+            self.paint_status(canvas, x, y, 1000);
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
@@ -386,6 +387,7 @@ impl AccountsLayout {
         back: bool,
         usage_focus: bool,
     ) {
+        let name_focus = !back && !usage_focus && selected.is_some_and(|i| i < accounts.len());
         let mut y = top;
         for (index, account) in accounts.iter().enumerate() {
             let active = selected == Some(index) && !back;
@@ -397,7 +399,7 @@ impl AccountsLayout {
                 y,
                 &short_name(&account.id),
                 Accent {
-                    brightness: 1000,
+                    brightness: if name_focus && !active { 600 } else { 1000 },
                     bold: active && !usage_focus,
                     ..Accent::default()
                 },
@@ -426,6 +428,69 @@ impl AccountsLayout {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn home_focus_dims_only_other_names_or_statuses_and_restores_on_exit() {
+        let mut accounts = vec![account(), account(), account()];
+        accounts[0].id = "codex:personal".into();
+        accounts[1].id = "codex:work".into();
+        accounts[1].details.insert("enabled".into(), json!(false));
+        accounts[2].id = "codex:other".into();
+        accounts[2]
+            .details
+            .insert("auth_required".into(), json!(true));
+        let layout = AccountsLayout::fit(&accounts, 100, 30).unwrap();
+        let mut field = crate::render::Field::new(100, 40, 1967);
+        for time in [0, 4200, 8300] {
+            let base = field.paint(time);
+            for (selected, back, usage_focus) in [
+                (Some(0), false, false),
+                (Some(1), false, false),
+                (Some(0), false, true),
+                (Some(1), false, true),
+                (Some(2), false, true),
+                (Some(0), true, false),
+                (Some(0), true, true),
+                (None, false, false),
+            ] {
+                let mut c = base.clone();
+                layout.paint(&mut c, &accounts, 3, selected, back, usage_focus);
+                let mut y = 3;
+                for (i, a) in accounts.iter().enumerate() {
+                    let active = selected == Some(i) && !back;
+                    let dim_name = selected.is_some() && !back && !usage_focus && !active;
+                    let mut expected = base.clone();
+                    expected.accent_text(
+                        layout.left + 2,
+                        y,
+                        &short_name(&a.id),
+                        Accent {
+                            brightness: if dim_name { 600 } else { 1000 },
+                            bold: active && !usage_focus,
+                            ..Accent::default()
+                        },
+                    );
+                    let cell = y * 100 + layout.left + 2;
+                    assert_eq!(c.cells[cell], expected.cells[cell]);
+                    let usage = Usage::account(a);
+                    if usage.status_only() {
+                        let brightness = if usage_focus && !back && !active {
+                            600
+                        } else {
+                            1000
+                        };
+                        usage.paint_status(&mut expected, layout.bars, y, brightness);
+                        for x in
+                            layout.bars..layout.bars + usage.width(layout.bar_width, layout.digits)
+                        {
+                            assert_eq!(c.cells[y * 100 + x], expected.cells[y * 100 + x]);
+                            assert!(!c.cells[y * 100 + x].bold);
+                        }
+                    }
+                    y += usage.height() + 1;
+                }
+            }
+        }
+    }
     #[test]
     fn focused_bar_keeps_colors_and_dims_other_bars() {
         let u = Usage {
