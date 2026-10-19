@@ -435,10 +435,10 @@ impl App {
                     })
                     .collect()
             }
-            Page::Spaces => std::iter::once(Row::yes("Create new Space"))
+            Page::Spaces => std::iter::once(Row::yes("[create new space]"))
                 .chain(self.spaces.iter().map(|s| {
                     Row::yes(&s.label)
-                        .with_selected_preview(format!("[{}]", s.workspace_id))
+                        .with_selected_preview(format!("({})", s.workspace_id))
                         .preview_gap(1)
                 }))
                 .collect(),
@@ -2073,11 +2073,13 @@ mod tests {
         ];
         let rows = a.rows();
         assert!(rows.iter().all(|row| row.preview_column.is_none()));
+        assert_eq!(rows[0].label, "[create new space]");
+        assert_eq!(rows[1].preview.as_deref(), Some("(w1)"));
         for selected in [1, 2] {
             a.options.selected = selected;
             let mut field = Field::new(100, 24, 1);
             let c = a.paint(&mut field, 1000, 100, 24);
-            let index = c.cells.iter().position(|c| c.glyph == "[").unwrap();
+            let index = c.cells.iter().position(|c| c.glyph == "(").unwrap();
             assert_eq!(index / 100, 3 + selected);
             assert_eq!(
                 Some(index % 100),
@@ -2085,22 +2087,22 @@ mod tests {
             );
             assert_eq!(c.cells[index].fg, crate::widgets::SECONDARY);
             assert!(!c.cells[index].bold);
-            assert_eq!(c.cells.iter().filter(|c| c.glyph == "[").count(), 1);
+            assert_eq!(c.cells.iter().filter(|c| c.glyph == "(").count(), 1);
         }
         assert!(Options::previews_detached(36, &rows));
         a.options.selected = 1;
         let mut field = Field::new(36, 24, 1);
         let c = a.paint(&mut field, 1000, 36, 24);
-        let index = c.cells.iter().position(|c| c.glyph == "[").unwrap();
+        let index = c.cells.iter().position(|c| c.glyph == "(").unwrap();
         assert_eq!(index / 36, 7);
-        assert_eq!(index % 36, (36 - "[w1]".len()) / 2);
+        assert_eq!(index % 36, (36 - "(w1)".len()) / 2);
         a.options.back = true;
         let c = a.paint(&mut field, 1050, 36, 24);
-        assert!(c.cells.iter().all(|c| c.glyph != "["));
+        assert!(c.cells.iter().all(|c| c.glyph != "("));
         a.options.back = false;
         a.options.selected = 0;
         let c = a.paint(&mut field, 1100, 36, 24);
-        assert!(c.cells.iter().all(|c| c.glyph != "["));
+        assert!(c.cells.iter().all(|c| c.glyph != "("));
     }
     #[test]
     fn space_defaults_to_exact_focused_id_and_never_to_the_first_space() {

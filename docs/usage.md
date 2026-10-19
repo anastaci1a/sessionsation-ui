@@ -302,7 +302,8 @@ themes report an approximation because HERDR exposes no resolved-palette API.
 
 ## New session and directory flow
 
-Only the highlighted Space's `[id]` appears, one space after its name, unbolded
+The Space chooser starts with `[create new space]`.
+Only the highlighted Space's `(id)` appears, one space after its name, unbolded
 gray; Back focus hides it. If any ID
 cannot fit inline, the whole list uses the standard centered preview below the
 options or range counter, separated by one blank line.
