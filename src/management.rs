@@ -79,6 +79,7 @@ pub struct Manager {
     readiness: BTreeMap<String, Value>,
     pub active_operation: Option<String>,
     foreground: Option<u64>,
+    details_open: bool,
     observe_after: Option<std::time::Instant>,
 }
 impl Default for Manager {
@@ -104,6 +105,7 @@ impl Default for Manager {
             readiness: BTreeMap::new(),
             active_operation: None,
             foreground: None,
+            details_open: false,
             observe_after: None,
         }
     }
@@ -230,6 +232,7 @@ impl Manager {
         self.dialog = None;
         self.form = Form::None;
         self.foreground = None;
+        self.details_open = false;
         self.page = page;
         self.usage_focus = false;
         self.options = Options::default();
@@ -549,6 +552,7 @@ impl Manager {
         self.form = form;
     }
     fn mutate(&mut self, args: Vec<String>) -> Vec<Intent> {
+        self.details_open = false;
         self.dialog = Some(Dialog::progress("Operation progress"));
         self.form = Form::Progress;
         let request = self.request(args, Purpose::Mutation);
@@ -568,12 +572,16 @@ impl Manager {
         self.confirm("Switch account",vec![format!("Move {} to {} while retaining conversation history? The backend waits for safe idle; it never steers.",s["name"].as_str().unwrap_or("session"),account)],args);
     }
     fn dismiss(&mut self) {
-        if matches!(self.form, Form::Progress | Form::Operation(_)) && !self.usage_focus {
+        if matches!(self.form, Form::Progress | Form::Operation(_))
+            && !self.usage_focus
+            && !self.details_open
+        {
             self.go(Page::Home);
         }
         self.dialog = None;
         self.form = Form::None;
         self.foreground = None;
+        self.details_open = false;
     }
     fn confirm(&mut self, title: &str, body: Vec<String>, args: Vec<String>) {
         self.show(title, body, &["Confirm", "Cancel"], Form::Confirm(args));
@@ -868,6 +876,7 @@ impl Manager {
             }
             Page::Launch(kind, key) => {
                 if index == 0 {
+                    self.details_open = true;
                     return self.request(
                         strings(&[kind, "status", "--request-id", &key]),
                         Purpose::Launch(kind, key),
@@ -887,23 +896,26 @@ impl Manager {
                     return vec![];
                 };
                 match index {
-                    0 => self.show(
-                        if terminal(o["phase"].as_str().unwrap_or("")) {
-                            "Operation details"
-                        } else {
-                            "Operation progress"
-                        },
-                        vec![
-                            o["phase"].as_str().unwrap_or("unknown").into(),
-                            o["detail"].as_str().unwrap_or("").into(),
-                        ],
-                        &[if terminal(o["phase"].as_str().unwrap_or("")) {
-                            "Close"
-                        } else {
-                            "Continue in background"
-                        }],
-                        Form::Operation(key.clone()),
-                    ),
+                    0 => {
+                        self.details_open = true;
+                        self.show(
+                            if terminal(o["phase"].as_str().unwrap_or("")) {
+                                "Operation details"
+                            } else {
+                                "Operation progress"
+                            },
+                            vec![
+                                o["phase"].as_str().unwrap_or("unknown").into(),
+                                o["detail"].as_str().unwrap_or("").into(),
+                            ],
+                            &[if terminal(o["phase"].as_str().unwrap_or("")) {
+                                "Close"
+                            } else {
+                                "Continue in background"
+                            }],
+                            Form::Operation(key.clone()),
+                        );
+                    }
                     1 | 2 => self.confirm(
                         "Operation confirmation",
                         vec![
@@ -1129,7 +1141,7 @@ impl Manager {
                 self.retain_operation_focus(chosen);
             }
             Purpose::Launch(kind, key) => {
-                if self.page == Page::Launch(kind, key.clone()) {
+                if self.page == Page::Launch(kind, key.clone()) && self.details_open {
                     let body = vec![
                         format!("Request: {key}"),
                         format!("Status: {}", launch_status(&value)),
@@ -1552,6 +1564,42 @@ mod tests {
             m.page,
             Page::Launch("launch", "12345678-1234-4234-8234-123456789abc".into())
         );
+    }
+    #[test]
+    fn direct_operation_details_close_returns_to_submenu_without_reopening() {
+        let mut m = setup();
+        for phase in ["running", "complete"] {
+            m.go(Page::Operation("job".into()));
+            m.operations = vec![json!({"id":"job","phase":phase})];
+            m.activate();
+            assert!(m.dialog.is_some());
+            m.submit(0, vec![]);
+            assert_eq!(m.page, Page::Operation("job".into()));
+            assert_eq!(m.options.selected, 0);
+            assert!(m.dialog.is_none());
+        }
+        m.go(Page::Launch("launch", "req".into()));
+        let sent = m.activate();
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        m.response(token, Ok(json!({"phase":"running"})));
+        assert!(m.dialog.is_some());
+        m.submit(0, vec![]);
+        assert_eq!(m.page, Page::Launch("launch", "req".into()));
+        let sent = m.request(
+            strings(&["launch", "status"]),
+            Purpose::Launch("launch", "req".into()),
+        );
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        m.response(token, Ok(json!({"phase":"running"})));
+        assert!(m.dialog.is_none());
+        m.go(Page::Account("codex:account1".into()));
+        m.mutate(strings(&["account", "enable", "codex:account1"]));
+        m.submit(0, vec![]);
+        assert_eq!(m.page, Page::Home);
     }
     #[test]
     fn completed_progress_uses_close_and_loading_is_not_a_menu_option() {

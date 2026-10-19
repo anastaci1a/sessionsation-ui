@@ -2,7 +2,7 @@
 
 ## Rust popup
 
-The expanded popup passes **78 Rust tests** (76 unit tests and two tests covering
+The expanded popup passes **79 Rust tests** (77 unit tests and two tests covering
 21 complete cell goldens), Clippy with warnings denied, formatting, and **22 Node
 regressions**. Syntax, manifest fields and documentation links pass. The goldens
 exercise fixed time/seed/geometry, wide graphemes, text masks, disabled strike,
@@ -70,8 +70,9 @@ visible through the original request ID; no automatic retry or resource deletion
 is implemented. Continue in background detaches, not stops. Existing Agent DM pins,
 receipt semantics and sole-root ownership remain intact. Ana approved activation
 of the selected backend owner on the existing root; the original executable and
-startup configuration remain preserved. The final owner update retained all 22
-captured native process identities. No account was deleted. After reboot, an old
+startup configuration remain preserved. The latest owner update retained 26 of 27 captured native process identities;
+one codex process exited during the interval, without an agent-stop command. Its
+cause is not established. No account was deleted. After reboot, an old
 owner from the preserved startup configuration gates deletion until activation.
 
 `scripts/test-management.py --binary PATH` exercises compact bars/action groups,

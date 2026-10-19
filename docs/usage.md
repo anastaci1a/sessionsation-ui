@@ -81,7 +81,9 @@ Operations are newest-first by creation time; unknown legacy creation dates sort
 last. Status updates retain the selected ID. New/Resume launches display complete
 once creation is verified, independently of the agent continuing to run. Completed
 submenus offer Details, and completed dialogs offer Close (no period), updating on
-the one-second status poll.
+the one-second status poll. Closing Progress/Details opened from a dedicated
+operation submenu returns to that submenu and retains its selection; subsequent
+status polls do not reopen the dialog.
 Resume has editable account, Space and name, plus the saved read-only directory.
 It prefers a verified original Space, then current focus, otherwise unset. Changing
 account uses the backend safe transfer, preserving conversation history and ID.

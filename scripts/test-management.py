@@ -76,6 +76,9 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
  t=f.Terminal(root)
  try:
   t.wait('Manage Sessions');t.send(b'\x1b[B\r');t.wait('[new session]');time.sleep(.2);t.drain();t.send(b'\x1b[A');t.wait('Operations',selected=True);t.send(b'\r');t.wait('Resume');t.wait('complete')
+  t.send(b'\r');t.wait('Details',selected=True);t.send(b'\r');t.wait('Close',selected=True)
+  t.send(b'\r');t.wait('Details',selected=True);time.sleep(1.2);t.drain()
+  assert t.screen.contains('Details'),'status polling must not reopen dismissed details'
  finally:t.close()
  calls=[json.loads(line) for line in (root/'calls.jsonl').read_text().splitlines()]
  assert sum(c[:2]==['resume-launch','start'] for c in calls)==1
@@ -83,4 +86,4 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
  assert not any(c[:1]==['cancel-operation'] for c in calls)
  assert not any(c[0] in ['stop','restart','switch','send','submit','queue'] for c in calls)
  assert list((root/'projects').iterdir())==[]
-print(json.dumps({'passed':True,'models':0,'checks':['compact bars and separators','right-aligned mixed-window picker','saved selection never attaches','resume captures identity and fixes directory','background completion retains menu','reopened receipt without resend','TTY restoration']},indent=2))
+print(json.dumps({'passed':True,'models':0,'checks':['compact bars and separators','right-aligned mixed-window picker','saved selection never attaches','resume captures identity and fixes directory','background completion retains menu','reopened receipt without resend','details close returns to submenu and stays closed','TTY restoration']},indent=2))
