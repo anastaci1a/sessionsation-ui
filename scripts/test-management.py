@@ -76,7 +76,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
  t=f.Terminal(root)
  try:
   t.wait('Manage Sessions');t.send(b'\x1b[B\r');t.wait('[new session]');time.sleep(.2);t.drain();t.send(b'\x1b[A');t.wait('Operations',selected=True);t.send(b'\r');t.wait('Resume');t.wait('complete')
-  t.send(b'\r');t.wait('Details',selected=True);t.send(b'\r');t.wait('Close',selected=True)
+  t.send(b'\x1b[B');t.wait('Resume',selected=True);t.send(b'\r');t.wait('Details',selected=True);t.send(b'\r');t.wait('Close',selected=True)
   t.send(b'\r');t.wait('Details',selected=True);time.sleep(1.2);t.drain()
   assert t.screen.contains('Details'),'status polling must not reopen dismissed details'
  finally:t.close()

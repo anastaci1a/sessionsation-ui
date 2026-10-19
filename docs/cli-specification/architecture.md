@@ -96,7 +96,9 @@ replacement fades, masks and chooser/form keys. Reference source is attribution 
 behavior evidence; Rust implementation does not import its unlicensed source files.
 Fix pasted-newline activation, wide-text misalignment, tiny-window overlap, blocking
 reads and lost draft state. Staged mkdir, summary flow and full-height fixed stars
-are intentional adaptations. Tests separate reference geometry from target geometry.
+are intentional adaptations. Current text masks include internal spaces: baseline
+stars and transient twinkles never appear inside labels, input text or controls.
+Tests separate reference geometry from target geometry.
 
 ## Performance and verification
 

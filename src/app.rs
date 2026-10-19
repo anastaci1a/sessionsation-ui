@@ -1151,20 +1151,7 @@ impl App {
         } else {
             String::new()
         };
-        canvas.text(
-            1,
-            footer - 2,
-            &note,
-            Cell {
-                fg: if self.page == Page::Accounts && self.error.is_empty() {
-                    crate::widgets::SECONDARY
-                } else {
-                    [215, 135, 0]
-                },
-                ..Cell::default()
-            },
-            false,
-        );
+        crate::widgets::paint_status(&mut canvas, footer, &note);
         crate::widgets::paint_hints(&mut canvas, &hints);
         if self.launch_dialog
             && let Some(d) = &mut self.manager.dialog

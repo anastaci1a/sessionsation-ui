@@ -29,6 +29,7 @@ pub enum Rule {
     AccountName,
     Percentage,
     Name,
+    Rename(String),
     Exact(String),
 }
 #[derive(Clone, Debug)]
@@ -48,7 +49,7 @@ impl Field {
         }
     }
     pub fn validated(mut self, rule: Rule) -> Self {
-        if matches!(rule, Rule::AccountName | Rule::Name) {
+        if matches!(rule, Rule::AccountName | Rule::Name | Rule::Rename(_)) {
             self.input = self.input.limited(24);
         }
         self.rule = rule;
@@ -56,6 +57,9 @@ impl Field {
     }
     pub fn valid(&self) -> bool {
         let v = &self.input.value;
+        if matches!(&self.rule, Rule::Rename(original) if v == original) {
+            return true;
+        }
         if self.excluded.contains(v) {
             return false;
         }
@@ -71,7 +75,7 @@ impl Field {
                     && v.bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
             }
-            Rule::Name => {
+            Rule::Name | Rule::Rename(_) => {
                 !v.is_empty()
                     && v.trim() == v
                     && v.chars().count() <= 24

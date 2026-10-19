@@ -62,6 +62,11 @@ the dialog without cancelling or resending the operation. The CLI owns every
 preservation/deletion step. An older account owner gates deletion until explicitly
 updated; changing the popup's client binary alone does not replace that owner.
 
+Session Details opens from cached state immediately and refreshes on the one-second
+read-only state poll, retaining the last details during discovery failures. It does
+not use a stale generation for reads or weaken generation checks on mutations.
+Renaming to the existing name remains valid; other sessions’ names remain excluded.
+
 Manage Sessions selects an action menu, never implicitly attaches. Lifecycle
 actions carry the captured backend ID/generation. Stop, Restart, Switch, Disable
 and account deregistration/deletion require confirmation. Internal modal dialogs preserve their underlying
@@ -97,6 +102,11 @@ panel. Read-only state refreshes once per second, one request at a time; idle, e
 unknown activity or discovery failure removes the spinner. Inactive sessions show
 an accent asterisk directly after their account; their hover marker stays muted
 and unbolded. Timers use the normal deselected gray.
+
+Errors and status notices use a centered bottom line, separated from controls by
+one blank line. Menus reserve the status lane before calculating scroll capacity.
+A failed preview/mutation closes its waiting dialog and shows the error there,
+without an automatic retry.
 
 Bottom controls and pagination use readable gray. Held arrows stop at menu ends; release and press again to wrap. Terminals
 without repeat/release events use a 750 ms quiet gap to distinguish gestures.

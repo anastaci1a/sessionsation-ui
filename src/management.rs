@@ -4,7 +4,7 @@ use crate::{
     dialog::{self, Dialog, Field, Palette, Rule},
     render::{Canvas, Cell},
     usage::{AccountsLayout, Usage, short_name},
-    widgets::{Options, Row, clip, hint_lines},
+    widgets::{Options, Row, hint_lines},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
@@ -34,7 +34,6 @@ pub enum Intent {
 enum Purpose {
     State,
     Operations,
-    Details(String),
     Resume(String),
     Launches(&'static str),
     Launch(&'static str, String),
@@ -54,6 +53,7 @@ enum Form {
     Remove(Value),
     Delete(Value),
     Rename(Value),
+    SessionDetails(String),
     Confirm(Vec<String>),
     Progress,
     Operation(String),
@@ -538,6 +538,22 @@ impl Manager {
             self.refresh_sessions()
         }
     }
+    fn session_detail_lines(value: &Value) -> Vec<String> {
+        vec![
+            format!("Name: {}", value["name"].as_str().unwrap_or("")),
+            format!("Account: {}", value["account_id"].as_str().unwrap_or("")),
+            format!(
+                "Directory: {}",
+                value["directory"].as_str().unwrap_or("unavailable")
+            ),
+            format!("Session: {}", id(value)),
+            format!(
+                "Conversation: {}",
+                value["conversation_id"].as_str().unwrap_or("")
+            ),
+            format!("Generation: {}", value["generation"].as_str().unwrap_or("")),
+        ]
+    }
     fn target(s: &Value, command: &str) -> Vec<String> {
         strings(&[
             command,
@@ -811,11 +827,13 @@ impl Manager {
                 match action.unwrap_or(crate::session_list::Action::Unavailable) {
                     crate::session_list::Action::Focus => return vec![Intent::Focus(s)],
                     crate::session_list::Action::Details => {
-                        return self.preview(
+                        self.show(
                             "Session details",
-                            Self::target(&s, "session"),
-                            Purpose::Details(key),
+                            Self::session_detail_lines(&s),
+                            &["Close"],
+                            Form::SessionDetails(key),
                         );
+                        return self.refresh_sessions();
                     }
                     crate::session_list::Action::Rename => {
                         self.show(
@@ -826,7 +844,7 @@ impl Manager {
                         );
                         self.dialog.as_mut().unwrap().fields.push(
                             Field::new("Name", s["name"].as_str().unwrap_or(""))
-                                .validated(Rule::Name),
+                                .validated(Rule::Rename(s["name"].as_str().unwrap_or("").into())),
                         );
                         self.validate_dialog_names();
                     }
@@ -966,7 +984,7 @@ impl Manager {
         let form = self.form.clone();
         let value = |i: usize| values.get(i).map(String::as_str).unwrap_or("");
         let args = match form {
-            Form::None | Form::Progress | Form::Operation(_) => {
+            Form::None | Form::Progress | Form::Operation(_) | Form::SessionDetails(_) => {
                 self.dismiss();
                 return vec![];
             }
@@ -1062,11 +1080,7 @@ impl Manager {
         };
         if matches!(
             purpose,
-            Purpose::Remove(_)
-                | Purpose::Delete(_)
-                | Purpose::Limits(_)
-                | Purpose::Details(_)
-                | Purpose::Resume(_)
+            Purpose::Remove(_) | Purpose::Delete(_) | Purpose::Limits(_) | Purpose::Resume(_)
         ) && (self.foreground != Some(token) || !matches!(self.form, Form::Loading))
         {
             return vec![];
@@ -1080,14 +1094,13 @@ impl Manager {
                     }
                 }
                 self.note = e.clone();
-                if matches!(self.form, Form::Loading) && self.foreground == Some(token) {
-                    self.show("Could not load", vec![e.clone()], &["Close"], Form::None);
-                }
-                if matches!(purpose, Purpose::Mutation)
-                    && matches!(self.form, Form::Progress)
-                    && self.foreground == Some(token)
+                if self.foreground == Some(token)
+                    && matches!(self.form, Form::Loading | Form::Progress)
                 {
-                    self.show("Operation needs review",vec![e,"No automatic retry. Refresh and inspect the original operation before trying again.".into()],&["Close"],Form::None);
+                    self.dialog = None;
+                    self.form = Form::None;
+                    self.foreground = None;
+                    self.details_open = false;
                 }
                 return vec![];
             }
@@ -1131,6 +1144,14 @@ impl Manager {
                     self.options.selected = self.rows().len().saturating_sub(1);
                 }
                 self.capabilities = value["capabilities"].clone();
+                if let Form::SessionDetails(key) = &self.form
+                    && let Some(session) = self.session(key)
+                {
+                    let body = Self::session_detail_lines(session);
+                    if let Some(d) = &mut self.dialog {
+                        d.body = body;
+                    }
+                }
             }
             Purpose::Launches(kind) => {
                 let chosen = (self.page == Page::Operations)
@@ -1203,26 +1224,6 @@ impl Manager {
                     self.foreground = None;
                     return vec![Intent::Resume(value)];
                 }
-            }
-            Purpose::Details(key) => {
-                if self.page != Page::Session(key) {
-                    return vec![];
-                }
-                let body = vec![
-                    format!("Name: {}", value["name"].as_str().unwrap_or("")),
-                    format!("Account: {}", value["account_id"].as_str().unwrap_or("")),
-                    format!(
-                        "Directory: {}",
-                        value["directory"].as_str().unwrap_or("unavailable")
-                    ),
-                    format!("Session: {}", id(&value)),
-                    format!(
-                        "Conversation: {}",
-                        value["conversation_id"].as_str().unwrap_or("")
-                    ),
-                    format!("Generation: {}", value["generation"].as_str().unwrap_or("")),
-                ];
-                self.show("Session details", body, &["Close"], Form::None);
             }
             Purpose::Limits(key) => {
                 if self.page != Page::Account(key.clone())
@@ -1502,13 +1503,7 @@ impl Manager {
             }
         }
         if !self.note.is_empty() {
-            canvas.text(
-                1,
-                controls_start.saturating_sub(2),
-                &clip(&self.note, canvas.width.saturating_sub(2)),
-                Cell::default(),
-                false,
-            );
+            crate::widgets::paint_status(canvas, controls_start, &self.note);
         }
         crate::widgets::paint_hints(canvas, &hints);
         if let Some(d) = &mut self.dialog {
@@ -1564,6 +1559,118 @@ mod tests {
             m.page,
             Page::Launch("launch", "12345678-1234-4234-8234-123456789abc".into())
         );
+    }
+    #[test]
+    fn unchanged_rename_is_valid_but_other_names_and_generation_stay_checked() {
+        let mut m = setup();
+        let target = json!({"id":"one","name":"Existing name","generation":"captured","capabilities":{"rename":true}});
+        m.sessions = vec![target.clone(), json!({"id":"two","name":"Other name"})];
+        m.go(Page::Session("one".into()));
+        m.options.selected = 2;
+        m.activate();
+        assert!(m.dialog.as_ref().unwrap().fields[0].valid());
+        m.dialog.as_mut().unwrap().fields[0].input =
+            crate::widgets::TextInput::new("Other name".into());
+        assert!(!m.dialog.as_ref().unwrap().fields[0].valid());
+        m.dialog.as_mut().unwrap().fields[0].input =
+            crate::widgets::TextInput::new("Existing name".into());
+        assert!(m.dialog.as_ref().unwrap().fields[0].valid());
+        let sent = m.submit(0, vec!["Existing name".into()]);
+        let Intent::Api(_, args) = &sent[0] else {
+            panic!()
+        };
+        assert_eq!(
+            args,
+            &strings(&[
+                "rename",
+                "--session",
+                "one",
+                "--expected-generation",
+                "captured",
+                "--name",
+                "Existing name"
+            ])
+        );
+    }
+    #[test]
+    fn session_details_open_cached_and_update_without_generation_bound_reads() {
+        let mut m = setup();
+        m.sessions =
+            vec![json!({"id":"one","name":"Cached","generation":"old","directory":"/cached"})];
+        m.go(Page::Session("one".into()));
+        m.options.selected = 1;
+        let sent = m.activate();
+        assert!(
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .body
+                .iter()
+                .any(|s| s == "Name: Cached")
+        );
+        let Intent::Api(token, args) = &sent[0] else {
+            panic!()
+        };
+        assert_eq!(args, &strings(&["state"]));
+        m.response(*token,Ok(json!({"sessions":[{"id":"one","name":"Fresh","generation":"new","directory":"/fresh"}]})));
+        assert!(
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .body
+                .iter()
+                .any(|s| s == "Name: Fresh")
+        );
+        assert!(
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .body
+                .iter()
+                .any(|s| s == "Generation: new")
+        );
+        let sent = m.refresh_live();
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        m.response(token, Err("DISCOVERY_UNAVAILABLE".into()));
+        assert!(
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .body
+                .iter()
+                .any(|s| s == "Name: Fresh")
+        );
+        m.submit(0, vec![]);
+        assert_eq!(m.page, Page::Session("one".into()));
+    }
+    #[test]
+    fn stale_target_uses_centered_status_lane_and_reserves_menu_space() {
+        let mut m = setup();
+        m.page = Page::Accounts;
+        m.inventory((1..20).map(account).collect());
+        let sent = m.preview(
+            "Details",
+            strings(&["session"]),
+            Purpose::Limits("codex:account1".into()),
+        );
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        m.response(token, Err("STALE_TARGET".into()));
+        assert!(m.dialog.is_none());
+        let mut c = Canvas::new(40, 18);
+        m.paint_at(&mut c, 17, 100);
+        let y = 14; // Two wrapped control rows begin at 16.
+        let row = c.cells[y * 40..(y + 1) * 40]
+            .iter()
+            .map(|c| c.glyph.as_str())
+            .collect::<String>();
+        assert_eq!(row.trim(), "STALE_TARGET");
+        assert!(row.starts_with(&" ".repeat((40 - 12) / 2)));
+        assert!(m.options.scroll < m.rows().len());
+        assert!(c.cells.iter().any(|c| c.glyph == "1"));
     }
     #[test]
     fn direct_operation_details_close_returns_to_submenu_without_reopening() {

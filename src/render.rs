@@ -44,7 +44,7 @@ impl Canvas {
             foreground: vec![false; w * h],
         }
     }
-    pub fn text(&mut self, x: usize, y: usize, text: &str, style: Cell, transparent: bool) {
+    pub fn text(&mut self, x: usize, y: usize, text: &str, style: Cell, _transparent: bool) {
         if y >= self.height {
             return;
         }
@@ -60,12 +60,10 @@ impl Canvas {
             if x + width > self.width {
                 break;
             }
-            if transparent && glyph == " " {
+            if glyph == " " {
                 self.baseline_blocked[y * self.width + x] = true;
-                if !self.transient[y * self.width + x] {
-                    self.cells[y * self.width + x] = Cell::default();
-                }
-            } else {
+            }
+            {
                 self.foreground[y * self.width + x] = true;
                 self.cells[y * self.width + x] = Cell {
                     glyph: glyph.into(),
@@ -95,10 +93,8 @@ impl Canvas {
                     strike: accent.strike,
                     ..Cell::default()
                 });
-            // Hints retain transparent whitespace, including baseline stars.
-            if glyph != " " {
-                self.text(x, y, glyph, cell, false);
-            }
+            // Spaces belong to the label: neither baseline stars nor twinkles may occupy them.
+            self.text(x, y, glyph, cell, false);
             x += UnicodeWidthStr::width(glyph);
         }
     }
@@ -626,7 +622,7 @@ mod tests {
         assert!(!hint.bold);
     }
     #[test]
-    fn label_spaces_exclude_baseline_but_allow_twinkles_and_disabled_strike() {
+    fn label_spaces_mask_baseline_and_twinkles_and_preserve_disabled_strike() {
         let mut c = Canvas::new(3, 1);
         for cell in &mut c.cells {
             cell.glyph = "*".into();
@@ -634,7 +630,7 @@ mod tests {
         c.transient[1] = true;
         c.text(0, 0, "  ", Cell::default(), true);
         assert_eq!(c.cells[0].glyph, " ");
-        assert_eq!(c.cells[1].glyph, "*");
+        assert_eq!(c.cells[1].glyph, " ");
         c.text(
             2,
             0,
@@ -647,6 +643,16 @@ mod tests {
         );
         assert!(c.cells[2].strike);
         assert_eq!(c.cells[2].glyph, " ");
+    }
+    #[test]
+    fn accent_labels_mask_spaces_even_over_an_existing_twinkle() {
+        let mut c = Canvas::new(20, 2);
+        c.cells[5].glyph = "*".into();
+        c.transient[5] = true;
+        c.accent_text(0, 0, "Login required", Accent::default());
+        assert_eq!(c.cells[5].glyph, " ");
+        assert!(c.foreground[5]);
+        assert!(c.baseline_blocked[5]);
     }
     #[test]
     fn reference_curve_boundaries() {

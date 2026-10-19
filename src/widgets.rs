@@ -405,22 +405,28 @@ pub struct Options {
 
 /// Shared bottom hints: token wrapping never changes the star-field geometry.
 pub fn paint_hint(canvas: &mut Canvas, x: usize, y: usize, text: &str) {
-    let mut x = x;
-    for glyph in text.graphemes(true) {
-        if glyph != " " {
-            canvas.text(
-                x,
-                y,
-                glyph,
-                Cell {
-                    fg: SECONDARY,
-                    ..Cell::default()
-                },
-                false,
-            );
-        }
-        x += UnicodeWidthStr::width(glyph);
-    }
+    canvas.text(
+        x,
+        y,
+        text,
+        Cell {
+            fg: SECONDARY,
+            ..Cell::default()
+        },
+        false,
+    );
+}
+/// Shared one-line status lane with one blank row before the actual controls.
+pub fn paint_status(canvas: &mut Canvas, controls_start: usize, text: &str) {
+    let text = clip(text, canvas.width.saturating_sub(2));
+    let width = UnicodeWidthStr::width(text.as_str());
+    canvas.text(
+        canvas.width.saturating_sub(width) / 2,
+        controls_start.saturating_sub(2),
+        &text,
+        Cell::default(),
+        false,
+    );
 }
 pub fn paint_hints(canvas: &mut Canvas, hints: &[String]) {
     let width = hints
