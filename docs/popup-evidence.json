@@ -2,13 +2,13 @@
   "schema_version": 1,
   "scope": "Rust account/session popup; synthetic model-free acceptance plus explicitly approved existing-root owner activation; no Agent DM cutover",
   "source": {
-    "ui": "31e73ac095f954e3aaa9ea54794b4b32223c5a0a",
+    "ui": "3911824f7f4b9f507b27cd369b8f868f6620192f",
     "backend": "aea768160343b21e575e12394c5662f049d50433",
     "supervisor": "528d3696b43ba34b28a408d5e328841e5f52ccc4"
   },
   "checks": {
     "rust": {
-      "unit_passed": 103,
+      "unit_passed": 105,
       "visual_snapshot_test_passed": 2,
       "golden_frames": 21,
       "failed": 0,
@@ -98,13 +98,13 @@
   "herdr": {
     "keybind_startup": {
       "samples": 20,
-      "p50_ms": 175.33917492255569,
-      "p95_ms": 180.3226500051096,
-      "max_ms": 180.3226500051096
+      "p50_ms": 173.98429999593645,
+      "p95_ms": 187.65283899847418,
+      "max_ms": 187.65283899847418
     },
-    "first_press_ms": 8.060566964559257,
+    "first_press_ms": 12.472485890612006,
     "installed_herdr": "0.9.5",
-    "plugin_to_first_paint_ms": 286.8414510739967,
+    "plugin_to_first_paint_ms": 287.36305399797857,
     "popup_size": [
       117,
       28
@@ -123,15 +123,11 @@
       "exact name/account",
       "focus then popup exit",
       "second popup cancel preserves new terminal",
-      "origin shell unchanged"
+      "origin shell unchanged",
+      "boundary-origin hold wraps once then clamps without release"
     ],
     "models": 0,
-    "source_ui": "694940403344f7b7dd231abb96460e6d356cf7f5",
-    "mixed_event_regression": {
-      "previous_source": "b7346ba276f0c2a899c67f944874eef29579d312",
-      "previous_result": "Failed to stay at last account on ordinary arrow burst after enhanced events",
-      "current_result": "Pass: both boundaries clamp; matching release and fresh press wrap; unrelated release does not rearm"
-    }
+    "source_ui": "3911824f7f4b9f507b27cd369b8f868f6620192f"
   },
   "frames": [
     {
@@ -237,5 +233,15 @@
       "failure": 987.7
     },
     "source_ui": "694940403344f7b7dd231abb96460e6d356cf7f5"
+  },
+  "navigation": {
+    "core": "src/navigation.rs",
+    "axes": [
+      "vertical",
+      "horizontal"
+    ],
+    "native_events": "Immediate first movement; edge-origin wrap consumed on crossing; release rearms",
+    "legacy_fallback_ms": 150,
+    "limitation": "Press-only byte streams cannot distinguish physical release from repeat-delay or transport pauses; fallback is estimated, not exact"
   }
 }
