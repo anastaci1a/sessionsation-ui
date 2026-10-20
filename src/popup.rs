@@ -53,7 +53,10 @@ impl Panel {
             self.x + 1,
             self.y,
             &clip(title, self.width - 2),
-            border,
+            Cell {
+                bold: true,
+                ..style
+            },
             false,
         );
     }
@@ -270,7 +273,7 @@ pub fn paint_choices(
                     fg: if view.note_accent {
                         palette.accent
                     } else {
-                        crate::widgets::SECONDARY
+                        palette.secondary
                     },
                     ..style.clone()
                 },
@@ -315,12 +318,10 @@ pub fn paint_sized(
         width,
         height,
     };
-    let hint_theme = canvas.theme.clone();
     canvas.overlay(|canvas| {
         panel.frame(canvas, title, palette);
         let mut local = Canvas::new(width - 4, height - 2);
-        local.static_accent = Some(palette.accent);
-        local.hint_theme = hint_theme.map(|theme| (theme, panel.x + 2, panel.y + 1));
+        local.popup_palette = Some(palette.clone());
         content(&mut local);
         for row in 0..local.height {
             for col in 0..local.width {
@@ -574,7 +575,7 @@ mod tests {
         }
     }
     #[test]
-    fn directory_controls_reuse_original_soft_colors_at_their_global_coordinates() {
+    fn directory_controls_use_host_text_independent_of_animation_and_coordinates() {
         use crate::{
             render::Field,
             widgets::{Options, Row},
@@ -609,11 +610,16 @@ mod tests {
                     + (size.width - 4 - unicode_width::UnicodeWidthStr::width(hint)) / 2;
                 let y = (30 - size.height) / 2 + size.height - 2;
                 assert_eq!(c.cells[y * width + x].glyph, "◀");
-                let mut expected = field.paint(now);
-                crate::widgets::paint_hint(&mut expected, x, y, hint);
                 for col in x..x + unicode_width::UnicodeWidthStr::width(hint) {
                     let cell = &c.cells[y * width + col];
-                    assert_eq!(cell.fg, expected.cells[y * width + col].fg);
+                    assert_eq!(
+                        cell.fg,
+                        if col < x + 3 {
+                            palette.text
+                        } else {
+                            palette.muted
+                        }
+                    );
                     assert_eq!(cell.bg, Some(palette.panel));
                     assert!(!cell.bold);
                 }

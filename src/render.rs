@@ -30,9 +30,8 @@ pub struct Canvas {
     pub theme: Option<Theme>,
     /// Native terminal cursor, in zero-based cells; no shape/color override.
     pub cursor: Option<(usize, usize)>,
-    pub static_accent: Option<[u8; 3]>,
-    /// Original menu theme and coordinates for soft popup controls only.
-    pub hint_theme: Option<(Theme, usize, usize)>,
+    /// Semantic host colors scoped to popup composition; never animate these.
+    pub popup_palette: Option<crate::dialog::Palette>,
     background: Option<[u8; 3]>,
     transient: Vec<bool>,
     baseline_blocked: Vec<bool>,
@@ -46,8 +45,7 @@ impl Canvas {
             cells: vec![Cell::default(); w * h],
             theme: None,
             cursor: None,
-            static_accent: None,
-            hint_theme: None,
+            popup_palette: None,
             background: None,
             transient: vec![false; w * h],
             baseline_blocked: vec![false; w * h],
@@ -101,35 +99,44 @@ impl Canvas {
             x += width;
         }
     }
+    /// Resolve generic widget roles before drawing; explicit host RGB colors stay literal.
+    pub fn widget_text(&mut self, x: usize, y: usize, text: &str, style: Cell, transparent: bool) {
+        let style = if let Some(p) = &self.popup_palette {
+            Cell {
+                fg: match style.fg {
+                    crate::widgets::SELECTED => p.text,
+                    crate::widgets::SECONDARY => p.secondary,
+                    crate::widgets::MUTED => p.muted,
+                    [215, 0, 0] => p.error,
+                    other => other,
+                },
+                ..style
+            }
+        } else {
+            style
+        };
+        self.text(x, y, text, style, transparent);
+    }
     pub fn accent_text(&mut self, x: usize, y: usize, text: &str, accent: Accent) {
         let mut x = x;
         for glyph in text.graphemes(true) {
-            let hint = if accent.soft {
-                self.hint_theme
-                    .as_ref()
-                    .map(|(t, ox, oy)| t.accent(x + ox, y + oy, &accent))
-            } else {
-                None
-            };
-            let cell = hint
-                .or_else(|| self.theme.as_ref().map(|t| t.accent(x, y, &accent)))
-                .unwrap_or_else(|| Cell {
-                    fg: self
-                        .static_accent
-                        .map(|color| {
-                            if accent.soft {
-                                [215, 135, 255]
-                            } else {
-                                color.map(|v| {
-                                    (i64::from(v) * accent.brightness / 1000).clamp(0, 255) as u8
-                                })
-                            }
-                        })
-                        .unwrap_or([215, 135, 255]),
+            let cell = if let Some(p) = &self.popup_palette {
+                Cell {
+                    fg: if accent.soft { p.text } else { p.accent },
                     bold: accent.bold,
                     strike: accent.strike,
                     ..Cell::default()
-                });
+                }
+            } else if let Some(theme) = &self.theme {
+                theme.accent(x, y, &accent)
+            } else {
+                Cell {
+                    fg: [215, 135, 255],
+                    bold: accent.bold,
+                    strike: accent.strike,
+                    ..Cell::default()
+                }
+            };
             // Spaces belong to the label: neither baseline stars nor twinkles may occupy them.
             self.text(x, y, glyph, cell, false);
             x += UnicodeWidthStr::width(glyph);

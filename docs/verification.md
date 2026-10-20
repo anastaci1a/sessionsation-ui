@@ -147,10 +147,11 @@ unrelated release handling, one-wrap permission, and Home/End synchronization.
 The isolated HERDR test exercises both delayed-repeat directions through the
 actual host encoder. Session marker regressions keep the collapsed asterisk in
 normal deselected gray while `(inactive)` retains its darker gray. Popup controls
-are checked against the original soft menu renderer at their global coordinates
-across multiple times and sizes; each wrapped control line centers independently.
-Directory navigation/ranges and dialog scroll hints stay colored and unbolded,
-while panel backgrounds remain opaque and choice colors remain flat.
+are checked for stable HERDR palette roles across multiple times and sizes;
+each wrapped control line centers independently. Dark/light theme regressions
+cover primary, secondary, muted and error roles, with explicit custom RGB
+coverage. Control keys use main text, descriptions use muted text, and counters
+use secondary text; all stay unbolded on opaque panels while the menu animates.
 Archived IDs retain gray/unbolded parenthesized previews with a list-wide fit
 decision, including offscreen rows. Selection/switch tests bind visible account
 rows to stable IDs and retain Cancel through inventory growth. Other

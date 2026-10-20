@@ -12,6 +12,9 @@ pub struct Palette {
     pub accent: [u8; 3],
     pub panel: [u8; 3],
     pub text: [u8; 3],
+    pub secondary: [u8; 3],
+    pub muted: [u8; 3],
+    pub error: [u8; 3],
 }
 impl Default for Palette {
     fn default() -> Self {
@@ -19,6 +22,9 @@ impl Default for Palette {
             accent: [255, 193, 140],
             panel: [16; 3],
             text: [255; 3],
+            secondary: [188; 3],
+            muted: [108; 3],
+            error: INVALID,
         }
     }
 }
@@ -73,7 +79,11 @@ impl Field {
             ..Cell::default()
         };
         let field_style = Cell {
-            fg: if self.valid() { palette.text } else { INVALID },
+            fg: if self.valid() {
+                palette.text
+            } else {
+                palette.error
+            },
             ..style.clone()
         };
         let label = clip(&format!(" {} ", self.label), width - 4);
@@ -104,9 +114,9 @@ impl Field {
             for col in x..x + width {
                 let cell = &mut canvas.cells[(y + 1) * canvas.width + col];
                 if cell.bg.is_some_and(|bg| bg != palette.panel) {
-                    cell.bg = Some(INVALID);
+                    cell.bg = Some(palette.error);
                 } else {
-                    cell.fg = INVALID;
+                    cell.fg = palette.error;
                 }
             }
         }
@@ -382,6 +392,7 @@ impl Dialog {
             );
             return;
         }
+        let previous_palette = canvas.popup_palette.replace(palette.clone());
         let x = (canvas.width - width) / 2;
         let y = (canvas.height - height) / 2;
         let body_height = height.saturating_sub(reserved).max(1);
@@ -470,6 +481,7 @@ impl Dialog {
                 }
             }
         }
+        canvas.popup_palette = previous_palette;
     }
 }
 /// Prefer a space or dash; split a token only when the token exceeds the viewport.
@@ -653,7 +665,7 @@ mod tests {
         assert!(matches!(d.key(enter()), Event::Choose(0, _)));
     }
     #[test]
-    fn dialog_hints_are_centered_in_the_original_soft_accent_when_the_menu_animates() {
+    fn dialog_hints_are_centered_and_theme_text_stays_stable_while_menu_animates() {
         let mut d = Dialog::new(
             "Confirm",
             (0..50).map(|i| format!("History row {i}")).collect(),
@@ -669,9 +681,7 @@ mod tests {
             let hint = "PgUp/PgDn: Scroll";
             let x = (80 - size.width) / 2 + 2 + (size.width - 4 - hint.len()) / 2;
             assert_eq!(index % 80, x);
-            let mut expected = field.paint(now);
-            crate::widgets::paint_hint(&mut expected, x, index / 80, hint);
-            assert_eq!(cell.fg, expected.cells[index].fg);
+            assert_eq!(cell.fg, Palette::default().text);
             assert_ne!(cell.fg, crate::widgets::SECONDARY);
             assert!(!cell.bold);
             assert_eq!(cell.bg, Some(Palette::default().panel));

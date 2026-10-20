@@ -125,7 +125,7 @@ impl TextInput {
                 (*used <= width - 2 - elided).then_some(g)
             })
             .collect();
-        canvas.text(
+        canvas.widget_text(
             x,
             y,
             &format!("> {}{visible}", if elided > 0 { "…" } else { "" }),
@@ -138,7 +138,7 @@ impl TextInput {
                 .graphemes(true)
                 .next()
                 .unwrap_or(" ");
-            canvas.text(cursor, y, glyph, style, false);
+            canvas.widget_text(cursor, y, glyph, style, false);
             canvas.cursor = Some((cursor, y));
         }
     }
@@ -335,7 +335,7 @@ impl Row {
                 row.status = None;
                 row.label = ellipsize(&row.label, start.saturating_sub(x + 3));
                 let mut left = Canvas::new(start - 1, 1);
-                left.static_accent = canvas.static_accent;
+                left.popup_palette = canvas.popup_palette.clone();
                 row.paint_with_preview(&mut left, x, 0, selected, back, show_preview);
                 for (col, cell) in left.cells.into_iter().enumerate() {
                     canvas.cells[y * canvas.width + col] = cell;
@@ -352,7 +352,7 @@ impl Row {
                         },
                     );
                 } else {
-                    canvas.text(
+                    canvas.widget_text(
                         start,
                         y,
                         status,
@@ -376,8 +376,8 @@ impl Row {
                     ..Accent::default()
                 },
             );
-            canvas.text(x + 1, y, " ", Cell::default(), true);
-            canvas.text(
+            canvas.widget_text(x + 1, y, " ", Cell::default(), true);
+            canvas.widget_text(
                 x + 2,
                 y,
                 &self.label,
@@ -419,7 +419,7 @@ impl Row {
                 ..Accent::default()
             },
         );
-        canvas.text(x + 1, y, " ", Cell::default(), true);
+        canvas.widget_text(x + 1, y, " ", Cell::default(), true);
         if self.account {
             canvas.accent_text(
                 x + 2,
@@ -432,7 +432,7 @@ impl Row {
                 },
             );
         } else {
-            canvas.text(
+            canvas.widget_text(
                 x + 2,
                 y,
                 &self.label,
@@ -495,7 +495,7 @@ impl Row {
                 },
             );
         } else {
-            canvas.text(
+            canvas.widget_text(
                 x,
                 y,
                 preview,
@@ -521,6 +521,43 @@ pub struct Options {
 
 /// Shared bottom hints: token wrapping never changes the star-field geometry.
 pub fn paint_hint(canvas: &mut Canvas, x: usize, y: usize, text: &str) {
+    if let Some(palette) = canvas.popup_palette.clone() {
+        if let Some((keys, action)) = text.split_once(": ") {
+            let key_width = UnicodeWidthStr::width(keys);
+            canvas.text(
+                x,
+                y,
+                keys,
+                Cell {
+                    fg: palette.text,
+                    ..Default::default()
+                },
+                false,
+            );
+            canvas.text(
+                x + key_width,
+                y,
+                &format!(": {action}"),
+                Cell {
+                    fg: palette.muted,
+                    ..Default::default()
+                },
+                false,
+            );
+        } else {
+            canvas.text(
+                x,
+                y,
+                text,
+                Cell {
+                    fg: palette.secondary,
+                    ..Default::default()
+                },
+                false,
+            );
+        }
+        return;
+    }
     canvas.accent_text(
         x,
         y,
@@ -579,7 +616,7 @@ pub fn paint_status_colored(canvas: &mut Canvas, controls_start: usize, text: &s
             },
         );
     } else {
-        canvas.text(x, y, &text, Cell::default(), false);
+        canvas.widget_text(x, y, &text, Cell::default(), false);
     }
 }
 pub fn paint_hints(canvas: &mut Canvas, hints: &[String]) {
@@ -885,7 +922,7 @@ impl Options {
         } else {
             (left.saturating_sub(3), "◀—")
         };
-        canvas.text(
+        canvas.widget_text(
             x,
             top,
             text,

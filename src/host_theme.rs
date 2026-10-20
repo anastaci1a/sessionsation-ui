@@ -50,6 +50,9 @@ pub fn parse(text: &str) -> Result<(Palette, Option<String>)> {
         accent: rgb("accent")?,
         panel: rgb("panel_bg")?,
         text: rgb("text")?,
+        secondary: rgb("subtext0")?,
+        muted: rgb("overlay0")?,
+        error: rgb("red")?,
     };
     let mut unsupported = false;
     if let Some(custom) = theme.and_then(|t| t.get("custom")) {
@@ -57,6 +60,9 @@ pub fn parse(text: &str) -> Result<(Palette, Option<String>)> {
             ("accent", &mut palette.accent),
             ("panel_bg", &mut palette.panel),
             ("text", &mut palette.text),
+            ("subtext0", &mut palette.secondary),
+            ("overlay0", &mut palette.muted),
+            ("red", &mut palette.error),
         ] {
             if let Some(value) = custom.get(key) {
                 if let Some(value) = color(value) {
@@ -83,6 +89,69 @@ pub fn load() -> Result<(Palette, Option<String>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn popup_roles_match_dark_light_and_custom_host_tokens() {
+        for (name, panel, text, secondary, muted) in [
+            (
+                "rose-pine",
+                [25, 23, 36],
+                [224, 222, 244],
+                [200, 197, 220],
+                [110, 106, 134],
+            ),
+            (
+                "catppuccin-latte",
+                [239, 241, 245],
+                [76, 79, 105],
+                [108, 111, 133],
+                [156, 160, 176],
+            ),
+        ] {
+            let (p, notice) = parse(&format!("[theme]\nname='{name}'")).unwrap();
+            assert!(notice.is_none());
+            assert_eq!(
+                (p.panel, p.text, p.secondary, p.muted),
+                (panel, text, secondary, muted)
+            );
+            let mut c = crate::render::Canvas::new(40, 12);
+            crate::popup::paint(&mut c, "Roles", &p, 10, |local| {
+                for (y, fg) in [
+                    (0, crate::widgets::SELECTED),
+                    (1, crate::widgets::SECONDARY),
+                    (2, crate::widgets::MUTED),
+                    (3, [215, 0, 0]),
+                ] {
+                    local.widget_text(
+                        0,
+                        y,
+                        "X",
+                        crate::render::Cell {
+                            fg,
+                            ..Default::default()
+                        },
+                        false,
+                    );
+                }
+                crate::widgets::paint_hint(local, 0, 4, "Enter: Choose");
+            });
+            let colors: Vec<_> = c
+                .cells
+                .iter()
+                .filter(|c| c.glyph == "X")
+                .map(|c| c.fg)
+                .collect();
+            assert_eq!(colors, vec![p.text, p.secondary, p.muted, p.error]);
+            assert!(
+                c.popup_palette.is_none(),
+                "popup roles must not leak into the menu"
+            );
+        }
+        let (p, _) = parse("[theme]\nname='rose-pine'\n[theme.custom]\nsubtext0='#123456'\noverlay0='#234567'\nred='#345678'\ntext='#456789'").unwrap();
+        assert_eq!(p.secondary, [18, 52, 86]);
+        assert_eq!(p.muted, [35, 69, 103]);
+        assert_eq!(p.error, [52, 86, 120]);
+        assert_eq!(p.text, [69, 103, 137]);
+    }
     #[test]
     fn selected_theme_custom_overrides_and_dynamic_fallback_are_explicit() {
         let (p, n) = parse("[theme]\nname='vesper'\n[theme.custom]\naccent='#123456'\n").unwrap();

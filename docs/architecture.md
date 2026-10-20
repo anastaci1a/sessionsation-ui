@@ -63,9 +63,12 @@ Its reusable components are:
   90% height, independently of path length. Popup rows reuse the frame’s outer padding; borderless previews
   own one edge cell. Space IDs and archived IDs retain the list-wide
   inline/detached fit rule; persistent account statuses always stay inline.
-  Popup soft controls inherit the original menu theme with translated coordinates;
-  ordinary fields/options retain flat palette colors. Shared centered hints preserve
-  opaque panel backgrounds. Compositing translates the native cursor and keeps
+  All popup templates use HERDR semantic colors: `panel_bg` for the surface,
+  `accent` for borders/actions, `text` for primary text and control keys,
+  `subtext0` for secondary information/counters, `overlay0` for muted labels
+  and control descriptions, and `red`
+  for invalid input. These roles stay flat while the main menu animates.
+  Shared centered hints preserve opaque panel backgrounds. Compositing translates the native cursor and keeps
   background star lifetimes independent.
 - `dialog`: shared one/multiple-field forms, confirmations, information and
   progress. The same boxed editor paints session/account names and directory
