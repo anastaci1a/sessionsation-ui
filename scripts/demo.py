@@ -157,7 +157,10 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-demo-') as tmp:
         mark('Normal-tab handoff: inert shell, no provider'); pump(3)
         host('tab', 'focus', origin['tab']['tab_id'])
         host('tab', 'close', receipt['tab_id'])
-        pump(.3); os.write(master, b'\x02L'); wait('Settings'); wait('personal'); pump(.7)
+        # After programmatic refocus, invoke through the host API rather than racing
+        # the client's prefix/focus repaint. The opening shortcut is exercised above.
+        host('plugin', 'action', 'invoke', 'sessionsation.launcher')
+        wait('Settings'); wait('personal'); pump(.7)
         # Repeat the genuine initial terminal stream for a stable, clean loop seam.
         events.append([round(time.monotonic()-start, 5), 'o', '\x1b[0m\x1b[2J\x1b[H'+first])
         cast = output/'demo.cast'
