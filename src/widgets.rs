@@ -822,28 +822,27 @@ impl Options {
             return self.paint_menu(canvas, rows, top, bottom, controls_start);
         }
         let end = rows.len() - 2;
+        let note_rows = bottom.saturating_sub(controls_start.saturating_sub(1));
+        let capacity = bottom.saturating_sub(top + 2 + note_rows).min(end);
         let mut body = self.clone();
         if self.selected >= end {
             body.selected = usize::MAX;
         }
-        let (left, capacity) = body.paint_menu(
-            canvas,
-            &rows[..end],
-            top,
-            bottom - 2,
-            controls_start.saturating_sub(2),
-        );
+        // Range and spacer share a row; the body does not reserve another one.
+        let (left, _) = body.paint(canvas, &rows[..end], top, top + capacity);
         self.scroll = body.scroll;
-        self.preview_visible = body.preview_visible;
+        self.preview_visible = false;
+        let footer_top = top + capacity + note_rows;
         for (i, row) in rows[end..].iter().enumerate() {
             row.paint(
                 canvas,
                 left,
-                bottom - 2 + i,
+                footer_top + i,
                 self.selected == end + i && !self.back,
                 self.back,
             );
         }
+        body.paint_range(canvas, end, capacity, footer_top);
         (left, capacity + 2)
     }
     pub fn paint_range(&self, canvas: &mut Canvas, count: usize, capacity: usize, y: usize) {
@@ -973,10 +972,45 @@ mod tests {
         o.boundary(&rows, false, true);
         let bottom = paint(&mut o);
         assert!(!bottom.iter().any(|l| l.contains("[use this directory]")));
-        assert!(bottom.iter().any(|l| l.contains("directory29/")));
+        assert!(bottom[17].contains("directory29/"));
+        assert!(bottom[18].contains(" of "));
         assert!(bottom[18].contains('•') && bottom[19].contains("Cancel"));
         o.step(&rows, false, false);
         assert!(paint(&mut o)[1].contains("[use this directory]"));
+    }
+    #[test]
+    fn footer_connects_to_short_and_empty_directory_lists_without_an_unused_gap() {
+        for children in [vec![Row::placeholder("(none)")], vec![Row::yes("child/")]] {
+            let rows = crate::popup::with_cancel(
+                [Row::yes("[use this directory]"), Row::yes("<new>/")]
+                    .into_iter()
+                    .chain(children),
+            );
+            for selected in [0, 2, 4] {
+                let mut options = Options {
+                    selected,
+                    ..Options::default()
+                };
+                let mut c = Canvas::new(60, 24);
+                options.paint_footer_menu(&mut c, &rows, 1, 20, 21);
+                let line = |y: usize| {
+                    c.cells[y * 60..(y + 1) * 60]
+                        .iter()
+                        .map(|c| c.glyph.as_str())
+                        .collect::<String>()
+                };
+                assert!(line(3).contains(&rows[2].label));
+                assert!(line(4).contains('•'));
+                assert!(line(5).contains("Cancel"));
+                assert!(
+                    !c.cells
+                        .iter()
+                        .map(|c| c.glyph.as_str())
+                        .collect::<String>()
+                        .contains(" of ")
+                );
+            }
+        }
     }
     #[test]
     fn persistent_status_takes_priority_over_usage_at_narrow_widths() {

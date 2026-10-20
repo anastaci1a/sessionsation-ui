@@ -1982,7 +1982,7 @@ mod tests {
         assert_eq!(loading, create + 2);
         let cancel = lines.iter().position(|s| s.contains("Cancel")).unwrap();
         assert!(cancel > loading);
-        assert_eq!(cancel, (30 - size.height) / 2 + size.height - 3);
+        assert_eq!(cancel, loading + 2);
         assert_eq!(a.popup_size.as_ref().unwrap().1.height, size.height);
         a.listing(
             a.revision,

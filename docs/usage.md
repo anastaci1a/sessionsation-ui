@@ -87,7 +87,7 @@ and selected previews can move below them. Action groups use sentence case and a
 blank bullet spacer. Choice pickers end with Cancel after exactly one bullet
 spacer; it follows the last choice directly rather than the bottom of the frame.
 Choice lists scroll together. The directory picker alone mounts Cancel and its
-bullet spacer at the bottom; all actions above it scroll away. Directory actions
+bullet spacer at the list’s bottom; all actions above it scroll away. Directory actions
 use `[use this directory]`, `[leave unset]` and `<new>/`; Space creation uses
 `[create new space]`. Space creation is the first row,
 with Space choices immediately after it. Account selection opens on
@@ -386,7 +386,10 @@ selects the current option. In an unfamiliar directory, focus starts on the firs
 subdirectory, or the non-activating `(none)` placeholder when empty; revisiting restores its selection.
 [use this directory], [leave unset] (for defaults) and <new>/ start the scrolling
 list, immediately followed by subdirectories without a bullet spacer. Cancel and
-its one bullet spacer remain fixed below the scrolling list and range counter.
+its one bullet spacer stay attached to the visible list. Scrolling lists put the
+centered range counter on that same spacer row, followed immediately by Cancel.
+Short lists place the spacer and Cancel directly after the last item, with no
+unused gap; the footer remains visible while the list scrolls.
 Left on `(none)` navigates to the parent; Enter does nothing. Actions can scroll
 out of view at every terminal size. Directory popup dimensions stay fixed through
 browsing and path editing, with equal outer padding above and below. Wraparound

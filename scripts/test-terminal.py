@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
   lines=[''.join(r) for r in t.screen.grid]
   last=next(i for i,l in enumerate(lines) if 'dir39/' in l)
   cancel=next(i for i,l in enumerate(lines) if 'Cancel' in l)
-  assert cancel==last+3 and '•' in lines[cancel-1] and ' of ' in lines[cancel-2], 'Cancel and spacer must follow the scrolling range'
+  assert cancel==last+2 and '•' in lines[cancel-1] and ' of ' in lines[cancel-1], 'Range and bullet must share the single spacer above Cancel'
   t.send(b'\x1b[B');t.wait('[use this directory]',selected=True);t.wait('dir00/');t.drain()
   assert not t.screen.contains('dir39/')
   assert t.screen.contains('Cancel'), 'Cancel scrolled away at the top'

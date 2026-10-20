@@ -91,7 +91,7 @@ cp .demo/output/demo.gif docs/assets/demo.gif
 npm run check
 ```
 
-The checked-in demo is about 1.1 MiB, 46 seconds and 312 frames at a 10 FPS cap;
+The checked-in demo is about 1.2 MiB, 46 seconds and 315 frames at a 10 FPS cap;
 its 128×40 terminal renders to 1096×718 pixels. It shows bars/limits, session
 activity/details, the staged directory picker and an inert normal-tab handoff.
 The contact sheet and loop seam were inspected before README promotion. No real
@@ -107,7 +107,7 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 ## Verification record and limits
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **181 Rust tests** (179 unit and two visual tests covering
+passed formatting, Clippy, **182 Rust tests** (180 unit and two visual tests covering
 25 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
@@ -121,10 +121,8 @@ tests cover editor focus, Unicode positions, overlay ownership and visibility
 without shape/color changes or per-frame visibility toggling. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
-The README capture uses SHA-256
-`2e290aef4d141ec4ef1a0374eab1f64b26b42879d94e6efa67934c10c9794ec4`;
-the final tested release uses
-`b19aae115595a3aca92ee7eec0b8f3d9ce4008753c846e0b4ff4ff4590595f41`.
+The README capture and tested release both use SHA-256
+`2f84d7820ef040a5c8245d544811999242ca85f041ca3b48fc295021935fa90e`.
 Cell regressions verify that Account and Space opening sentences end one space
 before the border. Every visible account has a persistent, unbolded inline status,
 including unselected rows and updates received while Cancel is selected. Ready
@@ -137,7 +135,8 @@ restoration, native cursor ownership, locked open geometry, loading-to-confirmat
 transitions and progress completion. Long paths scroll with a leading ellipsis.
 Directory tests cover its explicit two-line description, second-line maximum
 width, 90% height, equal vertical margins, no spacer after the top action rows,
-scrollaway actions and a mounted Cancel/spacer footer. Empty directories retain
+scrollaway actions and an attached Cancel/spacer footer. Range and bullet share
+one row; short and empty lists have no unused gap before Cancel. Empty directories retain
 the non-activating `(none)` row and Left-to-parent. An unnamed session opens the
 configured projects root instead of HERDR’s Space directory, without creating
 anything or adding the Space label. Native and legacy navigation tests cover a

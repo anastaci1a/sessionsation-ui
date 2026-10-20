@@ -256,7 +256,7 @@ pub fn paint_choices(
                     .len()
                     .saturating_sub(footer)
                     .min(capacity.saturating_sub(footer))
-                + usize::from(view.rows.len() > capacity)
+                + usize::from(footer == 0 && view.rows.len() > capacity)
                 + 1;
             let (x, y) = (
                 (local.width.saturating_sub(view.note.chars().count())) / 2,
