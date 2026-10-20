@@ -1589,7 +1589,7 @@ New directories are created only when the session starts."
                 false,
             );
             if height > 1 {
-                canvas.text(0, 1, "Esc: Back / close", white, false);
+                crate::widgets::paint_centered_hint(canvas, 0, 1, width, "Esc: Back / close");
             }
             return;
         }

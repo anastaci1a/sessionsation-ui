@@ -278,15 +278,12 @@ pub fn paint_choices(
             );
         }
         if view.browse_hint {
-            local.text(
+            crate::widgets::paint_centered_hint(
+                local,
                 0,
                 local.height.saturating_sub(1),
+                local.width,
                 "◀/▶: Parent/Open",
-                Cell {
-                    fg: crate::widgets::SECONDARY,
-                    ..style
-                },
-                false,
             );
         }
     });
@@ -318,10 +315,12 @@ pub fn paint_sized(
         width,
         height,
     };
+    let hint_theme = canvas.theme.clone();
     canvas.overlay(|canvas| {
         panel.frame(canvas, title, palette);
         let mut local = Canvas::new(width - 4, height - 2);
         local.static_accent = Some(palette.accent);
+        local.hint_theme = hint_theme.map(|theme| (theme, panel.x + 2, panel.y + 1));
         content(&mut local);
         for row in 0..local.height {
             for col in 0..local.width {
@@ -572,6 +571,55 @@ mod tests {
                     .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
                     .collect::<Vec<_>>()
             );
+        }
+    }
+    #[test]
+    fn directory_controls_reuse_original_soft_colors_at_their_global_coordinates() {
+        use crate::{
+            render::Field,
+            widgets::{Options, Row},
+        };
+        let palette = Palette::default();
+        let rows = with_cancel((0..30).map(|i| Row::yes(format!("entry{i:02}/")).popup_option()));
+        let editor = crate::dialog::Field::new("Directory", "/projects");
+        let view = Choices {
+            title: "Directory",
+            description: "Choose a directory.\nNew directories are created only when the session starts.",
+            rows: &rows,
+            editor: Some(&editor),
+            note: "",
+            note_accent: false,
+            large: true,
+            fit_description: false,
+            browse_hint: true,
+        };
+        for width in [60, 100] {
+            for now in [0, 1467, 4700] {
+                let mut field = Field::new(width, 30, 1967);
+                let mut c = field.paint(now);
+                let size = view.measure((width, 30));
+                let mut options = Options {
+                    selected: rows.len() - 1,
+                    ..Options::default()
+                };
+                paint_choices(&mut c, &palette, &view, &mut options, size);
+                let hint = "◀/▶: Parent/Open";
+                let x = (width - size.width) / 2
+                    + 2
+                    + (size.width - 4 - unicode_width::UnicodeWidthStr::width(hint)) / 2;
+                let y = (30 - size.height) / 2 + size.height - 2;
+                assert_eq!(c.cells[y * width + x].glyph, "◀");
+                let mut expected = field.paint(now);
+                crate::widgets::paint_hint(&mut expected, x, y, hint);
+                for col in x..x + unicode_width::UnicodeWidthStr::width(hint) {
+                    let cell = &c.cells[y * width + col];
+                    assert_eq!(cell.fg, expected.cells[y * width + col].fg);
+                    assert_eq!(cell.bg, Some(palette.panel));
+                    assert!(!cell.bold);
+                }
+                let cancel = c.cells.iter().position(|c| c.glyph == "●").unwrap();
+                assert_eq!(c.cells[cancel].fg, palette.accent);
+            }
         }
     }
     #[test]

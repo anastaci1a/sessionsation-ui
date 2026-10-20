@@ -445,19 +445,16 @@ impl Dialog {
             "Esc: Back"
         };
         if scroll_hint && !compact && (extra > 0 || !self.buttons.is_empty()) {
-            canvas.text(
+            crate::widgets::paint_centered_hint(
+                canvas,
                 x + 2,
                 if extra > 0 {
                     y + height - 2
                 } else {
                     y + body_height + 1
                 },
-                &clip(hint, width - 4),
-                Cell {
-                    fg: crate::widgets::SECONDARY,
-                    ..style.clone()
-                },
-                false,
+                width - 4,
+                hint,
             );
         }
         for row in y..y + height {
@@ -656,7 +653,7 @@ mod tests {
         assert!(matches!(d.key(enter()), Event::Choose(0, _)));
     }
     #[test]
-    fn dialog_hints_stay_readable_gray_when_the_menu_theme_animates() {
+    fn dialog_hints_are_centered_in_the_original_soft_accent_when_the_menu_animates() {
         let mut d = Dialog::new(
             "Confirm",
             (0..50).map(|i| format!("History row {i}")).collect(),
@@ -666,9 +663,18 @@ mod tests {
         for now in [0, 1467, 4700] {
             let mut c = field.paint(now);
             d.paint(&mut c, &Palette::default());
-            let cell = c.cells.iter().find(|cell| cell.glyph == "P").unwrap();
-            assert_eq!(cell.fg, crate::widgets::SECONDARY);
+            let index = c.cells.iter().position(|cell| cell.glyph == "P").unwrap();
+            let cell = &c.cells[index];
+            let size = d.size.unwrap();
+            let hint = "PgUp/PgDn: Scroll";
+            let x = (80 - size.width) / 2 + 2 + (size.width - 4 - hint.len()) / 2;
+            assert_eq!(index % 80, x);
+            let mut expected = field.paint(now);
+            crate::widgets::paint_hint(&mut expected, x, index / 80, hint);
+            assert_eq!(cell.fg, expected.cells[index].fg);
+            assert_ne!(cell.fg, crate::widgets::SECONDARY);
             assert!(!cell.bold);
+            assert_eq!(cell.bg, Some(Palette::default().panel));
         }
     }
     #[test]

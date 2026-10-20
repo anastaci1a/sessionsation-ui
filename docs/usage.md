@@ -319,7 +319,9 @@ A failed preview/mutation closes its waiting dialog and shows the error there,
 without an automatic retry.
 
 Menu bottom controls and pagination share the reference soft accent and sweep
-(55% brightness, regular weight). Dialog hints stay readable gray. Held arrows wrap once per hold, only if that hold began at the corresponding edge (Up at the
+(55% brightness, regular weight). Popup controls use that same light colored
+accent, including directory navigation, pagination and dialog scroll hints. Each
+control line is centered independently inside its surface. Held arrows wrap once per hold, only if that hold began at the corresponding edge (Up at the
 top, Down at the bottom). Holds begun elsewhere stop at the edge; release and
 press again there to wrap. Home, management menus, directory pickers and dialog
 buttons share this selection-navigation implementation. Terminals

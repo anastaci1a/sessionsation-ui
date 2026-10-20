@@ -63,8 +63,10 @@ Its reusable components are:
   90% height, independently of path length. Popup rows reuse the frame’s outer padding; borderless previews
   own one edge cell. Space IDs and archived IDs retain the list-wide
   inline/detached fit rule; persistent account statuses always stay inline.
-  Compositing translates
-  the native cursor and keeps background star lifetimes independent.
+  Popup soft controls inherit the original menu theme with translated coordinates;
+  ordinary fields/options retain flat palette colors. Shared centered hints preserve
+  opaque panel backgrounds. Compositing translates the native cursor and keeps
+  background star lifetimes independent.
 - `dialog`: shared one/multiple-field forms, confirmations, information and
   progress. The same boxed editor paints session/account names and directory
   paths. One-field forms remain editable while buttons are focused; multiple-field

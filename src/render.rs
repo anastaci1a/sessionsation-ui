@@ -31,6 +31,8 @@ pub struct Canvas {
     /// Native terminal cursor, in zero-based cells; no shape/color override.
     pub cursor: Option<(usize, usize)>,
     pub static_accent: Option<[u8; 3]>,
+    /// Original menu theme and coordinates for soft popup controls only.
+    pub hint_theme: Option<(Theme, usize, usize)>,
     background: Option<[u8; 3]>,
     transient: Vec<bool>,
     baseline_blocked: Vec<bool>,
@@ -45,6 +47,7 @@ impl Canvas {
             theme: None,
             cursor: None,
             static_accent: None,
+            hint_theme: None,
             background: None,
             transient: vec![false; w * h],
             baseline_blocked: vec![false; w * h],
@@ -101,16 +104,21 @@ impl Canvas {
     pub fn accent_text(&mut self, x: usize, y: usize, text: &str, accent: Accent) {
         let mut x = x;
         for glyph in text.graphemes(true) {
-            let cell = self
-                .theme
-                .as_ref()
-                .map(|t| t.accent(x, y, &accent))
+            let hint = if accent.soft {
+                self.hint_theme
+                    .as_ref()
+                    .map(|(t, ox, oy)| t.accent(x + ox, y + oy, &accent))
+            } else {
+                None
+            };
+            let cell = hint
+                .or_else(|| self.theme.as_ref().map(|t| t.accent(x, y, &accent)))
                 .unwrap_or_else(|| Cell {
                     fg: self
                         .static_accent
                         .map(|color| {
                             if accent.soft {
-                                Cell::default().fg
+                                [215, 135, 255]
                             } else {
                                 color.map(|v| {
                                     (i64::from(v) * accent.brightness / 1000).clamp(0, 255) as u8

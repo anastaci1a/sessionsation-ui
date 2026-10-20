@@ -107,7 +107,7 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 ## Verification record and limits
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
-passed formatting, Clippy, **182 Rust tests** (180 unit and two visual tests covering
+passed formatting, Clippy, **184 Rust tests** (182 unit and two visual tests covering
 25 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
@@ -121,8 +121,10 @@ tests cover editor focus, Unicode positions, overlay ownership and visibility
 without shape/color changes or per-frame visibility toggling. The isolated
 demo also passed selected-Space focus/popup-exit and one-launch assertions with
 network disabled. The separately linked hosted capture job passed its build/capture/upload steps. No account enrollment, model compatibility or credential migration was tested.
-The README capture and tested release both use SHA-256
-`2f84d7820ef040a5c8245d544811999242ca85f041ca3b48fc295021935fa90e`.
+The README capture uses SHA-256
+`2f84d7820ef040a5c8245d544811999242ca85f041ca3b48fc295021935fa90e`;
+the tested release uses
+`0eeceb60508f92553186f8b494f1ba237c978a338ee93c107a653392985bab98`.
 Cell regressions verify that Account and Space opening sentences end one space
 before the border. Every visible account has a persistent, unbolded inline status,
 including unselected rows and updates received while Cancel is selected. Ready
@@ -144,7 +146,11 @@ anything or adding the Space label. Native and legacy navigation tests cover a
 unrelated release handling, one-wrap permission, and Home/End synchronization.
 The isolated HERDR test exercises both delayed-repeat directions through the
 actual host encoder. Session marker regressions keep the collapsed asterisk in
-normal deselected gray while `(inactive)` retains its darker gray.
+normal deselected gray while `(inactive)` retains its darker gray. Popup controls
+are checked against the original soft menu renderer at their global coordinates
+across multiple times and sizes; each wrapped control line centers independently.
+Directory navigation/ranges and dialog scroll hints stay colored and unbolded,
+while panel backgrounds remain opaque and choice colors remain flat.
 Archived IDs retain gray/unbolded parenthesized previews with a list-wide fit
 decision, including offscreen rows. Selection/switch tests bind visible account
 rows to stable IDs and retain Cancel through inventory growth. Other

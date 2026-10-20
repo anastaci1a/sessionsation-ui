@@ -534,6 +534,27 @@ pub fn paint_hint(canvas: &mut Canvas, x: usize, y: usize, text: &str) {
         },
     );
 }
+/// Center each hint within its own surface, retaining an opaque popup background.
+pub fn paint_centered_hint(canvas: &mut Canvas, left: usize, y: usize, width: usize, text: &str) {
+    let text = clip(text, width);
+    let used = UnicodeWidthStr::width(text.as_str());
+    let x = left + width.saturating_sub(used) / 2;
+    if y >= canvas.height || x + used > canvas.width {
+        return;
+    }
+    let start = y * canvas.width + x;
+    let backgrounds: Vec<_> = canvas.cells[start..start + used]
+        .iter()
+        .map(|c| c.bg)
+        .collect();
+    paint_hint(canvas, x, y, &text);
+    for (cell, bg) in canvas.cells[start..start + used]
+        .iter_mut()
+        .zip(backgrounds)
+    {
+        cell.bg = bg;
+    }
+}
 /// Shared one-line status lane with one blank row before the actual controls.
 pub fn paint_status(canvas: &mut Canvas, controls_start: usize, text: &str) {
     paint_status_colored(canvas, controls_start, text, false);
@@ -562,15 +583,9 @@ pub fn paint_status_colored(canvas: &mut Canvas, controls_start: usize, text: &s
     }
 }
 pub fn paint_hints(canvas: &mut Canvas, hints: &[String]) {
-    let width = hints
-        .iter()
-        .map(|s| UnicodeWidthStr::width(s.as_str()))
-        .max()
-        .unwrap_or(0);
-    let left = canvas.width.saturating_sub(width) / 2;
     let start = canvas.height.saturating_sub(hints.len());
     for (i, hint) in hints.iter().enumerate() {
-        paint_hint(canvas, left, start + i, hint);
+        paint_centered_hint(canvas, 0, start + i, canvas.width, hint);
     }
 }
 pub fn hint_lines(tokens: &[&str], width: usize) -> Vec<String> {
@@ -1385,6 +1400,18 @@ mod tests {
             assert_eq!(cell.glyph, "E");
             assert!(cell.fg.iter().all(|n| *n >= 80));
             assert!(!cell.bold);
+        }
+    }
+    #[test]
+    fn each_wrapped_control_line_is_centered_independently() {
+        let hints = vec!["Enter/Space: Select".into(), "Esc: Back".into()];
+        let mut c = Canvas::new(40, 10);
+        paint_hints(&mut c, &hints);
+        for (y, hint) in [(8, &hints[0]), (9, &hints[1])] {
+            let start = (40 - hint.len()) / 2;
+            assert_eq!(c.cells[y * 40 + start].glyph, "E");
+            assert_eq!(c.cells[y * 40 + start - 1].glyph, " ");
+            assert_ne!(c.cells[y * 40 + start].fg, SECONDARY);
         }
     }
     #[test]
