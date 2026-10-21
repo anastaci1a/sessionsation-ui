@@ -18,7 +18,7 @@ if api==['capabilities']:result=caps
 elif api==['account','list']:result=accounts
 elif api==['state']:result={'sessions':[session],'capabilities':caps}
 elif api[:1]==['session']:result=session
-elif api[:1]==['observe']:result={'session_id':session['id'],'generation':session['generation'],'state':'idle','freshness':'fresh','observed_at':int(time.time()),'valid_until':int(time.time())+5}
+elif api[:1]==['observe']:result={'session_id':session['id'],'generation':session['generation'],'state':'errored' if (root/'provider-error').exists() else 'idle','freshness':'fresh','observed_at':int(time.time()),'valid_until':int(time.time())+5}
 elif api[:1]==['spaces']:
  time.sleep(.5);result={'session_id':session['id'],'generation':session['generation'],'current_space_id':'w1','spaces':[{'id':'w1','name':'Origin','current':True},{'id':'w2','name':'Work','current':False}]}
 elif api[:1]==['move-space']:
@@ -106,6 +106,24 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
   moved=json.loads((root/'space-moved.json').read_text());assert moved[:5]==['move-space','--session','11111111-1111-4111-8111-111111111111','--expected-generation','captured']
   assert moved[moved.index('--space')+1]=='w2'
  finally:t.close()
+ # Provider failure warning must precede account selection and End confirmation.
+ (root/'provider-error').touch()
+ t=f.Terminal(root)
+ try:
+  t.wait('Manage Sessions');t.send(b'\x1b[B\r');t.wait('Savedfixture');t.send(b'\r');t.wait('Focus Session')
+  for label in ['Session Details','Rename Session','Switch account']:
+   t.send(b'\x1b[B');t.wait(label,selected=True)
+  t.send(b'\r');t.wait('Session needs attention');t.drain()
+  assert not t.screen.contains('Choose Account'),'warning must precede the picker'
+  t.send(b'\x1b');t.wait('Switch account',selected=True)
+  t.send(b'\r');t.wait('Session needs attention');t.send(b'\r');t.wait('Choose Account')
+  t.send(b'\x1b');t.wait('Switch account',selected=True)
+  for _ in range(10):
+   if t.screen.contains('End session',selected=True):break
+   t.send(b'\x1b[B');time.sleep(.12);t.drain()
+  t.wait('End session',selected=True);t.send(b'\r');t.wait('Session needs attention')
+  t.send(b'\r');t.wait('Session confirmation');t.send(b'\x1b');t.wait('End session',selected=True)
+ finally:t.close()
  calls=[json.loads(line) for line in (root/'calls.jsonl').read_text().splitlines()]
  assert sum(c[:2]==['resume-launch','start'] for c in calls)==1
  assert sum(c[:2]==['account','delete'] and '--confirm' in c for c in calls)==1
@@ -113,4 +131,4 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-management-') as tmp:
  assert sum(c[:1]==['move-space'] for c in calls)==1
  assert not any(c[0] in ['stop','restart','switch','send','submit','queue'] for c in calls)
  assert list((root/'projects').iterdir())==[]
-print(json.dumps({'passed':True,'models':0,'checks':['compact bars and separators','right-aligned mixed-window picker','saved selection never attaches','resume captures identity and selected directory','background completion retains menu','reopened receipt without resend','details close returns to submenu and stays closed','Space lookup cancellation, confirmation and single generation-bound move','TTY restoration']},indent=2))
+print(json.dumps({'passed':True,'models':0,'checks':['compact bars and separators','right-aligned mixed-window picker','saved selection never attaches','resume captures identity and selected directory','background completion retains menu','reopened receipt without resend','details close returns to submenu and stays closed','Space lookup cancellation, confirmation and single generation-bound move','provider-error warning before account picker and end confirmation; cancel sends no mutation','TTY restoration']},indent=2))

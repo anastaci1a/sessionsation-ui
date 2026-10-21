@@ -70,6 +70,12 @@ Its reusable components are:
   for invalid input. These roles stay flat while the main menu animates.
   Shared centered hints preserve opaque panel backgrounds. Compositing translates the native cursor and keeps
   background star lifetimes independent.
+- Live session mutations perform a cancellable public `observe` check before
+  opening their ordinary form. Failed/interrupted/stopped states show Confirm/Cancel
+  first (including before the account picker). Unobserved states explain uncertainty;
+  confirmation does not bypass backend safety. Cancellation discards late responses,
+  and changed generations require selecting the action again. Focus and Details
+  remain read-only and do not require this warning.
 - `dialog`: shared one/multiple-field forms, confirmations, information and
   progress. The same boxed editor paints session/account names and directory
   paths. One-field forms remain editable while buttons are focused; multiple-field

@@ -47,6 +47,7 @@ enum Purpose {
     Limits(String),
     Mutation,
     Observe(String),
+    ActionCheck(Value, crate::session_list::Action),
 }
 #[derive(Clone, Debug)]
 enum Form {
@@ -58,6 +59,7 @@ enum Form {
     Remove(Value),
     Delete(Value),
     ResumeWarning(Value),
+    ActionWarning(Value, crate::session_list::Action),
     Rename(Value),
     SessionMutation(Value, &'static str),
     SessionDetails(String),
@@ -1248,103 +1250,29 @@ impl Manager {
                     crate::session_list::actions(&s, self.capabilities["resume"]["version"] == 1)
                         .get(index)
                         .map(|(_, a)| *a);
-                match action.unwrap_or(crate::session_list::Action::Unavailable) {
-                    crate::session_list::Action::Archive
-                    | crate::session_list::Action::Delete
-                    | crate::session_list::Action::Restore => {
-                        let (command, title, text) = match action.unwrap() {
-                            crate::session_list::Action::Archive => (
-                                "archive",
-                                "Archive Session",
-                                "Compress and move saved conversation history to sessionsation-managed Archived Sessions. No agent is started; project files and account credentials stay in place.",
-                            ),
-                            crate::session_list::Action::Restore => (
-                                "restore-session",
-                                "Restore Session",
-                                "Restore the saved conversation for later resume. This does not start an agent or send a message.",
-                            ),
-                            _ => (
-                                "delete-session",
-                                "Delete Session",
-                                "Permanently delete this conversation and its archived data. This cannot be undone. Project files and account credentials are unaffected.",
-                            ),
-                        };
-                        let name = s["name"].as_str().unwrap_or("").to_owned();
-                        let mut body = vec![text.into()];
-                        if command == "delete-session" {
-                            body.push(format!("Type {name} to confirm."));
-                        }
-                        self.show(
-                            title,
-                            body,
-                            &["Confirm", "Cancel"],
-                            Form::SessionMutation(s, command),
-                        );
-                        if command == "delete-session" {
-                            self.dialog
-                                .as_mut()
-                                .unwrap()
-                                .fields
-                                .push(Field::new("Session name", "").validated(Rule::Exact(name)));
-                        }
-                    }
-                    crate::session_list::Action::Focus => return vec![Intent::Focus(s)],
-                    crate::session_list::Action::Details => {
-                        self.show(
-                            "Session details",
-                            Self::session_detail_lines(&s),
-                            &["Close"],
-                            Form::SessionDetails(key),
-                        );
-                        return self.refresh_sessions();
-                    }
-                    crate::session_list::Action::Rename => {
-                        self.show(
-                            "Rename session",
-                            vec!["Keep the same session and conversation identities.".into()],
-                            &["Rename", "Cancel"],
-                            Form::Rename(s.clone()),
-                        );
-                        self.dialog.as_mut().unwrap().fields.push(
-                            Field::new("Name", s["name"].as_str().unwrap_or(""))
-                                .validated(Rule::Rename(s["name"].as_str().unwrap_or("").into())),
-                        );
-                        self.validate_dialog_names();
-                    }
-
-                    crate::session_list::Action::MoveSpace => {
-                        return self.preview(
-                            "Choose Space",
-                            Self::target(&s, "spaces"),
-                            Purpose::Spaces(s),
-                        );
-                    }
-                    crate::session_list::Action::Switch => return vec![Intent::Switch(s)],
-                    crate::session_list::Action::Resume => {
-                        return self.preview(
-                            "Resume session",
-                            Self::target(&s, "session"),
-                            Purpose::Resume(key),
-                        );
-                    }
-                    crate::session_list::Action::Restart | crate::session_list::Action::Stop => {
-                        let command = if action == Some(crate::session_list::Action::Restart) {
-                            "restart"
-                        } else {
-                            "stop"
-                        };
-                        self.confirm(
-                            "Session confirmation",
-                            vec![format!(
-                                "{}: {command}. Conversation history is retained.",
-                                s["name"].as_str().unwrap_or("session")
-                            )],
-                            Self::target(&s, command),
-                        );
-                    }
-                    _ => {}
+                let action = action.unwrap_or(crate::session_list::Action::Unavailable);
+                if s["availability"] == "running"
+                    && !matches!(
+                        action,
+                        crate::session_list::Action::Focus
+                            | crate::session_list::Action::Details
+                            | crate::session_list::Action::Unavailable
+                    )
+                {
+                    self.show(
+                        "Checking session",
+                        vec!["Checking the current session state…".into()],
+                        &["Cancel"],
+                        Form::Loading,
+                    );
+                    let intents =
+                        self.request(Self::target(&s, "observe"), Purpose::ActionCheck(s, action));
+                    self.foreground = Some(self.sequence);
+                    return intents;
                 }
+                return self.session_action(s, action);
             }
+
             Page::Operations => {
                 if let Some((kind, key)) = self.operation_keys().get(index).cloned() {
                     if kind == "operation" {
@@ -1448,6 +1376,154 @@ impl Manager {
         }
         vec![]
     }
+    fn session_action(&mut self, s: Value, action: crate::session_list::Action) -> Vec<Intent> {
+        let key = id(&s).to_owned();
+        match action {
+            crate::session_list::Action::Archive
+            | crate::session_list::Action::Delete
+            | crate::session_list::Action::Restore => {
+                let (command, title, text) = match action {
+                    crate::session_list::Action::Archive => (
+                        "archive",
+                        "Archive Session",
+                        "Compress and move saved conversation history to sessionsation-managed Archived Sessions. No agent is started; project files and account credentials stay in place.",
+                    ),
+                    crate::session_list::Action::Restore => (
+                        "restore-session",
+                        "Restore Session",
+                        "Restore the saved conversation for later resume. This does not start an agent or send a message.",
+                    ),
+                    _ => (
+                        "delete-session",
+                        "Delete Session",
+                        "Permanently delete this conversation and its archived data. This cannot be undone. Project files and account credentials are unaffected.",
+                    ),
+                };
+                let name = s["name"].as_str().unwrap_or("").to_owned();
+                let mut body = vec![text.into()];
+                if command == "delete-session" {
+                    body.push(format!("Type {name} to confirm."));
+                }
+                self.show(
+                    title,
+                    body,
+                    &["Confirm", "Cancel"],
+                    Form::SessionMutation(s, command),
+                );
+                if command == "delete-session" {
+                    self.dialog
+                        .as_mut()
+                        .unwrap()
+                        .fields
+                        .push(Field::new("Session name", "").validated(Rule::Exact(name)));
+                }
+            }
+            crate::session_list::Action::Focus => return vec![Intent::Focus(s)],
+            crate::session_list::Action::Details => {
+                self.show(
+                    "Session details",
+                    Self::session_detail_lines(&s),
+                    &["Close"],
+                    Form::SessionDetails(key),
+                );
+                return self.refresh_sessions();
+            }
+            crate::session_list::Action::Rename => {
+                self.show(
+                    "Rename session",
+                    vec!["Keep the same session and conversation identities.".into()],
+                    &["Rename", "Cancel"],
+                    Form::Rename(s.clone()),
+                );
+                self.dialog.as_mut().unwrap().fields.push(
+                    Field::new("Name", s["name"].as_str().unwrap_or(""))
+                        .validated(Rule::Rename(s["name"].as_str().unwrap_or("").into())),
+                );
+                self.validate_dialog_names();
+            }
+
+            crate::session_list::Action::MoveSpace => {
+                return self.preview(
+                    "Choose Space",
+                    Self::target(&s, "spaces"),
+                    Purpose::Spaces(s),
+                );
+            }
+            crate::session_list::Action::Switch => return vec![Intent::Switch(s)],
+            crate::session_list::Action::Resume => {
+                return self.preview(
+                    "Resume session",
+                    Self::target(&s, "session"),
+                    Purpose::Resume(key),
+                );
+            }
+            crate::session_list::Action::Restart | crate::session_list::Action::Stop => {
+                let command = if action == crate::session_list::Action::Restart {
+                    "restart"
+                } else {
+                    "stop"
+                };
+                self.confirm(
+                    "Session confirmation",
+                    vec![format!(
+                        "{}: {command}. Conversation history is retained.",
+                        s["name"].as_str().unwrap_or("session")
+                    )],
+                    Self::target(&s, command),
+                );
+            }
+            _ => {}
+        }
+        vec![]
+    }
+    fn action_checked(
+        &mut self,
+        s: Value,
+        action: crate::session_list::Action,
+        observation: Option<Value>,
+    ) -> Vec<Intent> {
+        if self.page != Page::Session(id(&s).into()) {
+            return vec![];
+        }
+        if self
+            .session(id(&s))
+            .is_none_or(|current| current["generation"] != s["generation"])
+        {
+            self.dismiss();
+            self.note = "The session changed while checking it. Choose the action again.".into();
+            return vec![];
+        }
+        self.dialog = None;
+        self.foreground = None;
+        self.form = Form::None;
+        let verified = observation
+            .as_ref()
+            .filter(|o| o["generation"] == s["generation"] && o["freshness"] == "fresh");
+        let state = verified.and_then(|o| o["runtime_state"].as_str().or(o["state"].as_str()));
+        let warning = match state {
+            Some("errored") => Some(
+                "The last turn ended with a provider error, such as a usage limit or unavailable model. Continue with this session action? Saved history is retained; the backend will recheck that it is safe before changing the session.",
+            ),
+            Some("interrupted" | "stopped") => Some(
+                "This session stopped before normal completion. Continue with this action? Review any unfinished work; the backend will recheck the session before proceeding.",
+            ),
+            Some("idle" | "working") => None,
+            _ => Some(
+                "The current provider state could not be verified. Continue to configure this action? The backend must verify a safe state before stopping or switching the session; this warning does not bypass that check.",
+            ),
+        };
+        if let Some(message) = warning {
+            self.show(
+                "Session needs attention",
+                vec![message.into()],
+                &["Confirm", "Cancel"],
+                Form::ActionWarning(s, action),
+            );
+            vec![]
+        } else {
+            self.session_action(s, action)
+        }
+    }
     fn submit(&mut self, button: usize, values: Vec<String>) -> Vec<Intent> {
         if button != 0 {
             self.dialog = None;
@@ -1464,6 +1540,18 @@ impl Manager {
             Form::Loading => {
                 self.dismiss();
                 return vec![];
+            }
+            Form::ActionWarning(s, action) => {
+                self.dialog = None;
+                self.form = Form::None;
+                if self
+                    .session(id(&s))
+                    .is_none_or(|current| current["generation"] != s["generation"])
+                {
+                    self.note = "The session changed. Choose the action again.".into();
+                    return vec![];
+                }
+                return self.session_action(s, action);
             }
             Form::Confirm(args) => args,
             Form::Add => {
@@ -1577,9 +1665,13 @@ impl Manager {
                 | Purpose::Limits(_)
                 | Purpose::Resume(_)
                 | Purpose::Spaces(_)
+                | Purpose::ActionCheck(..)
         ) && (self.foreground != Some(token) || !matches!(self.form, Form::Loading))
         {
             return vec![];
+        }
+        if let Purpose::ActionCheck(session, action) = purpose {
+            return self.action_checked(session, action, result.ok());
         }
         let value = match result {
             Ok(v) => v,
@@ -1602,6 +1694,7 @@ impl Manager {
             }
         };
         match purpose {
+            Purpose::ActionCheck(..) => unreachable!(),
             Purpose::DeleteAvailability(key) => {
                 self.deletion_previews.insert(key, value);
             }
@@ -2111,6 +2204,93 @@ impl Manager {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn provider_error_warning_precedes_configuration_and_cancel_never_mutates() {
+        for state in ["errored", "interrupted", "stopped", "unknown"] {
+            for label in [
+                "Switch account",
+                "End session",
+                "Restart Codex",
+                "Move to Space",
+            ] {
+                let session = json!({"id":"s","name":"Example","generation":"g","availability":"running","capabilities":{"switch_account":true,"stop":true,"restart":true,"move_space":true}});
+                let mut m = Manager {
+                    page: Page::Session("s".into()),
+                    sessions: vec![session],
+                    ..Default::default()
+                };
+                m.options.selected = m.rows().iter().position(|r| r.label == label).unwrap();
+                let requests = m.activate();
+                let Intent::Api(token, args) = &requests[0] else {
+                    panic!()
+                };
+                assert_eq!(args[0], "observe");
+                assert!(
+                    m.response(
+                        *token,
+                        Ok(json!({"generation":"g","freshness":"fresh","runtime_state":state}))
+                    )
+                    .is_empty()
+                );
+                assert_eq!(m.dialog.as_ref().unwrap().title, "Session needs attention");
+                assert!(m.submit(1, vec![]).is_empty());
+                assert!(m.dialog.is_none());
+                let requests = m.activate();
+                let Intent::Api(token, _) = &requests[0] else {
+                    panic!()
+                };
+                m.response(
+                    *token,
+                    Ok(json!({"generation":"g","freshness":"fresh","runtime_state":state})),
+                );
+                let intents = m.submit(0, vec![]);
+                if label == "Switch account" {
+                    assert!(matches!(&intents[0], Intent::Switch(_)));
+                } else if label == "Move to Space" {
+                    assert!(matches!(&intents[0], Intent::Api(_, a) if a[0]=="spaces"));
+                } else {
+                    assert_eq!(m.dialog.as_ref().unwrap().title, "Session confirmation");
+                    assert!(intents.is_empty());
+                }
+            }
+        }
+    }
+    #[test]
+    fn cancelled_or_replaced_action_checks_never_reopen_dialog_or_retarget() {
+        let s = json!({"id":"s","generation":"g","availability":"running","capabilities":{"switch_account":true}});
+        let mut m = Manager {
+            page: Page::Session("s".into()),
+            sessions: vec![s],
+            ..Default::default()
+        };
+        m.options.selected = m
+            .rows()
+            .iter()
+            .position(|r| r.label == "Switch account")
+            .unwrap();
+        let requests = m.activate();
+        let Intent::Api(token, _) = &requests[0] else {
+            panic!()
+        };
+        m.dismiss();
+        assert!(
+            m.response(
+                *token,
+                Ok(json!({"generation":"g","freshness":"fresh","state":"errored"}))
+            )
+            .is_empty()
+        );
+        assert!(m.dialog.is_none());
+        let requests = m.activate();
+        let Intent::Api(token, _) = &requests[0] else {
+            panic!()
+        };
+        m.response(*token, Err("provider unavailable".into()));
+        assert_eq!(m.dialog.as_ref().unwrap().title, "Session needs attention");
+        m.sessions[0]["generation"] = json!("replacement");
+        assert!(m.submit(0, vec![]).is_empty());
+        assert!(m.dialog.is_none());
+    }
+    #[test]
     fn archived_ids_share_list_wide_preview_fit_and_unbolded_gray() {
         use super::*;
         let mut m = setup();
@@ -2321,7 +2501,14 @@ mod tests {
             .iter()
             .position(|r| r.label == "Move to Space")
             .unwrap();
-        let sent = m.activate();
+        let checked = m.activate();
+        let Intent::Api(check, _) = &checked[0] else {
+            panic!()
+        };
+        let sent = m.response(
+            *check,
+            Ok(json!({"generation":"g1","freshness":"fresh","runtime_state":"idle"})),
+        );
         let Intent::Api(token, args) = &sent[0] else {
             panic!()
         };
@@ -3405,7 +3592,14 @@ mod tests {
             .iter()
             .position(|r| r.label == "End session")
             .unwrap();
-        m.activate();
+        let checked = m.activate();
+        let Intent::Api(check, _) = &checked[0] else {
+            panic!()
+        };
+        m.response(
+            *check,
+            Ok(json!({"generation":"old","freshness":"fresh","runtime_state":"idle"})),
+        );
         m.sessions[0]["generation"] = json!("replacement");
         let sent = m.submit(0, vec![]);
         let Intent::Api(_, args) = &sent[0] else {
