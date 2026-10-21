@@ -60,6 +60,7 @@ enum Form {
     Delete(Value),
     ResumeWarning(Value),
     ActionWarning(Value, crate::session_list::Action),
+    OperationApproval(String, u64),
     Rename(Value),
     SessionMutation(Value, &'static str),
     SessionDetails(String),
@@ -819,7 +820,7 @@ impl Manager {
         }
         out.extend(self.refresh_sessions());
         if (self.active_operation.is_some()
-            || matches!(self.form, Form::Operation(_))
+            || matches!(self.form, Form::Operation(_) | Form::OperationApproval(..))
             || matches!(self.page, Page::Operations | Page::Operation(_)))
             && !self
                 .pending
@@ -867,7 +868,7 @@ impl Manager {
         if matches!(
             self.page,
             Page::Operations | Page::Operation(_) | Page::Launch(..)
-        ) || matches!(self.form, Form::Operation(_))
+        ) || matches!(self.form, Form::Operation(_) | Form::OperationApproval(..))
         {
             self.refresh()
         } else {
@@ -925,16 +926,18 @@ impl Manager {
         self.form = form;
     }
     fn mutate(&mut self, args: Vec<String>) -> Vec<Intent> {
-        self.session_return = args.windows(2).find(|w| w[0] == "--session").map(|w| {
-            if matches!(
-                args.first().map(String::as_str),
-                Some("archive" | "delete-session")
-            ) {
-                String::new()
-            } else {
-                w[1].clone()
-            }
-        });
+        if args.first().is_none_or(|arg| arg != "respond") {
+            self.session_return = args.windows(2).find(|w| w[0] == "--session").map(|w| {
+                if matches!(
+                    args.first().map(String::as_str),
+                    Some("archive" | "delete-session")
+                ) {
+                    String::new()
+                } else {
+                    w[1].clone()
+                }
+            });
+        }
         self.details_open = false;
         let mut progress = Dialog::progress("Operation progress");
         progress.size = self.dialog.as_ref().and_then(|d| d.size);
@@ -1007,6 +1010,9 @@ impl Manager {
             match d.key_with_wrap(key, wrap) {
                 dialog::Event::None => return vec![],
                 dialog::Event::Dismiss => {
+                    if matches!(self.form, Form::OperationApproval(..)) {
+                        return self.submit(1, vec![]);
+                    }
                     self.dismiss();
                     return vec![];
                 }
@@ -1525,6 +1531,15 @@ impl Manager {
         }
     }
     fn submit(&mut self, button: usize, values: Vec<String>) -> Vec<Intent> {
+        if let Form::OperationApproval(key, sequence) = self.form.clone() {
+            return self.mutate(strings(&[
+                "respond",
+                &key,
+                if button == 0 { "yes" } else { "no" },
+                "--sequence",
+                &sequence.to_string(),
+            ]));
+        }
         if button != 0 {
             self.dialog = None;
             self.form = Form::None;
@@ -1533,7 +1548,11 @@ impl Manager {
         let form = self.form.clone();
         let value = |i: usize| values.get(i).map(String::as_str).unwrap_or("");
         let args = match form {
-            Form::None | Form::Progress | Form::Operation(_) | Form::SessionDetails(_) => {
+            Form::None
+            | Form::Progress
+            | Form::Operation(_)
+            | Form::OperationApproval(..)
+            | Form::SessionDetails(_) => {
                 self.dismiss();
                 return vec![];
             }
@@ -1813,6 +1832,32 @@ impl Manager {
                     .flatten();
                 self.operations = value.as_array().cloned().unwrap_or_default();
                 self.retain_operation_focus(chosen);
+                let viewed = match &self.form {
+                    Form::Operation(key) | Form::OperationApproval(key, _) => Some(key.clone()),
+                    _ => None,
+                };
+                if let Some(key) = viewed
+                    && let Some(o) = self.operations.iter().find(|o| id(o) == key).cloned()
+                {
+                    if o["phase"] == "awaiting_background_approval"
+                        && o["can_respond"] != false
+                        && let Some(sequence) = o["confirmation_seq"].as_u64()
+                    {
+                        // Preserve button focus while polling the same consent. New
+                        // generations of consent are bound to their own sequence.
+                        if !matches!(&self.form, Form::OperationApproval(old, seq) if old == &key && *seq == sequence)
+                        {
+                            self.show("Stop background terminals?", vec![o["detail"].as_str().unwrap_or("This operation needs permission to stop background work.").into()], &["Stop and continue", "Cancel operation"], Form::OperationApproval(key, sequence));
+                        }
+                    } else if matches!(self.form, Form::OperationApproval(..)) {
+                        self.show(
+                            "Operation progress",
+                            vec![],
+                            &["Continue in background"],
+                            Form::Operation(key),
+                        );
+                    }
+                }
                 if let Form::Operation(key) = &self.form
                     && let Some(o) = self.operations.iter().find(|o| id(o) == key)
                     && let Some(d) = &mut self.dialog
@@ -3073,6 +3118,69 @@ mod tests {
         m.response(token, Ok(json!([{"id":"done","phase":"complete"}])));
         assert_eq!(m.dialog.as_ref().unwrap().buttons[0].label, "Close");
         assert_eq!(m.rows()[0].label, "Details");
+    }
+    #[test]
+    fn background_consent_is_separate_sequence_bound_and_cancelled_without_termination() {
+        fn poll(m: &mut Manager, phase: &str, sequence: u64) {
+            let requests = m.request(strings(&["operations"]), Purpose::Operations);
+            let Intent::Api(token, _) = requests[0] else {
+                panic!()
+            };
+            m.response(token, Ok(json!([{"id":"switch","phase":phase,"confirmation_seq":sequence,"detail":"2 background terminals are running. Stop them and continue?"}])));
+        }
+        for cancel in [false, true] {
+            let mut m = setup();
+            m.session_return = Some("session".into());
+            m.show(
+                "Working",
+                vec![],
+                &["Continue in background"],
+                Form::Operation("switch".into()),
+            );
+            poll(&mut m, "awaiting_background_approval", 7);
+            assert_eq!(
+                m.dialog.as_ref().unwrap().title,
+                "Stop background terminals?"
+            );
+            m.dialog.as_mut().unwrap().selected = 1;
+            poll(&mut m, "awaiting_background_approval", 7);
+            assert_eq!(m.dialog.as_ref().unwrap().selected, 1);
+            let sent = if cancel {
+                m.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            } else {
+                m.submit(0, vec![])
+            };
+            let Intent::Api(_, args) = &sent[0] else {
+                panic!()
+            };
+            assert_eq!(
+                args,
+                &strings(&[
+                    "respond",
+                    "switch",
+                    if cancel { "no" } else { "yes" },
+                    "--sequence",
+                    "7"
+                ])
+            );
+            assert_eq!(m.session_return.as_deref(), Some("session"));
+        }
+        let mut m = setup();
+        poll(&mut m, "awaiting_background_approval", 7);
+        assert!(
+            m.dialog.is_none(),
+            "background operation must not steal focus"
+        );
+        m.show(
+            "Working",
+            vec![],
+            &["Continue in background"],
+            Form::Operation("switch".into()),
+        );
+        poll(&mut m, "awaiting_background_approval", 7);
+        poll(&mut m, "complete", 8);
+        assert!(matches!(m.form, Form::Operation(_)));
+        assert_eq!(m.dialog.as_ref().unwrap().buttons[0].label, "Close");
     }
     #[test]
     fn live_state_refresh_is_single_flight_and_errors_clear_busy_claims() {

@@ -76,6 +76,13 @@ Its reusable components are:
   confirmation does not bypass backend safety. Cancellation discards late responses,
   and changed generations require selecting the action again. Focus and Details
   remain read-only and do not require this warning.
+  After the user confirms the configured action and the CLI starts the operation,
+  its open progress dialog presents the backend's separate background
+  terminal consent as Stop and continue / Cancel operation, including its count
+  and consequences. Escape declines too. Responses bind the confirmation sequence;
+  polling preserves button focus and withdraws a superseded prompt. Operations
+  running in the background do not open unsolicited dialogs. The CLI owns terminal
+  enumeration and termination; a HERDR-only Space move does not stop agents/tasks.
 - `dialog`: shared one/multiple-field forms, confirmations, information and
   progress. The same boxed editor paints session/account names and directory
   paths. One-field forms remain editable while buttons are focused; multiple-field
