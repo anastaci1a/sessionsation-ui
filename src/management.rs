@@ -937,8 +937,8 @@ impl Manager {
                     w[1].clone()
                 }
             });
+            self.details_open = false;
         }
-        self.details_open = false;
         let mut progress = Dialog::progress("Operation progress");
         progress.size = self.dialog.as_ref().and_then(|d| d.size);
         self.dialog = Some(progress);
@@ -3181,6 +3181,23 @@ mod tests {
         poll(&mut m, "complete", 8);
         assert!(matches!(m.form, Form::Operation(_)));
         assert_eq!(m.dialog.as_ref().unwrap().buttons[0].label, "Close");
+    }
+    #[test]
+    fn operation_consent_retains_dedicated_details_return() {
+        let mut m = setup();
+        m.page = Page::Operation("switch".into());
+        m.details_open = true;
+        m.show(
+            "Stop background terminals?",
+            vec![],
+            &["Stop and continue", "Cancel operation"],
+            Form::OperationApproval("switch".into(), 4),
+        );
+        let sent = m.submit(0, vec![]);
+        assert_eq!(sent.len(), 1);
+        assert!(m.details_open);
+        m.dismiss();
+        assert_eq!(m.page, Page::Operation("switch".into()));
     }
     #[test]
     fn live_state_refresh_is_single_flight_and_errors_clear_busy_claims() {
