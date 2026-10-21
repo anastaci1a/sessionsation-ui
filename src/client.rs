@@ -7,6 +7,13 @@ use std::{
     time::Duration,
 };
 use tokio::io::AsyncWriteExt;
+
+// Tokio's child I/O is asynchronous, but Command::spawn still waits for exec
+// synchronously. A cold executable or slow filesystem must not freeze the
+// single-threaded input/render runtime during each inventory poll.
+async fn spawn_child(mut command: tokio::process::Command) -> Result<tokio::process::Child> {
+    Ok(tokio::task::spawn_blocking(move || command.spawn()).await??)
+}
 #[derive(Clone, Debug)]
 pub struct Client {
     pub binary: PathBuf,
@@ -238,7 +245,7 @@ impl Client {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = command.spawn()?;
+        let mut child = spawn_child(command).await?;
         if let Some(input) = input {
             let mut stdin = child.stdin.take().context("Missing backend stdin")?;
             stdin.write_all(&serde_json::to_vec(&input)?).await?;
@@ -265,16 +272,18 @@ impl Client {
         Ok(body["result"].clone())
     }
     pub async fn host(&self, args: &[&str]) -> Result<Value> {
-        let out = tokio::time::timeout(
-            Duration::from_secs(10),
-            tokio::process::Command::new(&self.herdr)
-                .args(args)
-                .env("HERDR_SOCKET_PATH", &self.socket)
-                .env("HERDR_SESSION", &self.session)
-                .stdin(Stdio::null())
-                .kill_on_drop(true)
-                .output(),
-        )
+        let mut command = tokio::process::Command::new(&self.herdr);
+        command
+            .args(args)
+            .env("HERDR_SOCKET_PATH", &self.socket)
+            .env("HERDR_SESSION", &self.session)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let out = tokio::time::timeout(Duration::from_secs(10), async {
+            Ok::<_, anyhow::Error>(spawn_child(command).await?.wait_with_output().await?)
+        })
         .await
         .context("HERDR timed out")??;
         ensure!(
@@ -317,6 +326,44 @@ fn refresh_resume_request(request: &mut Value, snapshot: &Value, fresh: &Value) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test(flavor = "current_thread")]
+    async fn slow_exec_does_not_block_input_or_frame_timers() {
+        fn slow_command() -> tokio::process::Command {
+            let mut command = tokio::process::Command::new("/bin/true");
+            command.kill_on_drop(true);
+            // Isolated child only: model a slow exec handshake without depending
+            // on a particular filesystem, cache, provider, or real terminal.
+            unsafe {
+                command.pre_exec(|| {
+                    let delay = libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 300_000_000,
+                    };
+                    libc::nanosleep(&delay, std::ptr::null_mut());
+                    Ok(())
+                });
+            }
+            command
+        }
+        let before = std::time::Instant::now();
+        let mut baseline = slow_command().spawn().unwrap();
+        let blocked = before.elapsed();
+        baseline.wait().await.unwrap();
+        let start = std::time::Instant::now();
+        let (child, timer) = tokio::join!(spawn_child(slow_command()), async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            start.elapsed()
+        });
+        child.unwrap().wait().await.unwrap();
+        eprintln!(
+            "slow exec: old event-loop block {blocked:?}; new 20ms timer completed at {timer:?}"
+        );
+        assert!(blocked >= Duration::from_millis(250));
+        assert!(
+            timer < Duration::from_millis(200),
+            "event loop stalled: {timer:?}"
+        );
+    }
     #[tokio::test]
     async fn focus_uses_direct_epoch_checks_and_refuses_replaced_attachments() {
         use std::os::unix::fs::PermissionsExt;

@@ -41,6 +41,10 @@ It also has a management reducer for responsive Home/accounts, capability-driven
 account and session actions, asynchronous requests and operation observation.
 Its reusable components are:
 
+- `client`: public API/HERDR subprocess transport. Process creation runs off
+  the input/render runtime because the OS exec handshake can block even when
+  child I/O is asynchronous. Cold executable/filesystem delays therefore do not
+  stall the frame timer; cancellation retains kill-on-drop and never retries a mutation.
 - `render`: terminal-sized animated field, Unicode cell canvas and output deltas.
   Background geometry is independent of option scrolling.
 - `widgets`: option focus/scrolling, enabled/disabled row styling and grapheme-aware
