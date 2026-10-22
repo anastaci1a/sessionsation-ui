@@ -8,6 +8,18 @@ use std::{
 };
 use tokio::io::AsyncWriteExt;
 
+#[derive(Debug)]
+struct ApiRejected {
+    code: String,
+    message: String,
+}
+impl std::fmt::Display for ApiRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+impl std::error::Error for ApiRejected {}
+
 // Tokio's child I/O is asynchronous, but Command::spawn still waits for exec
 // synchronously. A cold executable or slow filesystem must not freeze the
 // single-threaded input/render runtime during each inventory poll.
@@ -82,6 +94,51 @@ pub fn preferences_path(config: &Path) -> PathBuf {
         .with_file_name("preferences.json")
 }
 impl Client {
+    pub async fn start_checked(&self, request: Value) -> Result<Value> {
+        if let Err(error) = self.launch("validate", request.clone()).await {
+            return Ok(json!({"phase":"failed", "detail":error.to_string()}));
+        }
+        match self.launch("start", request.clone()).await {
+            Ok(receipt) => Ok(receipt),
+            Err(error) => {
+                // A timeout, broken pipe, or malformed reply is not rejection.
+                // Only a structured error from an exited CLI allows this check.
+                if error
+                    .downcast_ref::<ApiRejected>()
+                    .is_some_and(|e| e.code != "REQUEST_ID_CONFLICT")
+                {
+                    let kind = if request["session_id"].is_string() {
+                        "resume-launch"
+                    } else {
+                        "launch"
+                    };
+                    let id = request["request_id"]
+                        .as_str()
+                        .context("INVALID_REQUEST_ID")?;
+                    match self.api(&[kind, "status", "--request-id", id], None).await {
+                        Ok(receipt) => return Ok(receipt),
+                        Err(status)
+                            if status.downcast_ref::<ApiRejected>().is_some_and(|e| {
+                                e.code
+                                    == if kind == "launch" {
+                                        "LAUNCH_NOT_FOUND"
+                                    } else {
+                                        "RESUME_NOT_FOUND"
+                                    }
+                            }) =>
+                        {
+                            // Both start APIs persist admission before creating a
+                            // worker or terminal. The original CLI has exited and
+                            // no receipt exists: this request did not launch.
+                            return Ok(json!({"phase":"failed", "detail":error.to_string()}));
+                        }
+                        Err(_) => {}
+                    }
+                }
+                Err(error)
+            }
+        }
+    }
     async fn focus_snapshot(&self, selected: &Value, direct: bool) -> Result<Value> {
         if direct {
             return self
@@ -261,14 +318,19 @@ impl Client {
         })
         .context("Invalid backend envelope")?;
         ensure!(body["api_version"] == 1, "Public API v1 required");
-        ensure!(
-            out.status.success() && body["ok"] == true,
-            "{}: {}",
-            body["error"]["code"].as_str().unwrap_or("BACKEND_ERROR"),
-            body["error"]["message"]
+        if !out.status.success() || body["ok"] != true {
+            let code = body["error"]["code"]
                 .as_str()
-                .unwrap_or("Request failed")
-        );
+                .context("Invalid backend error envelope")?;
+            return Err(ApiRejected {
+                code: code.into(),
+                message: body["error"]["message"]
+                    .as_str()
+                    .unwrap_or("Request failed")
+                    .into(),
+            }
+            .into());
+        }
         Ok(body["result"].clone())
     }
     pub async fn host(&self, args: &[&str]) -> Result<Value> {
@@ -326,6 +388,65 @@ fn refresh_resume_request(request: &mut Value, snapshot: &Value, fresh: &Value) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn start_reconciles_rejection_without_replaying_or_clearing_uncertain_delivery() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let cli = tmp.path().join("backend");
+        std::fs::write(&cli, r#"#!/usr/bin/env python3
+import json, pathlib, sys
+root=pathlib.Path(__file__).parent
+mode=(root/'mode').read_text()
+kind='resume-launch' if 'resume-launch' in sys.argv else 'launch'
+action=sys.argv[sys.argv.index(kind)+1]
+with (root/'calls').open('a') as f:f.write(action+'\n')
+def ok(result): print(json.dumps({'api_version':1,'ok':True,'result':result}))
+def fail(code):
+ print(json.dumps({'api_version':1,'ok':False,'error':{'code':code,'message':'fixture rejection'}}),file=sys.stderr);sys.exit(1)
+if action=='validate':ok({'valid':True})
+elif action=='start':
+ if mode=='broken':print('broken output',file=sys.stderr);sys.exit(1)
+ fail('STALE_TARGET')
+elif action=='status':
+ if mode=='admitted':ok({'phase':'admitted'})
+ elif mode=='unreadable':fail('OPERATION_FAILED')
+ else:fail('RESUME_NOT_FOUND' if kind=='resume-launch' else 'LAUNCH_NOT_FOUND')
+"#).unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let client = Client {
+            binary: cli,
+            root: tmp.path().into(),
+            herdr: "unused".into(),
+            socket: "unused".into(),
+            session: "fixture".into(),
+        };
+        for resume in [false, true] {
+            for mode in ["missing", "admitted", "broken", "unreadable"] {
+                std::fs::write(tmp.path().join("mode"), mode).unwrap();
+                std::fs::write(tmp.path().join("calls"), "").unwrap();
+                let mut request = json!({"request_id":"fixture", "directory":{"create":[]}});
+                if resume {
+                    request["session_id"] = json!("session");
+                }
+                let result = client.start_checked(request).await;
+                match mode {
+                    "missing" => {
+                        let receipt = result.unwrap();
+                        assert_eq!(receipt["phase"], "failed");
+                        assert!(receipt["detail"].as_str().unwrap().contains("STALE_TARGET"));
+                    }
+                    "admitted" => assert_eq!(result.unwrap()["phase"], "admitted"),
+                    _ => assert!(result.is_err(), "{mode}: uncertainty must stay reserved"),
+                }
+                let calls = std::fs::read_to_string(tmp.path().join("calls")).unwrap();
+                assert_eq!(calls.lines().filter(|s| *s == "start").count(), 1);
+                assert_eq!(
+                    calls.lines().filter(|s| *s == "status").count(),
+                    usize::from(mode != "broken")
+                );
+            }
+        }
+    }
     #[tokio::test(flavor = "current_thread")]
     async fn slow_exec_does_not_block_input_or_frame_timers() {
         fn slow_command() -> tokio::process::Command {

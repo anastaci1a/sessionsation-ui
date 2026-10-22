@@ -4,6 +4,10 @@ ANSI=re.compile(rb'\x1b\[[0-9;?]*[A-Za-z]')
 BACKEND='''#!/usr/bin/env python3
 import json,os,sys,time,pathlib
 args=sys.argv[1:];api=args[args.index('api')+1:];api=api[2:] if api[:1]==['--api-version'] else api
+if pathlib.Path(os.environ['FIXTURE_ROOT'],'reject-start').exists() and api[:1]==['launch'] and api[1] in ['start','status']:
+ if api[1]=='start':
+  with pathlib.Path(os.environ['FIXTURE_ROOT'],'start-attempts').open('a') as f:f.write('start\\n')
+ print(json.dumps({'api_version':1,'ok':False,'error':{'code':'STALE_TARGET' if api[1]=='start' else 'LAUNCH_NOT_FOUND','message':'fixture rejection'}}),file=sys.stderr);sys.exit(1)
 if api[:1] in [['account'],['capabilities']]: time.sleep(float(os.environ.get('FIXTURE_DELAY','0')))
 if api==['account','list']: result=[{'id':'codex:fixture','selectable':True,'prefill':{'eligible':True,'valid_until':int(time.time())+60},'usage':{}}]
 elif api==['capabilities']: result={'launch':{'version':1}}

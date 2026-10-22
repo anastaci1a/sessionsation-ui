@@ -45,6 +45,12 @@ Its reusable components are:
   the input/render runtime because the OS exec handshake can block even when
   child I/O is asynchronous. Cold executable/filesystem delays therefore do not
   stall the frame timer; cancellation retains kill-on-drop and never retries a mutation.
+  Start preflight failures release the pending UI request. After an explicit
+  structured Start rejection, the client checks that exact request's public
+  receipt: existing admission remains tracked; confirmed absence releases the UI.
+  Timeouts, malformed replies and failed receipt reads remain uncertain and never
+  trigger automatic resubmission. Both launch APIs journal admission before
+  starting a worker or terminal.
 - `render`: terminal-sized animated field, Unicode cell canvas and output deltas.
   Background geometry is independent of option scrolling.
 - `widgets`: option focus/scrolling, enabled/disabled row styling and grapheme-aware

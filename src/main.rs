@@ -166,17 +166,10 @@ impl Effects {
                             .as_str()
                             .unwrap_or_default()
                             .to_owned();
-                        // A failed read-only preflight is definitely not admitted.
-                        // Once Start is sent, errors remain uncertain and reconcile.
-                        let result = match client.launch("validate", request.clone()).await {
-                            Ok(_) => client
-                                .launch("start", request)
-                                .await
-                                .map_err(|e| e.to_string()),
-                            Err(e) => {
-                                Ok(serde_json::json!({"phase":"failed","detail":e.to_string()}))
-                            }
-                        };
+                        let result = client
+                            .start_checked(request)
+                            .await
+                            .map_err(|e| e.to_string());
                         let _ = tx.send(Message::Receipt(id, result)).await;
                     });
                 }

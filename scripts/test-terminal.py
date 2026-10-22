@@ -95,6 +95,17 @@ with tempfile.TemporaryDirectory(prefix='sessionsation-ui-pty-') as tmp:
  finally:
   t.close()
   for child in children:child.rmdir()
+ # A structured Start rejection with no admission receipt must unlock the UI.
+ (root/'reject-start').touch()
+ t=Terminal(root)
+ try:
+  t.wait('New Session');time.sleep(.2);t.drain();t.send(b'\r');t.wait('Account:');t.send(b'\x1b[B\x1b[B\r');t.wait('Session name');t.send(b'retry-session\r');t.wait('Dir:');time.sleep(.15);t.drain();t.send(b'\x1b[B\x1b[B\r')
+  t.wait('Launch failed:');t.send(b'\r');t.wait('New Session');t.send(b'\r');t.wait('Account:')
+  assert not t.screen.contains('A launch is still in progress')
+  assert (root/'start-attempts').read_text().splitlines()==['start'], 'Rejected request was replayed'
+  assert not (root/'start.json').exists()
+ finally:
+  t.close();(root/'reject-start').unlink();(root/'start-attempts').unlink(missing_ok=True)
  # Complete the inert handoff through the summary's separated Start action.
  t=Terminal(root)
  try:
