@@ -39,6 +39,7 @@ enum Purpose {
     Operations,
     Resume(String),
     Spaces(Value),
+    Relocation(Vec<String>),
     Launches(&'static str),
     Launch(&'static str, String),
     Remove(String),
@@ -62,6 +63,7 @@ enum Form {
     ActionWarning(Value, crate::session_list::Action),
     OperationApproval(String, u64),
     Rename(Value),
+    Relocation(Value, bool),
     SessionMutation(Value, &'static str),
     SessionDetails(String),
     Confirm(Vec<String>),
@@ -1448,6 +1450,15 @@ impl Manager {
                 self.validate_dialog_names();
             }
 
+            crate::session_list::Action::MoveProject
+            | crate::session_list::Action::ChangeDirectory => {
+                let moving = action == crate::session_list::Action::MoveProject;
+                self.show(if moving { "Move project folder" } else { "Change working directory" }, vec![if moving { "Enter a new destination for the project folder. Review the plan before moving files." } else { "Enter an existing directory. Only this session changes directory; project files stay in place." }.into()], &["Review", "Cancel"], Form::Relocation(s.clone(), moving));
+                self.dialog.as_mut().unwrap().fields.push(Field::new(
+                    "Destination",
+                    s["directory"].as_str().unwrap_or(""),
+                ));
+            }
             crate::session_list::Action::MoveSpace => {
                 return self.preview(
                     "Choose Space",
@@ -1652,6 +1663,20 @@ impl Manager {
                     preview["revision"].as_str().unwrap_or(""),
                 ])
             }
+            Form::Relocation(s, moving) => {
+                let mut args = Self::target(&s, "relocate");
+                args.extend(strings(&["--to", value(0)]));
+                if moving {
+                    args.push("--move-files".into());
+                }
+                let mut preview = args.clone();
+                preview.push("--dry-run".into());
+                return self.preview(
+                    "Review directory change",
+                    preview,
+                    Purpose::Relocation(args),
+                );
+            }
             Form::Rename(s) => {
                 let mut args = Self::target(&s, "rename");
                 args.extend(strings(&["--name", value(0)]));
@@ -1684,6 +1709,7 @@ impl Manager {
                 | Purpose::Limits(_)
                 | Purpose::Resume(_)
                 | Purpose::Spaces(_)
+                | Purpose::Relocation(_)
                 | Purpose::ActionCheck(..)
         ) && (self.foreground != Some(token) || !matches!(self.form, Form::Loading))
         {
@@ -1882,6 +1908,27 @@ impl Manager {
             }
             Purpose::Observe(key) => {
                 self.readiness.insert(key, value);
+            }
+            Purpose::Relocation(args) => {
+                let mut body = vec![
+                    value["detail"]
+                        .as_str()
+                        .unwrap_or("Review the directory change.")
+                        .into(),
+                    format!("From: {}", value["from"].as_str().unwrap_or("")),
+                    format!("To: {}", value["to"].as_str().unwrap_or("")),
+                ];
+                if let Some(others) = value["other_sessions"].as_array().filter(|v| !v.is_empty()) {
+                    body.push(format!(
+                        "Other sessions using this folder: {}",
+                        others
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                self.confirm("Confirm directory change", body, args);
             }
             Purpose::Spaces(session) => {
                 if self.page == Page::Session(id(&session).into()) {
@@ -2248,6 +2295,30 @@ impl Manager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn relocation_requires_preview_then_confirmation_and_preserves_target() {
+        let mut m = Manager::default();
+        let session = json!({"id":"session-1","generation":"generation-1","name":"Test","directory":"/project"});
+        m.session_action(session.clone(), crate::session_list::Action::MoveProject);
+        assert!(matches!(m.form, Form::Relocation(_, true)));
+        assert_eq!(m.dialog.as_ref().unwrap().fields[0].input.value, "/project");
+        let intents = m.submit(0, vec!["/destination".into()]);
+        let Intent::Api(token, args) = &intents[0] else {
+            panic!("preview required")
+        };
+        assert!(args.contains(&"--dry-run".into()));
+        assert!(args.contains(&"--move-files".into()));
+        m.response(*token, Ok(json!({"from":"/project","to":"/destination","detail":"Moves files","other_sessions":[]})));
+        assert!(matches!(m.form, Form::Confirm(_)));
+        let intents = m.submit(0, vec![]);
+        let Intent::Api(_, args) = &intents[0] else {
+            panic!("confirmed request required")
+        };
+        assert!(!args.contains(&"--dry-run".into()));
+        assert!(args.contains(&"session-1".into()));
+        assert!(args.contains(&"generation-1".into()));
+    }
+
     #[test]
     fn provider_error_warning_precedes_configuration_and_cancel_never_mutates() {
         for state in ["errored", "interrupted", "stopped", "unknown"] {

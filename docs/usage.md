@@ -101,10 +101,13 @@ there is no matching selection; refreshed lists retain the hovered account by ID
   and operation progress. Final checks and destructive confirmations belong to CLI.
 - Codex is implemented; Claude enrollment, usage, messaging and lifecycle are not.
   Cross-provider conversion is outside this version.
-- Active folder relocation, working-directory changes and experimental automation
-  are inherited backend capabilities without this popup's public-API integration.
-  Their unavailable menu entries do not imply working actions. Saved-session
-  Resume can select another directory when the backend advertises that capability.
+- Active Codex sessions support Change working directory and Move project folder
+  when the backend advertises those capabilities. Enter a destination, review the
+  backend plan, then confirm. Directory changes leave files in place; folder moves
+  never merge or overwrite destinations. Both wait for safe idle and restart the
+  selected session with its existing identity/history. Background-work approval
+  and recovery use the normal operation dialog. Saved-session Resume can choose
+  another directory. Experimental automation remains unavailable.
 - Idle Pause is hidden; busy Pause remains unavailable pending public integration.
   Provider-login cancellation is also unfinished: closing the login viewer does
   not cancel a provider-owned login.

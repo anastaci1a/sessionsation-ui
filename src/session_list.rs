@@ -14,6 +14,8 @@ pub enum Action {
     Resume,
     Switch,
     MoveSpace,
+    MoveProject,
+    ChangeDirectory,
     Restart,
     Stop,
     Archive,
@@ -109,10 +111,13 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
             Action::MoveSpace,
         ),
         (Row::separator(), Action::Unavailable),
-        (Row::gate("Move project folder", false), Action::Unavailable),
         (
-            Row::gate("Change working directory", false),
-            Action::Unavailable,
+            Row::gate("Move project folder", c["move_project"] == true),
+            Action::MoveProject,
+        ),
+        (
+            Row::gate("Change working directory", c["change_directory"] == true),
+            Action::ChangeDirectory,
         ),
         (Row::separator(), Action::Unavailable),
         (
@@ -438,6 +443,22 @@ pub fn paint_with_archives(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn directory_actions_follow_backend_capabilities() {
+        for enabled in [false, true] {
+            let rows = actions(
+                &json!({"availability":"running","capabilities":{"move_project":enabled,"change_directory":enabled}}),
+                true,
+            );
+            for action in [Action::MoveProject, Action::ChangeDirectory] {
+                assert_eq!(
+                    rows.iter().find(|(_, a)| *a == action).unwrap().0.enabled,
+                    enabled
+                );
+            }
+        }
+    }
+
     #[test]
     fn activity_groups_share_one_nonselectable_separator_and_mapping() {
         let sessions = vec![
