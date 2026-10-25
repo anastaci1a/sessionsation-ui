@@ -35,6 +35,17 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    SubmitWorker {
+        #[arg(long)]
+        request_id: String,
+        #[arg(long)]
+        journal: PathBuf,
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        binary: PathBuf,
+    },
     Popup,
     Open,
     Demo {
@@ -99,6 +110,7 @@ struct Effects {
     client: Client,
     sender: mpsc::Sender<Message>,
     preferences: PathBuf,
+    launch_journal: sessionsation_ui::launch_intent::Journal,
     initial: PathBuf,
     env: Arc<BTreeMap<String, String>>,
     directory_limit: Arc<Semaphore>,
@@ -112,9 +124,22 @@ impl Effects {
             let client = self.client.clone();
             match effect {
                 Effect::Api(token, args) => {
+                    let journal = self.launch_journal.clone();
                     tokio::spawn(async move {
                         let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-                        let result = client.api(&refs, None).await.map_err(|e| e.to_string());
+                        let result = match refs.as_slice() {
+                            [kind @ ("launch" | "resume-launch"), "list"] => {
+                                journal.list(&client, kind).await
+                            }
+                            [
+                                kind @ ("launch" | "resume-launch"),
+                                "status",
+                                "--request-id",
+                                id,
+                            ] => journal.status(&client, kind, id).await,
+                            _ => client.api(&refs, None).await,
+                        }
+                        .map_err(|e| e.to_string());
                         let _ = tx.send(Message::Managed(token, result)).await;
                     });
                 }
@@ -161,16 +186,35 @@ impl Effects {
                     }));
                 }
                 Effect::Start(request) => {
-                    tokio::spawn(async move {
-                        let id = request["request_id"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .to_owned();
-                        let result = client
-                            .start_checked(request)
-                            .await
-                            .map_err(|e| e.to_string());
-                        let _ = tx.send(Message::Receipt(id, result)).await;
+                    let journal = self.launch_journal.clone();
+                    let id = request["request_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned();
+                    // Persist the click before any asynchronous work; a separate
+                    // one-shot submitter survives closure of this viewer.
+                    // Only the small durable click record precedes the task;
+                    // cold executable spawn must not block input/rendering.
+                    let accepted = journal.accept(&request);
+                    tokio::task::spawn_blocking(move || {
+                        let result = match accepted {
+                            Ok(()) => {
+                                let result = std::env::current_exe()
+                                    .map_err(anyhow::Error::from)
+                                    .and_then(|exe| {
+                                        journal.spawn_worker(&exe, &client, &id).map(|_| ())
+                                    });
+                                if let Err(e) = &result {
+                                    let _ =
+                                        journal.finish(&id, &Err(anyhow::anyhow!(e.to_string())));
+                                }
+                                result
+                            }
+                            Err(e) => Err(e),
+                        };
+                        if let Err(e) = result {
+                            let _ = tx.blocking_send(Message::Receipt(id, Err(e.to_string())));
+                        }
                     });
                 }
                 Effect::Save => {
@@ -211,18 +255,15 @@ impl Effects {
         });
     }
     fn receipt(&self, id: String, resume: bool) {
+        let journal = self.launch_journal.clone();
         let tx = self.sender.clone();
         let client = self.client.clone();
         tokio::spawn(async move {
-            let result = client
-                .api(
-                    &[
-                        if resume { "resume-launch" } else { "launch" },
-                        "status",
-                        "--request-id",
-                        &id,
-                    ],
-                    None,
+            let result = journal
+                .status(
+                    &client,
+                    if resume { "resume-launch" } else { "launch" },
+                    &id,
                 )
                 .await
                 .map_err(|e| e.to_string());
@@ -291,6 +332,26 @@ async fn main() -> Result<()> {
                 ])
                 .await?;
             Ok(())
+        }
+        Command::SubmitWorker {
+            request_id,
+            journal,
+            root,
+            binary,
+        } => {
+            let client = Client {
+                binary,
+                root: root.clone(),
+                herdr: PathBuf::new(),
+                socket: PathBuf::new(),
+                session: String::new(),
+            };
+            sessionsation_ui::launch_intent::Journal {
+                directory: journal,
+                root,
+            }
+            .submit(&client, &request_id)
+            .await
         }
         Command::Popup => popup(args.preferences).await,
     }
@@ -377,6 +438,10 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     let mut effects = Effects {
         client: client.clone(),
         sender: tx.clone(),
+        launch_journal: sessionsation_ui::launch_intent::Journal {
+            directory: pref.with_file_name("launch-intents"),
+            root: client.root.clone(),
+        },
         preferences: pref,
         initial,
         env: Arc::new(std::env::vars().collect()),
@@ -447,7 +512,9 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
             "failed" | "cancelled" | "recovered"=>{app.request=None;app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",&sessionsation_ui::messages::describe(r["detail"].as_str().unwrap_or("inspect launch status")));},
             phase=>{app.error=format!("{}: {}",sessionsation_ui::messages::phase(phase),r["detail"].as_str().unwrap_or("waiting for confirmed handoff"));},
            },Err(e)=>{app.error=sessionsation_ui::app::reconciliation_message(&e);}
-          }if app.launch_dialog&&let Some(d)=&mut app.manager.dialog{d.body=vec![app.error.clone()];if app.success || app.error.starts_with("Launch failed:"){d.finish();}}app.dirty=true;},
+          }
+          if !app.success {app.manager.note=app.error.clone();}
+          if app.launch_dialog&&let Some(d)=&mut app.manager.dialog{d.body=vec![app.error.clone()];if app.success || app.error.starts_with("Launch failed:"){d.finish();}}app.dirty=true;},
           Message::Focused(result)=>{match result { Ok(())=>{app.prefs.last_account=app.draft.account.clone();next.push(Effect::Save);},Err(e)=>{app.error=format!("Session is running; tab focus failed: {e}. Esc closes.");}}app.dirty=true;},
           Message::Saved(result)=>{if let Err(e)=result{app.error=format!("Preferences were not saved: {e}");if !app.success{app.page=Page::Config;}app.dirty=true;}else if app.success && !app.launch_background {app.exit=true;}},
          }

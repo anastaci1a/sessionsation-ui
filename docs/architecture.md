@@ -44,13 +44,25 @@ Its reusable components are:
 - `client`: public API/HERDR subprocess transport. Process creation runs off
   the input/render runtime because the OS exec handshake can block even when
   child I/O is asynchronous. Cold executable/filesystem delays therefore do not
-  stall the frame timer; cancellation retains kill-on-drop and never retries a mutation.
+  stall the frame timer. Read cancellation retains kill-on-drop; Start admission
+  survives viewer closure and is never retried automatically.
   Start preflight failures release the pending UI request. After an explicit
   structured Start rejection, the client checks that exact request's public
   receipt: existing admission remains tracked; confirmed absence releases the UI.
   Timeouts, malformed replies and failed receipt reads remain uncertain and never
   trigger automatic resubmission. Both launch APIs journal admission before
   starting a worker or terminal.
+- `launch_intent`: private UI submission evidence beside preferences in
+  `launch-intents/`, scoped to the configured backend root. A click persists its
+  original UUID/request before spawning a detached one-shot public-CLI submitter.
+  A durable exclusive attempt marker prevents worker replay. Closing the popup
+  cannot kill the submitter; a timed-out admission child is also retained in its
+  own process group. The backend still owns all validation and lifecycle.
+  Operations merges local pending/failed/uncertain records with backend receipts
+  by request ID, preferring backend evidence. Missing local submissions receive
+  one read-only status reconciliation, never a resend. Receipt absence means
+  uncertainty, not cancellation. These files contain paths and selections, never
+  credentials; preserve them when investigating an unconfirmed Start.
 - `render`: terminal-sized animated field, Unicode cell canvas and output deltas.
   Background geometry is independent of option scrolling.
 - `widgets`: option focus/scrolling, enabled/disabled row styling and grapheme-aware

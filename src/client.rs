@@ -301,7 +301,13 @@ impl Client {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .kill_on_drop(!matches!(args, ["launch" | "resume-launch", "start"]));
+        if matches!(args, ["launch" | "resume-launch", "start"]) {
+            // A confirmed click owns this admission attempt independently of its viewer.
+            // New process group protects it from terminal-group shutdown; only the
+            // backend may decide lifecycle, and reads never resend this request.
+            command.process_group(0);
+        }
         let mut child = spawn_child(command).await?;
         if let Some(input) = input {
             let mut stdin = child.stdin.take().context("Missing backend stdin")?;
