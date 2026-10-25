@@ -202,7 +202,14 @@ impl Effects {
                                 let result = std::env::current_exe()
                                     .map_err(anyhow::Error::from)
                                     .and_then(|exe| {
-                                        journal.spawn_worker(&exe, &client, &id).map(|_| ())
+                                        journal.spawn_worker(&exe, &client, &id).map(|mut child| {
+                                            // Reap completed submitters while this viewer lives.
+                                            // This waiter neither owns lifecycle nor holds the
+                                            // async runtime open when the popup exits.
+                                            std::thread::spawn(move || {
+                                                let _ = child.wait();
+                                            });
+                                        })
                                     });
                                 if let Err(e) = &result {
                                     let _ =
