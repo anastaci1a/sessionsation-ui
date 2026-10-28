@@ -55,6 +55,8 @@ fn resume_explanation(error: &str) -> String {
             "source changed"
         } else if error.starts_with("SESSION_OPERATION_IN_PROGRESS") {
             "operation active"
+        } else if error.starts_with("SESSION_STALE") {
+            "stale"
         } else if error.starts_with("SESSION_ALREADY_RUNNING") {
             "already running"
         } else if error.starts_with("SESSION_NAME_EXISTS") {
@@ -123,6 +125,7 @@ pub struct App {
     pub draft: Draft,
     pub prefs: Preferences,
     pub accounts: Vec<Account>,
+    provider_filter: Option<String>,
     pub spaces: Vec<Workspace>,
     pub initial: PathBuf,
     pub instance: String,
@@ -177,6 +180,7 @@ impl App {
             draft,
             prefs,
             accounts: vec![],
+            provider_filter: None,
             spaces: vec![],
             initial,
             instance,
@@ -419,23 +423,33 @@ impl App {
                 .collect(),
             Page::Accounts => {
                 use unicode_width::UnicodeWidthStr;
-                let labels = crate::usage::picker_labels(&self.accounts);
+                let visible = self.picker_accounts();
+                let labels = crate::usage::picker_labels(&visible);
                 let preview_width = labels
                     .iter()
                     .map(|s| UnicodeWidthStr::width(s.as_str()))
                     .max()
                     .unwrap_or(0);
-                let name_width = self
-                    .accounts
+                let name_width = visible
                     .iter()
                     .map(|a| UnicodeWidthStr::width(crate::usage::short_name(&a.id).as_str()))
                     .max()
                     .unwrap_or(0);
-                self.accounts
-                    .iter()
-                    .zip(labels)
-                    .map(|(a, usage)| {
-                        let column = 2 + name_width + 1 + preview_width
+                let tagged = self.accounts.iter().any(|a| a.provider() != "codex");
+                let tag_width = if tagged { 12 } else { 0 };
+                self.picker_filter_row()
+                    .then(|| Row::yes(self.picker_filter_label()))
+                    .into_iter()
+                    .chain(visible.iter().zip(labels).map(|(a, usage)| {
+                        let usage = if tagged {
+                            format!(
+                                "{:<11} {usage}",
+                                crate::client::provider_label(a.provider())
+                            )
+                        } else {
+                            usage
+                        };
+                        let column = 2 + name_width + 1 + preview_width + tag_width
                             - UnicodeWidthStr::width(usage.as_str());
                         Row::gate(crate::usage::short_name(&a.id), a.selectable)
                             .with_column_preview(usage, column, false)
@@ -445,7 +459,7 @@ impl App {
                                 crate::usage::Usage::account(a).status.clone(),
                                 crate::usage::Usage::account(a).status == "Ready",
                             )
-                    })
+                    }))
                     .collect()
             }
             Page::Spaces => std::iter::once(Row::yes("[create new space]"))
@@ -675,9 +689,10 @@ impl App {
                 .is_some_and(|r| r.label == "Cancel");
         let picker_account = (self.page == Page::Accounts)
             .then(|| {
-                self.accounts
-                    .get(self.options.selected)
-                    .map(|a| a.id.clone())
+                self.options
+                    .selected
+                    .checked_sub(self.picker_base())
+                    .and_then(|i| self.picker_accounts().get(i).map(|a| a.id.clone()))
             })
             .flatten();
         let old_account = self.draft.account.clone();
@@ -754,9 +769,10 @@ impl App {
         if self.page == Page::Accounts {
             if let Some(id) = picker_account {
                 self.options.selected = self
-                    .accounts
+                    .picker_accounts()
                     .iter()
                     .position(|a| a.id == id)
+                    .map(|i| i + self.picker_base())
                     .unwrap_or_else(|| self.opening_account_row());
             } else if empty_accounts && !self.accounts.is_empty() {
                 self.options.selected = self.opening_account_row();
@@ -814,17 +830,81 @@ impl App {
         }
         self.dirty = true;
     }
+    /// Provider an in-progress resume or account switch is bound to; the backend
+    /// never converts a conversation between providers.
+    fn picker_lock(&self) -> Option<String> {
+        let session = self.switch.as_ref().or(self.resume.as_ref())?;
+        session["provider"].as_str().map(str::to_owned).or_else(|| {
+            session["account_id"]
+                .as_str()
+                .and_then(|id| id.split_once(':'))
+                .map(|(provider, _)| provider.to_owned())
+        })
+    }
+    fn picker_filter_row(&self) -> bool {
+        self.picker_lock().is_none()
+            && self
+                .accounts
+                .iter()
+                .any(|a| a.provider() != self.accounts[0].provider())
+    }
+    fn picker_filter(&self) -> Option<String> {
+        self.picker_lock().or_else(|| {
+            self.provider_filter
+                .clone()
+                .filter(|_| self.picker_filter_row())
+        })
+    }
+    /// Accounts offered by the account step, after the provider lock or filter.
+    fn picker_accounts(&self) -> Vec<&Account> {
+        let filter = self.picker_filter();
+        self.accounts
+            .iter()
+            .filter(|a| filter.as_deref().is_none_or(|f| a.provider() == f))
+            .collect()
+    }
+    fn picker_base(&self) -> usize {
+        usize::from(self.picker_filter_row())
+    }
+    fn picker_filter_label(&self) -> String {
+        format!(
+            "Provider: {}",
+            self.picker_filter()
+                .as_deref()
+                .map_or("All", |p| crate::client::provider_label(p))
+        )
+    }
+    fn cycle_picker_filter(&mut self) {
+        let mut providers: Vec<String> = vec![];
+        for a in &self.accounts {
+            if !providers.iter().any(|p| p == a.provider()) {
+                providers.push(a.provider().to_owned());
+            }
+        }
+        providers.sort();
+        self.provider_filter = match self.picker_filter() {
+            None => providers.first().cloned(),
+            Some(current) => providers
+                .iter()
+                .position(|p| *p == current)
+                .and_then(|i| providers.get(i + 1))
+                .cloned(),
+        };
+        self.options.selected = self.opening_account_row();
+        self.dirty = true;
+    }
     fn opening_account_row(&self) -> usize {
         let current = self
             .switch
             .as_ref()
             .and_then(|s| s["account_id"].as_str())
             .or(self.draft.account.as_deref());
-        self.accounts
+        let visible = self.picker_accounts();
+        visible
             .iter()
             .position(|a| Some(a.id.as_str()) == current)
-            .or_else(|| (!self.accounts.is_empty()).then_some(0))
-            .unwrap_or(0)
+            .map(|i| i + self.picker_base())
+            .unwrap_or(self.picker_base())
     }
     fn directory_action_count(&self) -> usize {
         if matches!(
@@ -1038,13 +1118,24 @@ impl App {
                 self.push(Page::Directory(Target::Space(id)), p)
             }
             Page::Accounts => {
+                if self.picker_filter_row() && self.options.selected == 0 {
+                    self.cycle_picker_filter();
+                    return vec![];
+                }
+                let Some(account) = self
+                    .options
+                    .selected
+                    .checked_sub(self.picker_base())
+                    .and_then(|i| self.picker_accounts().get(i).map(|a| a.id.clone()))
+                else {
+                    return vec![];
+                };
                 if let Some(session) = self.switch.take() {
-                    let account = self.accounts[self.options.selected].id.clone();
                     self.pop();
                     self.manager.switch_confirmation(session, &account);
                     return vec![];
                 }
-                self.draft.account = Some(self.accounts[self.options.selected].id.clone());
+                self.draft.account = Some(account);
                 self.auto_account = false;
                 self.pop();
                 self.revalidate()
@@ -2230,7 +2321,7 @@ mod tests {
         app.key(repeat(up));
         assert_eq!(app.manager.options.selected, last - 1);
     }
-    fn app() -> App {
+    pub(super) fn app() -> App {
         App::new(
             Preferences::default(),
             "/tmp".into(),
@@ -3112,5 +3203,80 @@ mod resume_tests {
         assert_eq!(a.request, request);
         assert!(a.management(vec![Intent::New]).is_empty());
         assert_eq!(a.page, Page::Home);
+    }
+    fn mixed_app() -> App {
+        let mut a = super::tests::app();
+        a.accounts = serde_json::from_value(json!([
+            {"id":"codex:a","selectable":true},
+            {"id":"claude:c1","provider":"claude","selectable":true},
+            {"id":"codex:b","selectable":true},
+            {"id":"claude:c2","provider":"claude","selectable":true}
+        ]))
+        .unwrap();
+        a.page = Page::Accounts;
+        a.options.selected = a.opening_account_row();
+        a
+    }
+    fn labels(a: &App) -> Vec<String> {
+        a.rows()
+            .into_iter()
+            .filter(|r| !r.separator)
+            .map(|r| r.label)
+            .collect()
+    }
+    #[test]
+    fn launcher_account_step_lists_both_providers_with_a_provider_filter() {
+        let mut a = mixed_app();
+        assert_eq!(
+            labels(&a),
+            ["Provider: All", "a", "c1", "b", "c2", "Cancel"]
+        );
+        assert_eq!(a.options.selected, 1, "opens on the first account");
+        let tags: Vec<_> = a.rows().iter().filter_map(|r| r.preview.clone()).collect();
+        assert!(tags[0].contains("Codex") && tags[1].contains("Claude Code"));
+        // Filter row cycles Claude Code -> Codex -> All.
+        a.options.selected = 0;
+        a.activate();
+        assert_eq!(labels(&a), ["Provider: Claude Code", "c1", "c2", "Cancel"]);
+        a.options.selected = 0;
+        a.activate();
+        assert_eq!(labels(&a), ["Provider: Codex", "a", "b", "Cancel"]);
+        a.options.selected = 0;
+        a.activate();
+        assert_eq!(a.rows()[0].label, "Provider: All");
+        // Choose a Claude account through the filter: draft gets the qualified ID.
+        a.options.selected = 0;
+        a.activate();
+        a.options.selected = 2;
+        a.activate();
+        assert_eq!(a.draft.account.as_deref(), Some("claude:c2"));
+    }
+    #[test]
+    fn launcher_without_mixed_providers_has_no_filter_and_is_unchanged() {
+        let mut a = super::tests::app();
+        a.accounts = serde_json::from_value(json!([
+            {"id":"codex:a","selectable":true},{"id":"codex:b","selectable":true}
+        ]))
+        .unwrap();
+        a.page = Page::Accounts;
+        assert_eq!(labels(&a), ["a", "b", "Cancel"]);
+        let mut only_claude = super::tests::app();
+        only_claude.accounts = serde_json::from_value(json!([
+            {"id":"claude:c1","provider":"claude","selectable":true}
+        ]))
+        .unwrap();
+        only_claude.page = Page::Accounts;
+        only_claude.options.selected = 0;
+        only_claude.activate();
+        assert_eq!(only_claude.draft.account.as_deref(), Some("claude:c1"));
+    }
+    #[test]
+    fn resume_and_switch_pickers_are_locked_to_the_session_provider() {
+        let mut a = mixed_app();
+        a.resume = Some(json!({"id":"s","provider":"claude","account_id":"claude:c1"}));
+        assert_eq!(labels(&a), ["c1", "c2", "Cancel"]);
+        a.resume = None;
+        a.switch = Some(json!({"id":"s","account_id":"codex:a"}));
+        assert_eq!(labels(&a), ["a", "b", "Cancel"]);
     }
 }

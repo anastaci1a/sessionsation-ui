@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {Client,executePlan,validatePlan,targetArgs,display} from '../src/client.mjs';
+import {Client,executePlan,validatePlan,targetArgs,display,addableProviders,providerLabel,filterAccounts,accountLabel,usageSummary,loginCommand} from '../src/client.mjs';
 const run=promisify(execFile);
 async function fixture(t,body) {
   const dir=await mkdtemp(join(tmpdir(),'sessionsation-ui-'));
@@ -75,4 +75,30 @@ test('New account menu uses account list without global session discovery',async
   const f=await fixture(t,"const args=process.argv.slice(7);let result;if(args.join(' ')==='account list') result=[{id:'codex:example',selectable:true}];else if(args.join(' ')==='launcher new --account codex:example')result={action:'exec',credentials_in_client:false,argv:['/bin/echo','FAST_NEW_HANDOFF'],cwd:null};else{console.error('unexpected discovery '+args.join(' '));process.exit(9);}console.log(JSON.stringify({api_version:1,ok:true,result}));");
   const output=await new Promise((resolve,reject)=>{const child=execFile(process.execPath,['src/main.mjs','launcher'],{env:{...process.env,SESSIONSATION_BIN:f.binary,SESSIONSATION_DATA_DIR:join(f.dir,'data')}},(e,stdout)=>e?reject(e):resolve(stdout));child.stdin.end('1\n1\n');});
   assert.match(output,/FAST_NEW_HANDOFF/);
+});
+test('provider picker lists only implemented providers this client has a flow for',()=>{
+  const caps={providers:[{id:'codex',implemented:true},{id:'claude',implemented:true},{id:'future',implemented:true},{id:'other',implemented:false}]};
+  assert.deepEqual(addableProviders(caps),['codex','claude']);
+  assert.deepEqual(addableProviders({}),[]);
+  assert.equal(providerLabel('claude'),'Claude Code'); assert.equal(providerLabel('codex'),'Codex');
+});
+test('unified account list filters by provider and tags each account',()=>{
+  const accounts=[{id:'codex:a'},{id:'claude:claude-main',provider:'claude'},{id:'codex:b'}];
+  assert.deepEqual(filterAccounts(accounts,'claude').map(a=>a.id),['claude:claude-main']);
+  assert.deepEqual(filterAccounts(accounts,'codex').map(a=>a.id),['codex:a','codex:b']);
+  assert.equal(filterAccounts(accounts,null).length,3);
+  assert.match(accountLabel({id:'claude:claude-main',usage:{}}),/\[Claude Code\]/);
+});
+test('usage summary never turns missing, partial or unusable data into 0%',()=>{
+  const win=(d,p)=>({duration_minutes:d,used_percent:p});
+  assert.equal(usageSummary({usage:{state:'fresh',observed_at:1,short:win(300,40),weekly:win(10080,10)}}),'5h 60% / wk 90%');
+  assert.equal(usageSummary({usage:{state:'partial',observed_at:1,short:win(300,40),weekly:null}}),'5h 60% / wk unknown');
+  assert.equal(usageSummary({usage:{state:'stale',observed_at:1,short:null,weekly:win(10080,10)}}),'5h unknown / wk 90% (stale)');
+  for (const state of ['missing','no_windows','error']) assert.equal(usageSummary({usage:{state,observed_at:1,short:win(300,0),weekly:null}}),'usage unavailable');
+  assert.equal(usageSummary({usage:{observed_at:null,short:null,weekly:null}}),'usage unavailable');
+  assert.equal(usageSummary({usage:{observed_at:1,short:win(300,Number.NaN),weekly:win(10080,150)}}),'5h unknown / wk unknown');
+});
+test('Claude login exec plan is shown as an exact quoted command and never executed',()=>{
+  const argv=['/usr/bin/sessionsation','account','login','claude:new',"a b'c\u001b[2J"];
+  assert.equal(loginCommand(argv),"/usr/bin/sessionsation account login claude:new 'a b'\\''c[2J'");
 });

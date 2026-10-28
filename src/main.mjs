@@ -1,5 +1,5 @@
 import {createInterface} from 'node:readline';
-import {Client,executePlan,targetArgs,display} from './client.mjs';
+import {Client,executePlan,targetArgs,display,providerLabel,providerOf,addableProviders,filterAccounts,accountLabel,loginCommand} from './client.mjs';
 
 const mode=process.argv[2]??'launcher';
 if (!['launcher','manage'].includes(mode)) { console.error('Usage: sessionsation-ui launcher|manage'); process.exit(2); }
@@ -23,8 +23,15 @@ async function launch() {
     let args=['launcher',action];
     if (action!=='shell') {
       if (action==='new') {
-        const accounts=await client.call(['account','list']);
-        const a=await choose('New session: account',accounts.filter(a=>a.selectable),a=>`${a.id} ${a.plan??''}`);
+        const all=(await client.call(['account','list'])).filter(a=>a.selectable);
+        const providers=[...new Set(all.map(providerOf))].sort();
+        let provider=null;
+        if (providers.length>1) {
+          const picked=await choose('New session: provider',['all',...providers],p=>p==='all'?'All':providerLabel(p));
+          if (!picked) continue;
+          provider=picked==='all'?null:picked;
+        }
+        const a=await choose('New session: account',filterAccounts(all,provider),accountLabel);
         if (!a) continue; args.push('--account',a.id);
       } else {
         const state=await client.call(['state']);
@@ -54,7 +61,7 @@ async function sessionMenu(state) {
   show(await client.call(args)); print('Operation admitted; inspect Operations for completion or confirmation.');
 }
 async function accountMenu(state) {
-  const a=await choose('Select account',state.accounts,a=>`${a.id} ${a.membership} ${a.enabled?'enabled':'disabled'}${a.auth_required?' login required':''}`);
+  const a=await choose('Select account',state.accounts,a=>`${accountLabel(a)} ${a.membership} ${a.enabled?'enabled':'disabled'}${a.auth_required?' login required':''}`);
   if (!a) return;
   const action=await choose(a.id,['inspect','usage',...(a.membership==='removed'?['restore']:['login',a.enabled?'disable':'enable','remove'])],x=>x);
   if (!action) return;
@@ -92,8 +99,16 @@ async function manage() {
       if (action==='operations') await operations();
       if (action==='capabilities') show(await client.call(['capabilities']));
       if (action==='enroll') {
-        const id=await ask('Provider-qualified account ID:');
-        if (id && await confirm(`Ask backend to enroll ${id}?`)) show(await client.call(['account','add',id]));
+        const caps=await client.call(['capabilities']);
+        const providers=addableProviders(caps);
+        const provider=providers.length>1?await choose('Provider',providers,providerLabel):providers[0]??'codex';
+        const name=provider&&await ask(`${providerLabel(provider)} account name:`);
+        const id=name&&`${provider}:${name}`;
+        if (id && await confirm(`Ask backend to enroll ${id}?`)) {
+          const added=await client.call(['account','add',id]);
+          if (Array.isArray(added?.login?.argv)) print(`Run in a terminal to sign in: ${loginCommand(added.login.argv)}`);
+          else show(added);
+        }
       }
     } catch(e) { print(`${e.code??'UI_ERROR'}: ${e.message}`); const response=await ask('Press Enter to refresh, or q to exit:'); if(response===null || response==='q') return; }
   }

@@ -144,6 +144,24 @@ owns recovery and safety semantics. Older backends without the per-session
 
 ## Account and session menus
 
+### Providers (Codex and Claude Code)
+
+Add Account first asks for a provider when the backend reports more than one
+implemented provider (`capabilities.providers`). Codex shows the verification
+URL and code. Claude Code returns an interactive login plan; the UI shows the
+exact command to run in a terminal and never runs it or handles tokens. Account
+names are unique across providers. When providers are mixed, Manage Accounts and
+the New Session account step tag each account (Codex / Claude Code) and start with
+a `Provider: All` row that cycles the filter. Resume and Switch account lock the
+account step to the session's provider. Usage details name the source, semantics,
+age and reset time; a missing or unusable window is shown as unavailable or unknown,
+never as 0%.
+
+A Claude Code session offers only Focus Session (verified HERDR attachment),
+Session Details, Rename Session (Sessionsation name; the native title follows at
+the next launch or resume) and, when stopped, Start Session. Everything else is
+omitted. Stale or unknown sessions explain why they cannot be started.
+
 Home orders New Session, Manage Sessions, Add Account/Manage Accounts, a dot
 separator and Settings. If every account fits above the bottom controls, accounts
 appear inline without selector circles and Add Account is available. The account/bar

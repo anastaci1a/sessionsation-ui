@@ -29,9 +29,22 @@ pub struct Usage {
     pub status: String,
     pub stale: bool,
 }
+/// Backend usage state (`fresh|partial|stale|missing|no_windows|error`), read from
+/// the usage object or the account-level mirror.
+pub fn usage_state(a: &Account) -> Option<&str> {
+    a.usage["state"]
+        .as_str()
+        .or_else(|| a.details.get("usage_state").and_then(|v| v.as_str()))
+}
 impl Usage {
     pub fn account(a: &Account) -> Self {
-        let stale = a.details.get("usage_fresh").and_then(|v| v.as_bool()) != Some(true);
+        let state = usage_state(a);
+        let fresh_flag = a.details.get("usage_fresh").and_then(|v| v.as_bool());
+        let stale = match state {
+            Some("stale") => true,
+            Some("fresh" | "partial") => fresh_flag == Some(false),
+            _ => fresh_flag != Some(true),
+        };
         let status =
             if let Some(deletion) = a.details.get("deletion").filter(|v| v["id"].is_string()) {
                 if deletion["phase"] == "failed" {
@@ -43,9 +56,15 @@ impl Usage {
                 "Deregistered"
             } else if a.details.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
                 "Disabled"
-            } else if a.details.get("auth_required").and_then(|v| v.as_bool()) == Some(true) {
+            } else if a.details.get("auth_required").and_then(|v| v.as_bool()) == Some(true)
+                || a.details
+                    .get("auth_detail")
+                    .is_some_and(|v| v == "AUTH_REQUIRED")
+            {
                 "Login required"
-            } else if a.usage["observed_at"].as_i64().is_none() {
+            } else if matches!(state, Some("missing" | "no_windows" | "error"))
+                || a.usage["observed_at"].as_i64().is_none()
+            {
                 "Usage unavailable"
             } else if stale {
                 "Usage stale"
@@ -68,6 +87,7 @@ impl Usage {
                     .then(|| a.usage[key]["used_percent"].as_f64())
                     .flatten()
                     .filter(|n| n.is_finite() && (0. ..=100.).contains(n))
+                    .filter(|_| !matches!(state, Some("missing" | "no_windows" | "error")))
                     .map(|used| 100. - used);
                 let limits = a.details.get("switch_thresholds");
                 let limit = limits
@@ -244,18 +264,20 @@ impl Usage {
             let length = bar.saturating_sub(1) as f64;
             let filled = window.remaining.map(|p| length * p.clamp(0., 100.) / 100.);
             let Some(filled) = filled else {
+                // A missing window is stated in its own row, never drawn as 0%.
+                let text = format!(
+                    "{} {}",
+                    window.label,
+                    if self.status == "Ready" {
+                        "unknown"
+                    } else {
+                        &self.status
+                    }
+                );
                 canvas.accent_text(
                     x,
-                    y,
-                    &format!(
-                        "{}: {}",
-                        window.label,
-                        if self.status == "Ready" {
-                            "Usage unavailable"
-                        } else {
-                            &self.status
-                        }
-                    ),
+                    y + row,
+                    &crate::widgets::ellipsize(&text, bar),
                     Accent::default(),
                 );
                 continue;
@@ -802,14 +824,17 @@ mod tests {
 
 /// Shared right-edge picker columns. Padding is computed from displayed values,
 /// not a fixed three-digit reservation; absent five-hour windows have no slash.
-pub fn picker_labels(accounts: &[Account]) -> Vec<String> {
+pub fn picker_labels<A: std::borrow::Borrow<Account>>(accounts: &[A]) -> Vec<String> {
     let values: Vec<_> = accounts
         .iter()
         .map(|a| {
+            let a: &Account = a.borrow();
+            let unavailable = matches!(usage_state(a), Some("missing" | "no_windows" | "error"));
             let remaining = |key: &str, duration: i64| {
                 (a.usage[key]["duration_minutes"].as_i64() == Some(duration))
                     .then(|| a.usage[key]["used_percent"].as_f64())
                     .flatten()
+                    .filter(|_| !unavailable)
                     .filter(|n| n.is_finite() && (0. ..=100.).contains(n))
                     .map(|n| format!("{:.0}", 100. - n))
                     .unwrap_or_else(|| "?".into())
@@ -861,5 +886,77 @@ mod picker_tests {
         );
         accounts[2].usage["short"] = json!({"duration_minutes":60,"used_percent":0});
         assert!(!picker_labels(&accounts)[2].contains('/'));
+    }
+    fn claude_account(usage: serde_json::Value) -> Account {
+        serde_json::from_value(json!({"id":"claude:claude-main","provider":"claude","selectable":true,"usage_fresh":true,"enabled":true,"usage":usage})).unwrap()
+    }
+    #[test]
+    fn missing_error_and_empty_claude_usage_is_unavailable_never_zero_percent() {
+        for state in ["missing", "no_windows", "error"] {
+            // Even leftover percentages are not shown when the backend says unknown.
+            let a = claude_account(json!({"state":state,"observed_at":100,
+                "short":{"duration_minutes":300,"used_percent":0},"weekly":null}));
+            let u = Usage::account(&a);
+            assert_eq!(u.status, "Usage unavailable", "{state}");
+            assert!(u.status_only());
+            assert!(u.windows.iter().all(|w| w.remaining.is_none()));
+            assert_eq!(picker_labels(&[a]), ["?% 5h / ?% wk"]);
+        }
+        let none = claude_account(
+            json!({"state":"missing","observed_at":null,"short":null,"weekly":null}),
+        );
+        assert_eq!(Usage::account(&none).status, "Usage unavailable");
+    }
+    #[test]
+    fn stale_and_partial_claude_usage_keep_known_windows_and_mark_the_rest() {
+        let stale = claude_account(json!({"state":"stale","observed_at":100,
+            "short":{"duration_minutes":300,"used_percent":25},"weekly":{"duration_minutes":10080,"used_percent":10}}));
+        let u = Usage::account(&stale);
+        assert!(u.stale);
+        assert_eq!(u.status, "Usage stale");
+        assert_eq!(u.windows[0].remaining, Some(75.));
+        let partial = claude_account(json!({"state":"partial","observed_at":100,
+            "short":{"duration_minutes":300,"used_percent":25},"weekly":null}));
+        let u = Usage::account(&partial);
+        assert!(!u.stale);
+        assert_eq!(u.status, "Ready");
+        assert_eq!(u.windows[0].remaining, Some(75.));
+        assert_eq!(
+            u.windows[1].remaining, None,
+            "a missing window is not 100% or 0%"
+        );
+        assert!(!u.status_only());
+        assert_eq!(picker_labels(&[partial]), ["75% 5h /  ?% wk"]);
+    }
+    #[test]
+    fn claude_auth_detail_and_null_codex_windows_are_not_ready_or_zero() {
+        let mut a =
+            claude_account(json!({"state":"fresh","observed_at":100,"short":null,"weekly":null}));
+        a.details
+            .insert("auth_detail".into(), json!("AUTH_REQUIRED"));
+        assert_eq!(Usage::account(&a).status, "Login required");
+        let codex: Account = serde_json::from_value(json!({"id":"codex:x","selectable":true,"usage_fresh":true,
+            "usage":{"observed_at":1,"short":null,"weekly":{"duration_minutes":10080,"used_percent":20}}})).unwrap();
+        assert_eq!(Usage::account(&codex).windows.len(), 1);
+        assert_eq!(picker_labels(&[codex]), ["80% wk"]);
+        assert_eq!(a.provider(), "claude");
+    }
+    #[test]
+    fn missing_window_row_is_painted_in_its_own_row_with_a_word_not_a_bar() {
+        let a = claude_account(json!({"state":"partial","observed_at":100,"short":null,
+            "weekly":{"duration_minutes":10080,"used_percent":50}}));
+        // Short absent: only the weekly row exists and it is a real bar.
+        assert_eq!(Usage::account(&a).windows.len(), 1);
+        let b = claude_account(json!({"state":"partial","observed_at":100,
+            "short":{"duration_minutes":300,"used_percent":50},"weekly":null}));
+        let mut canvas = Canvas::new(40, 4);
+        Usage::account(&b).paint(&mut canvas, 0, 0, 12, 2);
+        let row = |y: usize| -> String {
+            (0..40)
+                .map(|x| canvas.cells[y * 40 + x].glyph.as_str())
+                .collect()
+        };
+        assert!(row(0).contains("5h"));
+        assert!(row(1).starts_with("wk unknown"));
     }
 }

@@ -26,6 +26,26 @@ impl Default for Status {
         }
     }
 }
+/// Local date and time for a Unix timestamp, e.g. "Wed Oct 28 14:05".
+pub fn local_time(seconds: i64) -> String {
+    let time = seconds as libc::time_t;
+    let mut broken = std::mem::MaybeUninit::<libc::tm>::uninit();
+    let mut buffer = [0i8; 64];
+    // libc writes into fixed, valid storage and does not retain pointers.
+    unsafe {
+        if libc::localtime_r(&time, broken.as_mut_ptr()).is_null() {
+            return "an unknown time".into();
+        }
+        let n = libc::strftime(
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            c"%a %b %d %-H:%M".as_ptr(),
+            broken.as_ptr(),
+        );
+        String::from_utf8_lossy(std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), n))
+            .into_owned()
+    }
+}
 impl Status {
     pub fn line(&mut self, seconds: i64, path: &Path, width: usize) -> String {
         if self.second != seconds {

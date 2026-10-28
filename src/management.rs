@@ -54,7 +54,8 @@ enum Purpose {
 enum Form {
     None,
     Loading,
-    Add,
+    AddProvider(Vec<&'static str>),
+    Add(String),
     Login(String),
     Limits(String),
     Remove(Value),
@@ -100,6 +101,7 @@ pub struct Manager {
     pub inventory_known: bool,
     pub sessions_known: bool,
     form: Form,
+    provider_filter: Option<String>,
     sequence: u64,
     pending: BTreeMap<u64, Purpose>,
     readiness: BTreeMap<String, Value>,
@@ -133,6 +135,7 @@ impl Default for Manager {
             inventory_known: false,
             sessions_known: false,
             form: Form::None,
+            provider_filter: None,
             sequence: 0,
             pending: BTreeMap::new(),
             readiness: BTreeMap::new(),
@@ -154,6 +157,92 @@ fn strings(args: &[&str]) -> Vec<String> {
 }
 fn id(v: &Value) -> &str {
     v["id"].as_str().unwrap_or("")
+}
+fn clean(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
+}
+/// "5m ago" style age; future or missing observations are "unknown".
+fn relative(now: i64, then: Option<i64>) -> String {
+    let Some(then) = then else {
+        return "unknown".into();
+    };
+    // Observations are Unix seconds; tolerate a millisecond producer.
+    let then = if then > 100_000_000_000 {
+        then / 1000
+    } else {
+        then
+    };
+    let age = now - then;
+    match age {
+        i64::MIN..=-1 => "unknown".into(),
+        0..=59 => "just now".into(),
+        60..=3599 => format!("{}m ago", age / 60),
+        3600..=86399 => format!("{}h ago", age / 3600),
+        _ => format!("{}d ago", age / 86400),
+    }
+}
+/// Usage details body. Missing windows and unknown state are stated, never 0%.
+fn usage_lines(a: &Account, now: i64) -> Vec<String> {
+    let usage = Usage::account(a);
+    let mut body = vec![
+        a.id.clone(),
+        format!("Provider: {}", crate::client::provider_label(a.provider())),
+        format!("Status: {}", usage.status),
+    ];
+    if let Some(state) = crate::usage::usage_state(a) {
+        body.push(format!("Usage state: {}", clean(state)));
+    }
+    if let Some(source) = a.usage["source"].as_str() {
+        body.push(format!("Source: {}", clean(source)));
+    }
+    if let Some(semantics) = a.usage["semantics"].as_str() {
+        body.push(format!("Semantics: {}", clean(semantics)));
+    }
+    body.push(format!(
+        "Observed: {}",
+        relative(now, a.usage["observed_at"].as_i64())
+    ));
+    for (window, label) in [("short", "Short window"), ("weekly", "Weekly")] {
+        let w = &a.usage[window];
+        let used = w["used_percent"].as_f64().filter(|n| n.is_finite());
+        body.push(match (w.is_object(), used) {
+            (true, Some(used)) => format!(
+                "{label} ({} minutes): {used}% used; resets {}",
+                w["duration_minutes"],
+                w["resets_at"]
+                    .as_i64()
+                    .map_or("at an unknown time".into(), |t| format!(
+                        "at {}",
+                        crate::status::local_time(t)
+                    ))
+            ),
+            (true, None) => format!("{label}: usage unknown"),
+            (false, _) => format!("{label}: unavailable"),
+        });
+    }
+    body
+}
+/// Printable, copy-pasteable command for a backend exec plan. Control characters
+/// are removed so a plan cannot repaint the terminal.
+fn login_command(argv: &Value) -> String {
+    argv.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|arg| {
+            let arg: String = arg.chars().filter(|c| !c.is_control()).collect();
+            if !arg.is_empty()
+                && arg
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"_./:=@%+,-".contains(&c))
+            {
+                arg
+            } else {
+                format!("'{}'", arg.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 fn account_label(id: &str) -> String {
     id.replacen(':', "-", 1)
@@ -197,14 +286,96 @@ impl Manager {
             .chain(self.archives.iter())
             .find(|s| id(s) == key)
     }
-    fn provider_cap(&self, key: &str) -> bool {
+    /// Provider of an account ID (the published field when the account is known,
+    /// else the qualified-ID prefix).
+    fn provider_of(&self, key: &str) -> String {
+        self.account(key).map_or_else(
+            || {
+                key.split_once(':')
+                    .map_or("codex", |(provider, _)| provider)
+                    .to_owned()
+            },
+            |a| a.provider().to_owned(),
+        )
+    }
+    /// A provider-scoped capability flag; absent providers and flags are unsupported.
+    fn provider_cap(&self, provider: &str, key: &str) -> bool {
         self.capabilities["providers"]
             .as_array()
-            .is_some_and(|ps| ps.iter().any(|p| p["id"] == "codex" && p[key] == true))
+            .is_some_and(|ps| ps.iter().any(|p| p["id"] == provider && p[key] == true))
+    }
+    /// True only when the backend explicitly reports this provider operation as
+    /// unsupported, so older backends that omit the flag keep their behaviour.
+    fn provider_denies(&self, provider: &str, key: &str) -> bool {
+        self.capabilities["providers"]
+            .as_array()
+            .is_some_and(|ps| ps.iter().any(|p| p["id"] == provider && p[key] == false))
+    }
+    /// Providers the backend reports as implemented and that this UI has a flow for.
+    fn add_providers(&self) -> Vec<&'static str> {
+        ["codex", "claude"]
+            .into_iter()
+            .filter(|id| {
+                self.capabilities["providers"].as_array().is_some_and(|ps| {
+                    ps.iter()
+                        .any(|p| p["id"] == *id && p["implemented"] == true)
+                })
+            })
+            .collect()
+    }
+    fn mixed_providers(&self) -> bool {
+        self.accounts
+            .iter()
+            .any(|a| a.provider() != self.accounts[0].provider())
+    }
+    /// Provider filter is meaningful only when more than one provider is listed.
+    fn filter_row(&self) -> bool {
+        self.mixed_providers()
+    }
+    fn active_filter(&self) -> Option<&str> {
+        self.provider_filter
+            .as_deref()
+            .filter(|_| self.filter_row())
+    }
+    /// Accounts shown on Manage Accounts, after the provider filter.
+    fn visible_accounts(&self) -> Vec<&Account> {
+        self.accounts
+            .iter()
+            .filter(|a| self.active_filter().is_none_or(|f| a.provider() == f))
+            .collect()
+    }
+    /// Row index of the first account on Manage Accounts.
+    fn account_base(&self) -> usize {
+        2 + usize::from(self.filter_row())
+    }
+    fn cycle_filter(&mut self) {
+        let mut providers: Vec<String> = vec![];
+        for a in &self.accounts {
+            if !providers.iter().any(|p| p == a.provider()) {
+                providers.push(a.provider().to_owned());
+            }
+        }
+        providers.sort();
+        self.provider_filter = match self.active_filter() {
+            None => providers.first().cloned(),
+            Some(current) => providers
+                .iter()
+                .position(|p| p == current)
+                .and_then(|i| providers.get(i + 1))
+                .cloned(),
+        };
+        self.options.selected = 1;
+    }
+    fn filter_label(&self) -> String {
+        format!(
+            "Provider: {}",
+            self.active_filter()
+                .map_or("All", crate::client::provider_label)
+        )
     }
     fn delete_account_row(&self, key: &str) -> Row {
         let preview = self.deletion_previews.get(key);
-        let reason = if !self.provider_cap("account_deletion") {
+        let reason = if !self.provider_cap(&self.provider_of(key), "account_deletion") {
             Some("unsupported")
         } else if preview.is_some_and(|p| p["owner_upgrade_required"] == true) {
             Some("owner update needed")
@@ -237,9 +408,9 @@ impl Manager {
                 .accounts
                 .get(self.options.selected - 5)
                 .map(|a| a.id.clone()),
-            Page::Accounts if self.options.selected >= 2 => self
-                .accounts
-                .get(self.options.selected - 2)
+            Page::Accounts if self.options.selected >= self.account_base() => self
+                .visible_accounts()
+                .get(self.options.selected - self.account_base())
                 .map(|a| a.id.clone()),
             Page::Account(id) => Some(id.clone()),
             _ => None,
@@ -255,18 +426,10 @@ impl Manager {
                 .is_some()
     }
     fn show_usage(&mut self, a: &Account) {
-        let mut body = vec![a.id.clone(), Usage::account(a).status];
-        for (window, label) in [("short", "Short window"), ("weekly", "Weekly")] {
-            if !a.usage[window].is_null() {
-                body.push(format!(
-                    "{label} ({} minutes): {}% used; resets at {} (Unix seconds)",
-                    a.usage[window]["duration_minutes"],
-                    a.usage[window]["used_percent"],
-                    a.usage[window]["resets_at"]
-                ));
-            }
-        }
-        self.show("Usage details", body, &["Close"], Form::None);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        self.show("Usage details", usage_lines(a, now), &["Close"], Form::None);
     }
     fn show_login(&mut self, key: &str) {
         self.show(
@@ -290,14 +453,18 @@ impl Manager {
                 &["Enable", "Cancel"],
                 Form::Confirm(strings(&["account", "enable", &key])),
             ),
-            "Login required" if self.provider_cap("enrollment") => self.show_login(&key),
+            "Login required" if self.provider_cap(&self.provider_of(&key), "enrollment") => {
+                self.show_login(&key)
+            }
             "Deregistered" => self.show(
                 "Restore account",
                 vec![format!("Restore {key} to account selection?")],
                 &["Restore", "Cancel"],
                 Form::Confirm(strings(&["account", "restore", &key])),
             ),
-            _ if !usage.status_only() && self.provider_cap("account_limits") => {
+            _ if !usage.status_only()
+                && self.provider_cap(&self.provider_of(&key), "account_limits") =>
+            {
                 return self.preview(
                     "Account limits",
                     strings(&["account", "limits", &key]),
@@ -324,7 +491,13 @@ impl Manager {
             if let Some(index) = self.accounts.iter().position(|a| a.id == id) {
                 match self.page {
                     Page::Home if self.inline => self.options.selected = 5 + index,
-                    Page::Accounts => self.options.selected = 2 + index,
+                    Page::Accounts => {
+                        self.options.selected = self
+                            .visible_accounts()
+                            .iter()
+                            .position(|a| a.id == id)
+                            .map_or(0, |i| self.account_base() + i)
+                    }
                     _ => {}
                 }
             } else if matches!(self.page, Page::Home | Page::Accounts) {
@@ -334,10 +507,11 @@ impl Manager {
     }
     fn validate_dialog_names(&mut self) {
         let excluded = match &self.form {
-            Form::Add => self
+            // Names are unique across providers, so every existing name is taken.
+            Form::Add(_) => self
                 .accounts
                 .iter()
-                .filter_map(|a| a.id.strip_prefix("codex:").map(str::to_owned))
+                .filter_map(|a| a.id.split_once(':').map(|(_, name)| name.to_owned()))
                 .collect(),
             Form::Rename(target) => self
                 .sessions
@@ -440,11 +614,19 @@ impl Manager {
         self.options.navigation = Default::default();
         self.options.preview_visible = false;
         let selected = match location.focus {
-            Some(Focus::Account(key)) => self
-                .accounts
-                .iter()
-                .position(|a| a.id == key)
-                .map(|i| i + if self.page == Page::Home { 5 } else { 2 }),
+            Some(Focus::Account(key)) => {
+                if self.page == Page::Home {
+                    self.accounts
+                        .iter()
+                        .position(|a| a.id == key)
+                        .map(|i| i + 5)
+                } else {
+                    self.visible_accounts()
+                        .iter()
+                        .position(|a| a.id == key)
+                        .map(|i| i + self.account_base())
+                }
+            }
             Some(Focus::Session(key)) => match self.page {
                 Page::Archives => self.archives.iter().position(|s| id(s) == key),
                 _ => self
@@ -477,15 +659,23 @@ impl Manager {
         true
     }
     fn account_back(&mut self, key: &str) {
-        let index = self.accounts.iter().position(|a| a.id == key);
         self.go(if self.inline {
             Page::Home
         } else {
             Page::Accounts
         });
-        self.options.selected = index
-            .map(|i| i + if self.inline { 5 } else { 2 })
-            .unwrap_or(0);
+        self.options.selected = if self.inline {
+            self.accounts
+                .iter()
+                .position(|a| a.id == key)
+                .map(|i| i + 5)
+        } else {
+            self.visible_accounts()
+                .iter()
+                .position(|a| a.id == key)
+                .map(|i| i + self.account_base())
+        }
+        .unwrap_or(0);
     }
     pub fn rows(&self) -> Vec<Row> {
         match &self.page {
@@ -518,24 +708,35 @@ impl Manager {
                     .max()
                     .unwrap_or(0)
                     + 4;
+                let visible = self.visible_accounts();
+                let tagged = self.accounts.iter().any(|a| a.provider() != "codex");
                 std::iter::once(Row::yes("Add Account"))
-                    .chain((!self.accounts.is_empty()).then(Row::separator))
-                    .chain(self.accounts.iter().map(|a| {
+                    .chain(self.filter_row().then(|| Row::yes(self.filter_label())))
+                    .chain((!visible.is_empty()).then(Row::separator))
+                    .chain(visible.into_iter().map(|a| {
                         let enabled =
                             a.details.get("enabled").and_then(Value::as_bool) == Some(true);
-                        Row::yes(short_name(&a.id)).with_column_preview(
-                            if enabled {
-                                if Usage::account(a).status != "Ready"
-                                    || a.details
-                                        .get("switch_thresholds")
-                                        .is_some_and(|v| v["needs_plan_review"] == true)
-                                {
-                                    "Enabled*"
-                                } else {
-                                    "Enabled"
-                                }
+                        let state = if enabled {
+                            if Usage::account(a).status != "Ready"
+                                || a.details
+                                    .get("switch_thresholds")
+                                    .is_some_and(|v| v["needs_plan_review"] == true)
+                            {
+                                "Enabled*"
                             } else {
-                                "Disabled"
+                                "Enabled"
+                            }
+                        } else {
+                            "Disabled"
+                        };
+                        Row::yes(short_name(&a.id)).with_column_preview(
+                            if tagged {
+                                format!(
+                                    "{:<11} {state}",
+                                    crate::client::provider_label(a.provider())
+                                )
+                            } else {
+                                state.to_owned()
                             },
                             column,
                             enabled,
@@ -556,9 +757,15 @@ impl Manager {
                     a.is_some_and(|a| a.details.get("membership").is_some_and(|v| v == "removed"));
                 let mut rows = vec![
                     Row::yes("Usage details"),
-                    Row::gate("Limits", !removed && self.provider_cap("account_limits")),
+                    Row::gate(
+                        "Limits",
+                        !removed && self.provider_cap(&self.provider_of(key), "account_limits"),
+                    ),
                     Row::separator(),
-                    Row::gate("Login", !removed && self.provider_cap("enrollment")),
+                    Row::gate(
+                        "Login",
+                        !removed && self.provider_cap(&self.provider_of(key), "enrollment"),
+                    ),
                     Row::gate(
                         if a.is_some_and(|a| a.details.get("enabled").is_some_and(|v| v == false)) {
                             "Enable"
@@ -568,11 +775,14 @@ impl Manager {
                         !removed,
                     ),
                     Row::separator(),
-                    Row::yes(if removed {
-                        "Restore account"
-                    } else {
-                        "Deregister account"
-                    }),
+                    Row::gate(
+                        if removed {
+                            "Restore account"
+                        } else {
+                            "Deregister account"
+                        },
+                        !self.provider_denies(&self.provider_of(key), "account_removal"),
+                    ),
                     self.delete_account_row(key),
                 ];
                 if !a.is_some_and(|a| a.details.get("auth_required").is_some_and(|v| v == true)) {
@@ -776,7 +986,7 @@ impl Manager {
     pub fn refresh(&mut self) -> Vec<Intent> {
         let mut out = vec![];
         if let Page::Account(key) = self.page.clone()
-            && self.provider_cap("account_deletion")
+            && self.provider_cap(&self.provider_of(&key), "account_deletion")
             && !self
                 .pending
                 .values()
@@ -841,7 +1051,7 @@ impl Manager {
                 .any(|p| matches!(p, Purpose::Observe(_)))
             && let Some(s) = self
                 .session(key)
-                .filter(|s| s["availability"] == "running")
+                .filter(|s| s["availability"] == "running" && !crate::session_list::is_claude(s))
                 .cloned()
         {
             self.observe_after =
@@ -877,7 +1087,56 @@ impl Manager {
             self.refresh_sessions()
         }
     }
+    fn claude_detail_lines(value: &Value) -> Vec<String> {
+        let text = |v: &Value| v.as_str().map(clean).filter(|s| !s.is_empty());
+        let status = match value["availability"].as_str() {
+            Some("running") => match value["native_status"].as_str() {
+                Some("idle") => "running (idle)",
+                Some("busy") => "running (busy)",
+                _ => "running",
+            },
+            Some("stopped") => "stopped",
+            Some("stale") => "stale",
+            _ => "unknown",
+        };
+        let pid = value["attachment"]["pid"]
+            .as_u64()
+            .or_else(|| value["pid"].as_u64())
+            .filter(|_| value["availability"] == "running");
+        let mut lines = vec![
+            format!("Provider: {}", crate::client::provider_label("claude")),
+            format!(
+                "Managed account: {}",
+                text(&value["account_id"]).unwrap_or_else(|| "unknown".into())
+            ),
+            format!(
+                "Claude session ID (native): {}",
+                text(&value["conversation_id"]).unwrap_or_else(|| "unknown".into())
+            ),
+            format!(
+                "Directory: {}",
+                text(&value["directory"]).unwrap_or_else(|| "unknown".into())
+            ),
+            format!("Status: {status}"),
+            format!(
+                "Sessionsation name: {}",
+                text(&value["name"]).unwrap_or_else(|| "unknown".into())
+            ),
+            format!(
+                "Native name: {}",
+                text(&value["native_name"]).unwrap_or_else(|| "unknown".into())
+            ),
+        ];
+        if let Some(pid) = pid {
+            lines.push(format!("Process ID: {pid}"));
+        }
+        lines.push(format!("Session: {}", id(value)));
+        lines
+    }
     fn session_detail_lines(value: &Value) -> Vec<String> {
+        if crate::session_list::is_claude(value) {
+            return Self::claude_detail_lines(value);
+        }
         vec![
             format!("Name: {}", value["name"].as_str().unwrap_or("")),
             format!("Account: {}", value["account_id"].as_str().unwrap_or("")),
@@ -1107,13 +1366,36 @@ impl Manager {
         vec![]
     }
     fn add(&mut self) {
+        let providers = self.add_providers();
+        if providers.len() > 1 {
+            let mut buttons: Vec<&str> = providers
+                .iter()
+                .map(|p| crate::client::provider_label(p))
+                .collect();
+            buttons.push("Cancel");
+            self.show(
+                "Add Account",
+                vec!["Choose the provider for the new account.".into()],
+                &buttons,
+                Form::AddProvider(providers),
+            );
+        } else {
+            self.add_for(providers.first().copied().unwrap_or("codex"));
+        }
+    }
+    fn add_for(&mut self, provider: &str) {
+        let label = crate::client::provider_label(provider);
+        let mut body = vec![format!(
+            "{label} account name: 1–{NAME_MAX_CHARS} letters, digits, hyphens or underscores."
+        )];
+        if provider == "claude" {
+            body.push("Login runs Claude Code's own interactive sign-in in a terminal.".into());
+        }
         self.show(
             "Add Account",
-            vec![format!(
-                "Codex account name: 1–{NAME_MAX_CHARS} letters, digits, hyphens or underscores."
-            )],
+            body,
             &["Add account", "Cancel"],
-            Form::Add,
+            Form::Add(provider.to_owned()),
         );
         self.dialog
             .as_mut()
@@ -1157,8 +1439,13 @@ impl Manager {
             Page::Accounts => {
                 if index == 0 {
                     self.add()
-                } else if let Some(a) = self.accounts.get(index - 2) {
-                    self.enter(Page::Account(a.id.clone()));
+                } else if self.filter_row() && index == 1 {
+                    self.cycle_filter();
+                } else if let Some(key) = index
+                    .checked_sub(self.account_base())
+                    .and_then(|i| self.visible_accounts().get(i).map(|a| a.id.clone()))
+                {
+                    self.enter(Page::Account(key));
                 }
             }
             Page::Account(key) => {
@@ -1260,6 +1547,7 @@ impl Manager {
                         .map(|(_, a)| *a);
                 let action = action.unwrap_or(crate::session_list::Action::Unavailable);
                 if s["availability"] == "running"
+                    && !crate::session_list::is_claude(&s)
                     && !matches!(
                         action,
                         crate::session_list::Action::Focus
@@ -1437,15 +1725,24 @@ impl Manager {
                 return self.refresh_sessions();
             }
             crate::session_list::Action::Rename => {
+                let claude = crate::session_list::is_claude(&s);
                 self.show(
                     "Rename session",
-                    vec!["Keep the same session and conversation identities.".into()],
+                    vec![if claude {
+                        "Changes the Sessionsation name only. Claude's own title is applied the next time this session is launched or resumed."
+                    } else {
+                        "Keep the same session and conversation identities."
+                    }
+                    .into()],
                     &["Rename", "Cancel"],
                     Form::Rename(s.clone()),
                 );
                 self.dialog.as_mut().unwrap().fields.push(
-                    Field::new("Name", s["name"].as_str().unwrap_or(""))
-                        .validated(Rule::Rename(s["name"].as_str().unwrap_or("").into())),
+                    Field::new(
+                        if claude { "Sessionsation name" } else { "Name" },
+                        s["name"].as_str().unwrap_or(""),
+                    )
+                    .validated(Rule::Rename(s["name"].as_str().unwrap_or("").into())),
                 );
                 self.validate_dialog_names();
             }
@@ -1551,6 +1848,14 @@ impl Manager {
                 &sequence.to_string(),
             ]));
         }
+        if let Form::AddProvider(providers) = self.form.clone() {
+            self.dialog = None;
+            self.form = Form::None;
+            if let Some(provider) = providers.get(button) {
+                self.add_for(provider);
+            }
+            return vec![];
+        }
         if button != 0 {
             self.dialog = None;
             self.form = Form::None;
@@ -1584,7 +1889,8 @@ impl Manager {
                 return self.session_action(s, action);
             }
             Form::Confirm(args) => args,
-            Form::Add => {
+            Form::AddProvider(_) => return vec![],
+            Form::Add(provider) => {
                 let name = value(0);
                 if name.is_empty()
                     || name.len() > NAME_MAX_CHARS
@@ -1597,7 +1903,7 @@ impl Manager {
                     )];
                     return vec![];
                 }
-                strings(&["account", "add", &format!("codex:{name}")])
+                strings(&["account", "add", &format!("{provider}:{name}")])
             }
             Form::Login(key) => strings(&["account", "login", &key]),
             Form::Limits(key) => {
@@ -2054,7 +2360,22 @@ impl Manager {
             }
             Purpose::Mutation => {
                 self.note = "Operation acknowledged; refresh to see current state.".into();
-                if value["login"].is_object() {
+                if value["login"]["argv"].is_array() {
+                    // Interactive provider login: show the exact backend plan for a
+                    // terminal. The UI never executes it or handles credentials.
+                    if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
+                        self.show(
+                            "Complete provider login",
+                            vec![
+                                "Run this command in a terminal:".into(),
+                                login_command(&value["login"]["argv"]),
+                                "Closing this dialog does not cancel enrollment.".into(),
+                            ],
+                            &["Close"],
+                            Form::None,
+                        );
+                    }
+                } else if value["login"].is_object() {
                     if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
                         let login = &value["login"];
                         let url = login["verificationUri"]
@@ -2075,12 +2396,16 @@ impl Manager {
                     }
                     return self.refresh();
                 } else if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
-                    self.show(
-                        "Saved",
-                        vec!["The backend acknowledged this change.".into()],
-                        &["Close"],
-                        Form::None,
-                    );
+                    let note = if value["existing_home"] == true {
+                        "An existing Claude home was registered unchanged."
+                    } else {
+                        "The backend acknowledged this change."
+                    };
+                    let mut body = vec![note.to_owned()];
+                    if value["auth"]["logged_in"] == false {
+                        body.push("Not signed in yet. Choose Login on the account page.".into());
+                    }
+                    self.show("Saved", body, &["Close"], Form::None);
                 }
             }
         }
@@ -3853,5 +4178,305 @@ mod tests {
             Ok(json!({"can_remove":true,"account_id":"codex:account1","revision":"old"})),
         );
         assert!(m.dialog.is_none());
+    }
+    fn claude(name: &str) -> Account {
+        serde_json::from_value(json!({"id":format!("claude:{name}"),"provider":"claude","selectable":true,"enabled":true,"usage_fresh":true,"usage":{"state":"fresh","source":"claude-code-statusline","semantics":"Claude Code statusline rate limits","observed_at":100,"short":{"duration_minutes":300,"used_percent":40,"resets_at":1_800_000_000},"weekly":null}})).unwrap()
+    }
+    fn dual_providers() -> Manager {
+        let mut m = Manager::default();
+        m.inventory(vec![account(1), claude("claude-main"), account(2)]);
+        m.capabilities = json!({"providers":[
+            {"id":"codex","implemented":true,"account_limits":true,"enrollment":true,"account_deletion":true,"account_removal":true},
+            {"id":"claude","implemented":true,"account_limits":false,"enrollment":true,"account_deletion":false,"account_removal":false}
+        ]});
+        m
+    }
+    fn claude_session(availability: &str) -> Value {
+        json!({"id":"c","generation":"g","name":"Work","provider":"claude","account_id":"claude:claude-main","conversation_id":"native-1","directory":null,"availability":availability,"native_status":"idle","native_name":null,"attachment":null,"capabilities":{"focus":false,"rename":true,"resume":availability=="stopped"}})
+    }
+    #[test]
+    fn add_account_chooses_provider_then_runs_the_provider_flow() {
+        let mut m = dual_providers();
+        m.add();
+        let d = m.dialog.as_ref().unwrap();
+        let buttons: Vec<_> = d.buttons.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(buttons, ["Codex", "Claude Code", "Cancel"]);
+        assert!(d.fields.is_empty());
+        m.submit(1, vec![]);
+        let d = m.dialog.as_ref().unwrap();
+        assert!(d.body[0].starts_with("Claude Code account name"));
+        // Names are unique across providers: a Codex name is taken for Claude too.
+        assert!(d.fields[0].excluded.contains(&"account1".to_owned()));
+        assert!(d.fields[0].excluded.contains(&"claude-main".to_owned()));
+        let sent = m.submit(0, vec!["claude-two".into()]);
+        assert!(
+            matches!(&sent[..], [Intent::Api(_, args)] if args == &strings(&["account", "add", "claude:claude-two"]))
+        );
+        let mut m = dual_providers();
+        m.add();
+        m.submit(0, vec![]);
+        let sent = m.submit(0, vec!["codex-two".into()]);
+        assert!(
+            matches!(&sent[..], [Intent::Api(_, args)] if args == &strings(&["account", "add", "codex:codex-two"]))
+        );
+        // Cancel at the provider step mutates nothing.
+        let mut m = dual_providers();
+        m.add();
+        assert!(m.submit(2, vec![]).is_empty());
+        assert!(m.dialog.is_none());
+    }
+    #[test]
+    fn single_provider_add_skips_the_picker_and_invalid_names_are_rejected() {
+        let mut m = setup();
+        m.add();
+        assert!(m.dialog.as_ref().unwrap().body[0].starts_with("Codex account name"));
+        assert!(m.submit(0, vec!["bad name".into()]).is_empty());
+        assert!(m.dialog.as_ref().unwrap().body[0].starts_with("Use 1–"));
+    }
+    #[test]
+    fn claude_login_plan_is_shown_as_an_exact_command_and_never_run() {
+        let mut m = dual_providers();
+        m.add_for("claude");
+        let sent = m.submit(0, vec!["new".into()]);
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        let out = m.response(
+            token,
+            Ok(json!({
+                "login":{"action":"exec","argv":["sessionsation","account","login","claude:new","a b'c\u{1b}[2J"],"cwd":null,"credentials_in_client":false},
+                "auth":{"logged_in":false}
+            })),
+        );
+        assert!(out.is_empty());
+        let d = m.dialog.as_ref().unwrap();
+        assert_eq!(d.title, "Complete provider login");
+        assert_eq!(
+            d.body[1],
+            "sessionsation account login claude:new 'a b'\\''c[2J'"
+        );
+        assert!(d.body.iter().all(|l| !l.contains('\u{1b}')));
+    }
+    #[test]
+    fn existing_claude_home_and_unauthenticated_add_are_explained() {
+        let mut m = dual_providers();
+        m.add_for("claude");
+        let sent = m.submit(0, vec!["adopted".into()]);
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        m.response(
+            token,
+            Ok(json!({"existing_home":true,"auth":{"logged_in":true}})),
+        );
+        let d = m.dialog.as_ref().unwrap();
+        assert!(d.body[0].contains("registered unchanged"));
+        assert_eq!(d.body.len(), 1);
+    }
+    #[test]
+    fn claude_account_login_uses_the_account_provider_capability() {
+        let mut m = dual_providers();
+        m.accounts[1]
+            .details
+            .insert("auth_required".into(), json!(true));
+        m.go(Page::Account("claude:claude-main".into()));
+        let login = m.rows().iter().position(|r| r.label == "Login").unwrap();
+        assert!(m.rows()[login].enabled);
+        m.options.selected = login;
+        m.activate();
+        let sent = m.submit(0, vec![]);
+        assert!(
+            matches!(&sent[..], [Intent::Api(_, args)] if args == &strings(&["account", "login", "claude:claude-main"]))
+        );
+        // Another provider's flag never enables this provider's action.
+        m.capabilities["providers"][1]["enrollment"] = json!(false);
+        m.go(Page::Account("claude:claude-main".into()));
+        assert!(
+            !m.rows()
+                .iter()
+                .find(|r| r.label == "Login")
+                .unwrap()
+                .enabled
+        );
+    }
+    #[test]
+    fn provider_capabilities_gate_limits_and_deletion_per_account() {
+        let mut m = dual_providers();
+        m.go(Page::Account("claude:claude-main".into()));
+        let rows = m.rows();
+        assert!(!rows.iter().find(|r| r.label == "Limits").unwrap().enabled);
+        assert!(!m.delete_account_row("claude:claude-main").enabled);
+        assert!(
+            !rows
+                .iter()
+                .find(|r| r.label == "Deregister account")
+                .unwrap()
+                .enabled
+        );
+        m.go(Page::Account("codex:account1".into()));
+        let rows = m.rows();
+        assert!(rows.iter().find(|r| r.label == "Limits").unwrap().enabled);
+        assert!(m.delete_account_row("codex:account1").enabled);
+        assert!(
+            rows.iter()
+                .find(|r| r.label == "Deregister account")
+                .unwrap()
+                .enabled
+        );
+    }
+    #[test]
+    fn accounts_page_shows_provider_tags_and_filters_by_provider() {
+        let mut m = dual_providers();
+        m.go(Page::Accounts);
+        let rows = m.rows();
+        assert_eq!(rows[1].label, "Provider: All");
+        let tagged: Vec<_> = rows[3..]
+            .iter()
+            .map(|r| (r.label.clone(), r.preview.clone().unwrap()))
+            .collect();
+        assert_eq!(tagged.len(), 3);
+        assert!(tagged[0].1.starts_with("Codex"));
+        assert!(tagged[1].1.starts_with("Claude Code"));
+        for expect in ["Claude Code", "Codex", "All"] {
+            m.options.selected = 1;
+            m.activate();
+            assert_eq!(m.rows()[1].label, format!("Provider: {expect}"));
+        }
+        m.options.selected = 1;
+        m.activate();
+        assert_eq!(m.rows()[1].label, "Provider: Claude Code");
+        assert_eq!(m.rows().len(), 4);
+        m.options.selected = 3;
+        m.activate();
+        assert_eq!(m.page, Page::Account("claude:claude-main".into()));
+        // A Codex-only inventory has neither filter row nor tags.
+        let mut m = setup();
+        m.go(Page::Accounts);
+        assert_eq!(m.rows()[0].label, "Add Account");
+        assert!(m.rows().iter().all(|r| !r.label.starts_with("Provider")));
+        assert!(
+            m.rows()[2..]
+                .iter()
+                .all(|r| r.preview.as_deref().unwrap().starts_with("Enabled"))
+        );
+    }
+    #[test]
+    fn usage_details_label_source_semantics_age_and_missing_windows() {
+        let lines = usage_lines(&claude("claude-main"), 400);
+        let text = lines.join("\n");
+        assert!(text.contains("Provider: Claude Code"));
+        assert!(text.contains("Source: claude-code-statusline"));
+        assert!(text.contains("Semantics: Claude Code statusline rate limits"));
+        assert!(text.contains("Observed: 5m ago"));
+        assert!(text.contains("40% used; resets at "));
+        assert!(!text.contains("Unix"));
+        assert!(text.contains("Weekly: unavailable"));
+        assert!(!text.contains("Weekly (10080 minutes)"));
+        let mut missing = claude("claude-new");
+        missing.usage = json!({"state":"missing","observed_at":null,"short":null,"weekly":null});
+        let text = usage_lines(&missing, 400).join("\n");
+        assert!(text.contains("Status: Usage unavailable"));
+        assert!(text.contains("Observed: unknown"));
+        assert!(text.contains("Short window: unavailable"));
+        assert!(!text.contains("0%"));
+        let mut codex = account(1);
+        codex.usage["weekly"] = Value::Null;
+        assert!(
+            usage_lines(&codex, 400)
+                .join("\n")
+                .contains("Weekly: unavailable")
+        );
+    }
+    #[test]
+    fn claude_session_details_use_native_labels_and_unknown_for_absent_values() {
+        let mut live = claude_session("running");
+        live["attachment"] =
+            json!({"host":"herdr","target":"herdr/default/w:p","pid":4242,"process_start":1});
+        live["native_name"] = json!("Native title");
+        live["directory"] = json!("/work/example");
+        let lines = Manager::session_detail_lines(&live);
+        assert_eq!(
+            lines,
+            [
+                "Provider: Claude Code",
+                "Managed account: claude:claude-main",
+                "Claude session ID (native): native-1",
+                "Directory: /work/example",
+                "Status: running (idle)",
+                "Sessionsation name: Work",
+                "Native name: Native title",
+                "Process ID: 4242",
+                "Session: c",
+            ]
+        );
+        let stopped = Manager::session_detail_lines(&claude_session("stopped")).join("\n");
+        assert!(stopped.contains("Status: stopped"));
+        assert!(stopped.contains("Directory: unknown"));
+        assert!(stopped.contains("Native name: unknown"));
+        assert!(!stopped.contains("Process ID"));
+        for (state, label) in [
+            ("stale", "stale"),
+            ("unknown", "unknown"),
+            ("weird", "unknown"),
+        ] {
+            let text = Manager::session_detail_lines(&claude_session(state)).join("\n");
+            assert!(text.contains(&format!("Status: {label}")));
+        }
+    }
+    #[test]
+    fn claude_rename_is_a_label_change_without_an_observation_round_trip() {
+        let mut m = Manager {
+            sessions: vec![{
+                let mut s = claude_session("running");
+                s["attachment"] = json!({"host":"herdr","pid":1});
+                s["capabilities"]["focus"] = json!(true);
+                s
+            }],
+            page: Page::Session("c".into()),
+            ..Default::default()
+        };
+        let labels: Vec<_> = m.rows().iter().map(|r| r.label.clone()).collect();
+        assert_eq!(
+            labels,
+            ["Focus Session", "Session Details", "Rename Session"]
+        );
+        m.options.selected = 2;
+        // No `observe` request: Claude has no provider observation to wait for.
+        assert!(m.activate().is_empty());
+        let d = m.dialog.as_ref().unwrap();
+        assert_eq!(d.fields[0].label, "Sessionsation name");
+        assert!(d.body[0].contains("next time"));
+        let sent = m.submit(0, vec!["Renamed".into()]);
+        assert!(matches!(&sent[..], [Intent::Api(_, args)]
+            if args[0] == "rename" && args.ends_with(&strings(&["--name", "Renamed"]))));
+        m.page = Page::Session("c".into());
+        m.options.selected = 0;
+        assert!(matches!(&m.activate()[..], [Intent::Focus(s)] if s["id"] == "c"));
+    }
+    #[test]
+    fn claude_focus_and_start_never_launch_for_stopped_stale_or_detached_sessions() {
+        for (availability, attachment) in [("running", Value::Null), ("stale", Value::Null)] {
+            let mut s = claude_session(availability);
+            s["attachment"] = attachment;
+            let mut m = Manager {
+                sessions: vec![s],
+                page: Page::Session("c".into()),
+                ..Default::default()
+            };
+            m.options.selected = 0;
+            assert!(!m.rows()[0].enabled);
+            assert!(
+                m.activate().is_empty(),
+                "{availability}: disabled row sends nothing"
+            );
+        }
+    }
+    #[test]
+    fn stale_resume_error_is_explained_without_marking_live() {
+        assert_eq!(
+            crate::messages::describe("SESSION_STALE: gone"),
+            "This Claude Code session's process is no longer verified. Refresh Manage Sessions; nothing was started or resumed."
+        );
+        assert!(crate::messages::describe("SESSION_ALREADY_RUNNING").contains("now running"));
     }
 }

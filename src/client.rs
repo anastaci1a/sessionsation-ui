@@ -51,6 +51,25 @@ pub struct Account {
     #[serde(flatten)]
     pub details: std::collections::BTreeMap<String, Value>,
 }
+impl Account {
+    /// Provider from the published field, else the qualified-ID prefix. IDs are
+    /// always `<provider>:<name>`; an unqualified legacy ID is Codex.
+    pub fn provider(&self) -> &str {
+        self.details
+            .get("provider")
+            .and_then(Value::as_str)
+            .or_else(|| self.id.split_once(':').map(|(p, _)| p))
+            .unwrap_or("codex")
+    }
+}
+/// Human label for a provider ID; unknown providers are shown verbatim.
+pub fn provider_label(provider: &str) -> &str {
+    match provider {
+        "codex" => "Codex",
+        "claude" => "Claude Code",
+        other => other,
+    }
+}
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Workspace {
     pub workspace_id: String,
@@ -378,7 +397,8 @@ impl Client {
 /// and a different account/history/location requires a new explicit selection.
 fn refresh_resume_request(request: &mut Value, snapshot: &Value, fresh: &Value) -> Result<()> {
     ensure!(
-        fresh["id"] == request["session_id"] && fresh["availability"] == "saved",
+        fresh["id"] == request["session_id"]
+            && matches!(fresh["availability"].as_str(), Some("saved" | "stopped")),
         "SESSION_ALREADY_RUNNING_OR_UNAVAILABLE"
     );
     for key in ["conversation_id", "account_id", "directory", "name"] {
@@ -640,5 +660,38 @@ print(json.dumps({'result':result}))
             .save(&preferences)
             .unwrap();
         assert!(!runtime.join("preferences.json").exists());
+    }
+    #[test]
+    fn provider_comes_from_field_then_id_and_resume_accepts_stopped_claude() {
+        let a: Account =
+            serde_json::from_value(json!({"id":"claude:x","selectable":true})).unwrap();
+        assert_eq!(a.provider(), "claude");
+        let a: Account =
+            serde_json::from_value(json!({"id":"x","selectable":true,"provider":"claude"}))
+                .unwrap();
+        assert_eq!(a.provider(), "claude");
+        let a: Account = serde_json::from_value(json!({"id":"x","selectable":true})).unwrap();
+        assert_eq!(a.provider(), "codex");
+        assert_eq!(provider_label("claude"), "Claude Code");
+        assert_eq!(provider_label("other"), "other");
+        let snapshot =
+            json!({"conversation_id":"n","account_id":"claude:x","directory":"/d","name":"N"});
+        for (availability, ok) in [
+            ("stopped", true),
+            ("saved", true),
+            ("running", false),
+            ("stale", false),
+        ] {
+            let mut fresh = snapshot.clone();
+            fresh["id"] = json!("s");
+            fresh["availability"] = json!(availability);
+            fresh["generation"] = json!("new");
+            let mut request = json!({"session_id":"s","expected_generation":"old"});
+            assert_eq!(
+                refresh_resume_request(&mut request, &snapshot, &fresh).is_ok(),
+                ok,
+                "{availability}"
+            );
+        }
     }
 }

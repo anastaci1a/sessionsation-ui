@@ -81,6 +81,8 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("compact", 60, 16),
         ("actions", 80, 24),
         ("picker", 60, 20),
+        ("providers", 60, 16),
+        ("claude-session", 80, 24),
         ("modal", 60, 24),
         ("operations-wide", 120, 24),
         ("operations-compact", 50, 20),
@@ -137,6 +139,22 @@ fn management_geometry_usage_markers_and_picker_columns() {
                 m.options.selected = 2;
             }
             "actions" => m.page = Page::Account("codex:fixture0".into()),
+            "providers" => {
+                let mut all = accounts.clone();
+                all.extend([
+                    serde_json::from_value(serde_json::json!({"id":"claude:claude-main","provider":"claude","selectable":true,"usage_fresh":true,"enabled":true,"usage":{"state":"partial","source":"claude-code-statusline","observed_at":100,"short":{"duration_minutes":300,"used_percent":40,"resets_at":1},"weekly":null}})).unwrap(),
+                    serde_json::from_value(serde_json::json!({"id":"claude:claude-new","provider":"claude","selectable":true,"enabled":true,"usage_fresh":false,"usage":{"state":"missing","source":"claude-code-statusline","observed_at":null,"short":null,"weekly":null}})).unwrap(),
+                ]);
+                m.inventory(all);
+                m.page = Page::Accounts;
+                m.options.selected = 6;
+            }
+            "claude-session" => {
+                m.page = Page::Session("c".into());
+                m.sessions = vec![
+                    serde_json::json!({"id":"c","name":"Claude work","provider":"claude","account_id":"claude:claude-main","availability":"running","attachment":null,"capabilities":{"focus":false,"rename":true,"resume":false}}),
+                ];
+            }
             "modal" => {
                 m.dialog = Some(Dialog::new(
                     "Deregister account",

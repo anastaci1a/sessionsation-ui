@@ -39,6 +39,18 @@ pub fn describe(text: &str) -> String {
         "SESSION_OPERATION_IN_PROGRESS" | "RESUME_IN_PROGRESS" | "OPERATION_BUSY" => {
             "Another action is still changing this session. Check its progress in Operations first."
         }
+        "SESSION_STALE" => {
+            "This Claude Code session's process is no longer verified. Refresh Manage Sessions; nothing was started or resumed."
+        }
+        "UNSUPPORTED_PROVIDER_OPERATION" => {
+            "This provider does not support that action. No change was made."
+        }
+        "ACCOUNT_NAME_EXISTS" => {
+            "An account already uses this name. Account names are shared by all providers; choose another."
+        }
+        "ACCOUNT_PROVIDER_MISMATCH" | "ACCOUNT_PROVIDER_REQUIRED" => {
+            "The account's provider does not match the request. Choose the account's provider and try again."
+        }
         "SESSION_NOT_IN_HERDR" => "Only a running HERDR session can be moved between Spaces.",
         "SPACE_MOVE_LOCATION_CONFLICT" | "SPACE_MOVE_IDENTITY_MISMATCH" => {
             "Terminal placement is not verified. Inspect the original operation in Operations before another move."

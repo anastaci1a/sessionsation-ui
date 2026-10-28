@@ -42,7 +42,68 @@ fn session_gate(s: &Value, label: &str, capability: &str) -> Row {
     row.with_selected_preview(format!("({reason})"))
         .preview_gap(1)
 }
+pub fn is_claude(s: &Value) -> bool {
+    s["provider"] == "claude"
+        || s["account_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("claude:"))
+}
+/// Claude Code sessions expose only what the backend capabilities allow:
+/// focus (verified HERDR attachment), details, rename (Sessionsation label) and,
+/// when stopped, start. Every other action is omitted, never merely greyed out.
+fn claude_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
+    let c = &s["capabilities"];
+    let first = if s["availability"] == "running" {
+        let reason = if s["attachment"]["host"] == "herdr" {
+            None
+        } else if s["attachment"].is_object() {
+            Some("(host unavailable)")
+        } else {
+            Some("(not in HERDR)")
+        };
+        let row = Row::gate(
+            "Focus Session",
+            c["focus"] == true && s["attachment"]["host"] == "herdr",
+        );
+        let row = match reason.filter(|_| !row.enabled) {
+            Some(reason) => row
+                .with_selected_preview(reason)
+                .preview_gap(1)
+                .preview_color(crate::widgets::SECONDARY),
+            None => row,
+        };
+        (row, Action::Focus)
+    } else {
+        let startable = resume && c["resume"] == true && s["availability"] == "stopped";
+        let row = Row::gate("Start Session", startable);
+        let row = if startable {
+            row
+        } else {
+            let reason = match s["availability"].as_str() {
+                Some("stale") => "stale",
+                Some("unknown") => "state unknown",
+                _ if !resume => "unsupported",
+                _ => "unavailable",
+            };
+            row.with_selected_preview(format!("({reason})"))
+                .preview_gap(1)
+                .preview_color(crate::widgets::SECONDARY)
+        };
+        (row, Action::Resume)
+    };
+    vec![
+        first,
+        (Row::yes("Session Details"), Action::Details),
+        (
+            Row::gate("Rename Session", c["rename"] == true),
+            Action::Rename,
+        ),
+    ]
+}
 pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
+    if is_claude(s) {
+        return claude_actions(s, resume);
+    }
     let c = &s["capabilities"];
     if s["availability"] == "archived" {
         return vec![
@@ -164,6 +225,7 @@ fn resume_reason(s: &Value, supported: bool) -> &'static str {
         Some("moving") => "moving",
         Some("missing_directory") => "missing directory",
         Some("history_busy") => "history busy",
+        Some("stale") => "stale",
         Some("unfinished_history") => "unfinished history",
         Some("conflicting_history") => "conflicting history",
         _ => "unverified history",
@@ -304,7 +366,11 @@ pub fn paint_with_archives(
             &display_name(session["name"].as_str().unwrap_or("Unnamed")),
             name_width,
         );
-        let suffix = if session["availability"] != "running" && session["attachment"].is_object() {
+        let suffix = if session["availability"] == "stale" {
+            "(stale)".to_owned()
+        } else if session["availability"] == "unknown" {
+            "(unknown)".to_owned()
+        } else if session["availability"] != "running" && session["attachment"].is_object() {
             "(host unavailable)".into()
         } else if session["availability"] != "running" {
             "(inactive)".to_owned()
@@ -935,5 +1001,74 @@ mod tests {
             assert_eq!(marker.fg, crate::widgets::SECONDARY);
             assert!(!marker.bold);
         }
+    }
+    fn claude_row_labels(s: &Value, resume: bool) -> Vec<(String, bool)> {
+        actions(s, resume)
+            .into_iter()
+            .map(|(r, _)| (r.label, r.enabled))
+            .collect()
+    }
+    fn claude(availability: &str, attached: bool) -> Value {
+        json!({"provider":"claude","account_id":"claude:main","availability":availability,
+            "attachment":if attached{json!({"host":"herdr","target":"herdr/default/w:p","pid":9})}else{Value::Null},
+            "capabilities":{"focus":attached,"rename":true,"resume":availability=="stopped",
+                "switch_account":false,"restart":false,"stop":false,"archive":false,"delete":false,
+                "move_space":false,"move_project":false,"change_directory":false,"steer":false}})
+    }
+    #[test]
+    fn claude_sessions_offer_only_focus_details_rename_and_start() {
+        assert_eq!(
+            claude_row_labels(&claude("running", true), true),
+            [
+                ("Focus Session".into(), true),
+                ("Session Details".into(), true),
+                ("Rename Session".into(), true)
+            ]
+        );
+        assert_eq!(
+            claude_row_labels(&claude("stopped", false), true),
+            [
+                ("Start Session".into(), true),
+                ("Session Details".into(), true),
+                ("Rename Session".into(), true)
+            ]
+        );
+        // No hidden Codex-only rows leak in, even if a stale payload claims them.
+        let mut s = claude("running", true);
+        s["capabilities"]["switch_account"] = json!(true);
+        s["capabilities"]["stop"] = json!(true);
+        s["capabilities"]["restart"] = json!(true);
+        assert_eq!(actions(&s, true).len(), 3);
+    }
+    #[test]
+    fn claude_focus_and_start_are_disabled_with_reasons_for_detached_stale_unknown() {
+        let detached = actions(&claude("running", false), true);
+        assert!(!detached[0].0.enabled);
+        assert_eq!(detached[0].0.preview.as_deref(), Some("(not in HERDR)"));
+        for (state, reason) in [("stale", "(stale)"), ("unknown", "(state unknown)")] {
+            let rows = actions(&claude(state, false), true);
+            assert_eq!(rows[0].0.label, "Start Session");
+            assert!(!rows[0].0.enabled, "{state} is never startable");
+            assert_eq!(rows[0].0.preview.as_deref(), Some(reason));
+            assert_eq!(rows[0].1, Action::Resume);
+        }
+        // Without the resume capability even a stopped session cannot start.
+        assert!(!actions(&claude("stopped", false), false)[0].0.enabled);
+        let mut s = claude("stopped", false);
+        s["capabilities"]["resume"] = json!(false);
+        assert!(!actions(&s, true)[0].0.enabled);
+    }
+    #[test]
+    fn codex_sessions_keep_their_full_menu_and_restart_label() {
+        let s = json!({"provider":"codex","availability":"running","capabilities":{"restart":true,"stop":true,"switch_account":true}});
+        let labels: Vec<_> = actions(&s, true)
+            .into_iter()
+            .map(|(r, _)| r.label)
+            .collect();
+        assert!(labels.contains(&"Restart Codex".to_owned()));
+        assert!(labels.contains(&"Switch account".to_owned()));
+        assert!(labels.contains(&"End session".to_owned()));
+        assert!(!is_claude(&s));
+        assert!(is_claude(&json!({"account_id":"claude:x"})));
     }
 }
