@@ -566,7 +566,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           if !app.launch_supported{app.error="Backend launch API is not installed; creation disabled".into();}},Err(e)=>{app.manager.note=e.clone();app.error=e;app.draft.name_valid=false;}}app.dirty=true;},
           Message::Managed(token,result)=>{let intents=app.manager.response(token,result);next=app.management(intents);},
           Message::LoginLaunched(result)=>{let intents=app.manager.login_launched(result);next=app.management(intents);app.dirty=true;},
-          Message::SessionFocused(result)=>{match result{Ok(())=>app.exit=true,Err(e)=>app.manager.note=e}app.dirty=true;},
+          Message::SessionFocused(result)=>{match result{Ok(())=>app.exit=true,Err(e)=>{let intents=app.manager.failure(e);next=app.management(intents);}}app.dirty=true;},
           Message::Theme(result)=>{match result{Ok((palette,note))=>{app.manager.palette=palette;if let Some(note)=note{app.manager.note=note;}},Err(e)=>app.manager.note=e}app.dirty=true;},
           Message::Directory(revision,result)=>app.listing(revision,result),
           Message::Validation(revision,result)=>app.validation(revision,result),

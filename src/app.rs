@@ -172,7 +172,7 @@ impl App {
         };
         Self {
             navigation: crate::widgets::Navigation::default(),
-            manager: crate::management::Manager::default(),
+            manager: crate::management::Manager::with_host(host.clone()),
             page: Page::Home,
             options: Options::default(),
             input: TextInput::default(),
@@ -716,6 +716,13 @@ impl App {
         self.accounts = accounts;
         self.manager.inventory(self.accounts.clone());
         self.spaces = spaces;
+        {
+            let mut focused = self.spaces.iter().filter(|s| s.focused);
+            self.manager.focused_space = focused
+                .next()
+                .filter(|_| focused.next().is_none())
+                .map(|s| s.workspace_id.clone());
+        }
         if let Some(id) = picker_space {
             self.options.selected = self
                 .spaces

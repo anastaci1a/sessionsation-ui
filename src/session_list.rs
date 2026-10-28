@@ -9,6 +9,7 @@ use unicode_width::UnicodeWidthStr;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     Focus,
+    AddToHerdr,
     Details,
     Rename,
     Resume,
@@ -42,6 +43,39 @@ fn session_gate(s: &Value, label: &str, capability: &str) -> Row {
     row.with_selected_preview(format!("({reason})"))
         .preview_gap(1)
 }
+/// A running session outside a HERDR pane whose backend advertises the
+/// `add_to_herdr` capability gets "Add to HERDR" in place of "Focus Session".
+/// Older backends (no such capability key) keep today's rows.
+fn add_to_herdr_row(s: &Value) -> Option<Row> {
+    if s["availability"] != "running"
+        || s["attachment"]["host"] == "herdr"
+        || !s["capabilities"]["add_to_herdr"].is_boolean()
+    {
+        return None;
+    }
+    let row = Row::gate("Add to HERDR", s["capabilities"]["add_to_herdr"] == true);
+    if row.enabled {
+        return Some(row);
+    }
+    Some(
+        row.with_selected_preview(format!("({})", add_reason(s)))
+            .preview_gap(1)
+            .preview_color(crate::widgets::SECONDARY),
+    )
+}
+/// Reasons arrive as "CODE: text"; show the text and never the bare code.
+fn add_reason(s: &Value) -> String {
+    let reason = s["capability_reasons"]["add_to_herdr"]
+        .as_str()
+        .unwrap_or("");
+    match reason.split_once(": ") {
+        Some((_, text)) if !text.trim().is_empty() => text.trim().to_owned(),
+        _ if reason.is_empty() || reason.bytes().all(|b| b.is_ascii_uppercase() || b == b'_') => {
+            "unavailable".into()
+        }
+        _ => reason.to_owned(),
+    }
+}
 /// Account tag for a session: the UI-attached display name, else the short name.
 fn account_tag(s: &Value) -> String {
     s["account_label"]
@@ -61,7 +95,9 @@ pub fn is_claude(s: &Value) -> bool {
 /// when stopped, start. Every other action is omitted, never merely greyed out.
 fn claude_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     let c = &s["capabilities"];
-    let first = if s["availability"] == "running" {
+    let first = if let Some(row) = add_to_herdr_row(s) {
+        (row, Action::AddToHerdr)
+    } else if s["availability"] == "running" {
         let reason = if s["attachment"]["host"] == "herdr" {
             None
         } else if s["attachment"].is_object() {
@@ -149,6 +185,8 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     let mut rows = vec![
         if inactive {
             (start, Action::Resume)
+        } else if let Some(row) = add_to_herdr_row(s) {
+            (row, Action::AddToHerdr)
         } else {
             (focus, Action::Focus)
         },

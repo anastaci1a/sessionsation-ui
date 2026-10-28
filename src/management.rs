@@ -34,6 +34,11 @@ pub enum Intent {
     LaunchLogin(Vec<String>),
     Exit,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Place {
+    Add,
+    Start,
+}
 #[derive(Clone, Debug)]
 enum Purpose {
     State,
@@ -41,6 +46,10 @@ enum Purpose {
     Operations,
     Resume(String),
     Spaces(Value),
+    /// Spaces on the UI's own HERDR server for a session that is not in HERDR.
+    Placement(Value, Place),
+    AddToHerdr(Value),
+    Start(Value),
     Relocation(Vec<String>),
     Launches(&'static str),
     Launch(&'static str, String),
@@ -72,6 +81,8 @@ enum Form {
     Relocation(Value, bool),
     SessionMutation(Value, &'static str),
     SessionDetails(String),
+    Placement(Value, String, Place),
+    Added(Value),
     Confirm(Vec<String>),
     Progress,
     Operation(String),
@@ -122,6 +133,12 @@ pub struct Manager {
     popup_size: Option<crate::popup::Size>,
     login_wait: Option<LoginWait>,
     mutation: Vec<String>,
+    /// The UI's own HERDR server: {"session", "socket"}.
+    pub host: Value,
+    /// The one focused Space of that server, when unambiguous.
+    pub focused_space: Option<String>,
+    place: Option<Place>,
+    merge_target: Option<(String, u8)>,
 }
 /// Automatic provider login in progress: the backend plan runs in a HERDR pane
 /// while the account is polled until it no longer needs authentication.
@@ -168,11 +185,28 @@ impl Default for Manager {
             popup_size: None,
             login_wait: None,
             mutation: vec![],
+            host: Value::Null,
+            focused_space: None,
+            place: None,
+            merge_target: None,
         }
     }
 }
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).into()).collect()
+}
+/// `SESSION_MERGED: <surviving id>`: the entry was merged into another session.
+fn merged_survivor(text: &str) -> Option<String> {
+    let rest = text.trim_start().strip_prefix("SESSION_MERGED: ")?;
+    let tokens = || {
+        rest.split_whitespace()
+            .map(|t| t.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')))
+            .filter(|t| !t.is_empty())
+    };
+    tokens()
+        .find(|t| uuid::Uuid::parse_str(t).is_ok())
+        .or_else(|| tokens().next())
+        .map(str::to_owned)
 }
 fn id(v: &Value) -> &str {
     v["id"].as_str().unwrap_or("")
@@ -637,7 +671,7 @@ impl Manager {
                 .iter()
                 .filter_map(|a| a.id.split_once(':').map(|(_, name)| name.to_owned()))
                 .collect(),
-            Form::Rename(target) => self
+            Form::Rename(target) | Form::Placement(target, ..) => self
                 .sessions
                 .iter()
                 .filter(|s| s["id"] != target["id"])
@@ -1332,6 +1366,32 @@ impl Manager {
             self.refresh_sessions()
         }
     }
+    /// Continuation, branch and native-kind facts; absent facts are simply not shown.
+    fn identity_lines(value: &Value) -> Vec<String> {
+        let text = |v: &Value| v.as_str().map(clean).filter(|s| !s.is_empty());
+        let mut lines = vec![];
+        if let Some(ids) = value["previous_conversation_ids"].as_array() {
+            let ids: Vec<_> = ids.iter().filter_map(&text).collect();
+            if !ids.is_empty() {
+                lines.push(format!("Earlier native session IDs: {}", ids.join(", ")));
+            }
+        }
+        if let Some(parent) = text(&value["forked_from_conversation_id"]) {
+            lines.push(format!("Forked from: {parent}"));
+        }
+        if value["native"].is_object() {
+            let kind = match text(&value["native"]["kind"]).as_deref() {
+                Some("bg" | "background") => "background".to_owned(),
+                Some(other) => other.to_owned(),
+                None => "unknown".to_owned(),
+            };
+            lines.push(format!("Native kind: {kind}"));
+            if let Some(job) = text(&value["native"]["job_id"]) {
+                lines.push(format!("Native job ID: {job}"));
+            }
+        }
+        lines
+    }
     fn claude_detail_lines(value: &Value) -> Vec<String> {
         let text = |v: &Value| v.as_str().map(clean).filter(|s| !s.is_empty());
         let status = match value["availability"].as_str() {
@@ -1372,6 +1432,7 @@ impl Manager {
                 text(&value["native_name"]).unwrap_or_else(|| "unknown".into())
             ),
         ];
+        lines.splice(3..3, Self::identity_lines(value));
         if let Some(pid) = pid {
             lines.push(format!("Process ID: {pid}"));
         }
@@ -1382,7 +1443,7 @@ impl Manager {
         if crate::session_list::is_claude(value) {
             return Self::claude_detail_lines(value);
         }
-        vec![
+        let mut lines = vec![
             format!("Name: {}", value["name"].as_str().unwrap_or("")),
             format!("Account: {}", value["account_id"].as_str().unwrap_or("")),
             format!(
@@ -1408,7 +1469,9 @@ impl Manager {
                 value["conversation_id"].as_str().unwrap_or("")
             ),
             format!("Generation: {}", value["generation"].as_str().unwrap_or("")),
-        ]
+        ];
+        lines.splice(7..7, Self::identity_lines(value));
+        lines
     }
     fn target(s: &Value, command: &str) -> Vec<String> {
         strings(&[
@@ -1796,6 +1859,41 @@ impl Manager {
                     if space["current"] == true {
                         return vec![];
                     }
+                    if let Some(place) = self.place {
+                        let space_id = space["id"].as_str().unwrap_or("").to_owned();
+                        let space_name = space["name"].as_str().unwrap_or("the selected Space");
+                        let session = self.space_session.clone();
+                        let name = session["name"].as_str().unwrap_or("").to_owned();
+                        let (title, body, button) = match place {
+                            Place::Add => (
+                                "Add to HERDR",
+                                format!(
+                                    "Open this running session in a new tab in {space_name}. HERDR only views the existing session: no agent is started and no input is sent."
+                                ),
+                                "Add to HERDR",
+                            ),
+                            Place::Start => (
+                                "Start Session",
+                                format!(
+                                    "Start this saved session in a new tab in {space_name}. The conversation is resumed; no message is sent."
+                                ),
+                                "Start Session",
+                            ),
+                        };
+                        self.show(
+                            title,
+                            vec![body],
+                            &[button, "Cancel"],
+                            Form::Placement(session, space_id, place),
+                        );
+                        self.dialog
+                            .as_mut()
+                            .unwrap()
+                            .fields
+                            .push(Field::new("Name", name.clone()).validated(Rule::Rename(name)));
+                        self.validate_dialog_names();
+                        return vec![];
+                    }
                     let mut args = Self::target(&self.space_session, "move-space");
                     args.extend(strings(&[
                         "--space",
@@ -1820,6 +1918,7 @@ impl Manager {
                     && !matches!(
                         action,
                         crate::session_list::Action::Focus
+                            | crate::session_list::Action::AddToHerdr
                             | crate::session_list::Action::Details
                             | crate::session_list::Action::Unavailable
                     )
@@ -1941,6 +2040,110 @@ impl Manager {
         }
         vec![]
     }
+    /// `--herdr-session`/`--herdr-socket` for the UI's own HERDR server.
+    fn host_args(&self, socket: bool) -> Option<Vec<String>> {
+        let session = self.host["session"].as_str().filter(|v| !v.is_empty())?;
+        let mut args = strings(&["--herdr-session", session]);
+        if let Some(path) = self.host["socket"]
+            .as_str()
+            .filter(|v| socket && !v.is_empty())
+        {
+            args.extend(strings(&["--herdr-socket", path]));
+        }
+        Some(args)
+    }
+    /// Spaces on the UI's own HERDR server for a session that is not in HERDR.
+    fn place_spaces(&mut self, s: Value, place: Place) -> Vec<Intent> {
+        let Some(host) = self.host_args(true) else {
+            self.note = "The HERDR instance could not be identified.".into();
+            return vec![];
+        };
+        let mut args = Self::target(&s, "spaces");
+        args.extend(host);
+        self.preview("Choose Space", args, Purpose::Placement(s, place))
+    }
+    /// Stopped Claude sessions choose a Space and name when the backend can place them.
+    fn start_route(&mut self, value: Value) -> Vec<Intent> {
+        if self.capabilities["resume_placement"]["version"] == 1
+            && crate::session_list::is_claude(&value)
+        {
+            return self.place_spaces(value, Place::Start);
+        }
+        vec![Intent::Resume(value)]
+    }
+    fn progress(&mut self, args: Vec<String>, purpose: Purpose) -> Vec<Intent> {
+        self.session_return = args
+            .windows(2)
+            .find(|w| w[0] == "--session")
+            .map(|w| w[1].clone());
+        self.details_open = false;
+        let mut progress = Dialog::progress("Operation progress");
+        progress.size = self.dialog.as_ref().and_then(|d| d.size);
+        self.dialog = Some(progress);
+        self.form = Form::Progress;
+        let request = self.request(args, purpose);
+        self.foreground = Some(self.sequence);
+        request
+    }
+    /// Return to the session list, keeping the session that was acted on selected.
+    fn leave_to_list(&mut self) {
+        let key = self.session_return.take();
+        if let Some(index) = self
+            .history
+            .iter()
+            .rposition(|location| location.page == Page::Sessions)
+        {
+            self.history.truncate(index);
+        }
+        self.go(Page::Sessions);
+        if let Some(key) = key {
+            self.options.selected = self
+                .sessions
+                .iter()
+                .position(|s| id(s) == key)
+                .map(|i| crate::session_list::session_row(&self.sessions, i))
+                .unwrap_or(0);
+        }
+    }
+    /// A merged entry is dead: refresh and select the session it merged into.
+    fn merged(&mut self, survivor: String) -> Vec<Intent> {
+        self.dialog = None;
+        self.form = Form::None;
+        self.foreground = None;
+        self.details_open = false;
+        if matches!(
+            self.page,
+            Page::Sessions | Page::Session(_) | Page::Spaces(_)
+        ) {
+            if let Some(index) = self
+                .history
+                .iter()
+                .rposition(|location| location.page == Page::Sessions)
+            {
+                self.history.truncate(index);
+            }
+            self.go(Page::Sessions);
+        }
+        self.merge_target = Some((survivor, 2));
+        self.note = "That session was merged into another entry; refreshing the list.".into();
+        self.refresh()
+    }
+    /// Report a failure that happened outside a tracked request (for example focus).
+    pub fn with_host(host: Value) -> Self {
+        Self {
+            host,
+            ..Self::default()
+        }
+    }
+    pub fn failure(&mut self, error: String) -> Vec<Intent> {
+        match merged_survivor(&error) {
+            Some(survivor) => self.merged(survivor),
+            None => {
+                self.note = error;
+                vec![]
+            }
+        }
+    }
     fn session_action(&mut self, s: Value, action: crate::session_list::Action) -> Vec<Intent> {
         let key = id(&s).to_owned();
         match action {
@@ -2032,6 +2235,7 @@ impl Manager {
                     Purpose::Spaces(s),
                 );
             }
+            crate::session_list::Action::AddToHerdr => return self.place_spaces(s, Place::Add),
             crate::session_list::Action::Switch => return vec![Intent::Switch(s)],
             crate::session_list::Action::Resume => {
                 return self.preview(
@@ -2158,6 +2362,36 @@ impl Manager {
                 }
                 return self.session_action(s, action);
             }
+            Form::Placement(s, space, place) => {
+                let mut args = match place {
+                    Place::Add => strings(&["session", "add-to-herdr"]),
+                    Place::Start => strings(&["resume"]),
+                };
+                args.extend(strings(&[
+                    "--session",
+                    id(&s),
+                    "--expected-generation",
+                    s["generation"].as_str().unwrap_or(""),
+                ]));
+                let Some(host) = self.host_args(place == Place::Add) else {
+                    self.dialog.as_mut().unwrap().status =
+                        Some("The HERDR instance could not be identified.".into());
+                    return vec![];
+                };
+                args.extend(host);
+                args.extend(strings(&["--space", &space, "--name", value(0)]));
+                let purpose = match place {
+                    Place::Add => Purpose::AddToHerdr(s),
+                    Place::Start => Purpose::Start(s),
+                };
+                return self.progress(args, purpose);
+            }
+            Form::Added(done) => {
+                self.dismiss();
+                return vec![Intent::Focus(
+                    json!({"id": done["session_id"], "generation": done["generation"]}),
+                )];
+            }
             Form::Confirm(args) => args,
             Form::AddProvider(_) => return vec![],
             Form::Add(provider) => {
@@ -2203,7 +2437,7 @@ impl Manager {
             Form::ResumeWarning(mut session) => {
                 session["confirm_unfinished"] = json!(true);
                 self.dismiss();
-                return vec![Intent::Resume(session)];
+                return self.start_route(session);
             }
             Form::Delete(preview) => {
                 let key = preview["account_id"].as_str().unwrap_or("");
@@ -2295,11 +2529,17 @@ impl Manager {
                 | Purpose::Limits(_)
                 | Purpose::Resume(_)
                 | Purpose::Spaces(_)
+                | Purpose::Placement(..)
                 | Purpose::Relocation(_)
                 | Purpose::ActionCheck(..)
         ) && (self.foreground != Some(token) || !matches!(self.form, Form::Loading))
         {
             return vec![];
+        }
+        if let Err(error) = &result
+            && let Some(survivor) = merged_survivor(error)
+        {
+            return self.merged(survivor);
         }
         if let Purpose::ActionCheck(session, action) = purpose {
             return self.action_checked(session, action, result.ok());
@@ -2393,6 +2633,17 @@ impl Manager {
                 }
                 if operations_selected {
                     self.options.selected = self.rows().len().saturating_sub(1);
+                }
+                if let Some((target, tries)) = self.merge_target.take() {
+                    if let Some(index) = self.sessions.iter().position(|s| id(s) == target) {
+                        if self.page == Page::Sessions {
+                            self.options.selected =
+                                crate::session_list::session_row(&self.sessions, index);
+                            self.note = "Showing the session it was merged into.".into();
+                        }
+                    } else if tries > 1 {
+                        self.merge_target = Some((target, tries - 1));
+                    }
                 }
                 self.capabilities = value["capabilities"].clone();
                 if let Form::SessionDetails(key) = &self.form
@@ -2530,7 +2781,104 @@ impl Manager {
                     self.space_choices = value;
                     self.space_session = session.clone();
                     self.enter(Page::Spaces(id(&session).into()));
+                    self.place = None;
                 }
+            }
+            Purpose::Placement(session, place) => {
+                if self.page == Page::Session(id(&session).into()) {
+                    if value["session_id"] != session["id"]
+                        || value["generation"] != session["generation"]
+                        || value["herdr_session"].as_str() != self.host["session"].as_str()
+                    {
+                        self.dismiss();
+                        self.note = "Session changed while its Spaces were loading. Refresh and choose again.".into();
+                        return vec![];
+                    }
+                    let original = &session["original_host"];
+                    let remembered = (original["session"] == self.host["session"]
+                        && original["socket"] == self.host["socket"])
+                        .then(|| original["workspace_id"].as_str())
+                        .flatten();
+                    let preferred = remembered
+                        .map(str::to_owned)
+                        .or_else(|| self.focused_space.clone());
+                    self.space_choices = value;
+                    self.space_session = session.clone();
+                    self.enter(Page::Spaces(id(&session).into()));
+                    self.place = Some(place);
+                    if let Some(index) = preferred.and_then(|want| {
+                        self.space_choices["spaces"]
+                            .as_array()?
+                            .iter()
+                            .position(|space| space["id"] == want.as_str())
+                    }) {
+                        self.options.selected = index;
+                    }
+                }
+            }
+            Purpose::AddToHerdr(session) => {
+                let shown = matches!(self.form, Form::Progress) && self.foreground == Some(token);
+                let attached = value["state"] == "attached";
+                if shown {
+                    self.leave_to_list();
+                    let name = value["name"]
+                        .as_str()
+                        .or(session["name"].as_str())
+                        .map(clean)
+                        .unwrap_or_default();
+                    if attached {
+                        let focusable = value["generation"].is_string();
+                        let buttons: &[&str] = if focusable {
+                            &["Focus tab", "Close"]
+                        } else {
+                            &["Close"]
+                        };
+                        self.show(
+                            "Added to HERDR",
+                            vec![
+                                format!("{name} is open in a new HERDR tab."),
+                                "The existing session is only viewed there: no agent was started and no input was sent.".into(),
+                            ],
+                            buttons,
+                            if focusable { Form::Added(value) } else { Form::None },
+                        );
+                    } else {
+                        self.show(
+                            "Attachment not confirmed",
+                            vec![
+                                format!("HERDR opened a tab for {name}, but the attachment could not be confirmed."),
+                                "Nothing was retried and nothing will be retried automatically. Check the HERDR tab and the session list before trying again.".into(),
+                            ],
+                            &["Close"],
+                            Form::None,
+                        );
+                    }
+                } else {
+                    self.note = if attached {
+                        "Added to HERDR."
+                    } else {
+                        "Attachment not confirmed; nothing was retried. Check the session list."
+                    }
+                    .into();
+                }
+                return self.refresh();
+            }
+            Purpose::Start(session) => {
+                if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
+                    self.leave_to_list();
+                    self.show(
+                        "Session start requested",
+                        vec![
+                            format!("{} was opened in a new HERDR tab.", session["name"].as_str().map(clean).unwrap_or_default()),
+                            "Its confirmed state appears in Manage Sessions after a refresh. Nothing is retried automatically.".into(),
+                        ],
+                        &["Close"],
+                        Form::None,
+                    );
+                } else {
+                    self.note = "Start requested; check the session list.".into();
+                }
+                return self.refresh();
             }
             Purpose::Resume(key) => {
                 if self.page == Page::Session(key) {
@@ -2540,7 +2888,7 @@ impl Manager {
                     if value["resume_block_reason"] == "unfinished_history" {
                         self.show("Unfinished conversation", vec!["This conversation ended during a turn. Start from its saved history? Review unfinished work before continuing; the interrupted request will not be replayed automatically.".into()], &["Start session", "Cancel"], Form::ResumeWarning(value));
                     } else {
-                        return vec![Intent::Resume(value)];
+                        return self.start_route(value);
                     }
                 }
             }
@@ -5105,5 +5453,325 @@ mod tests {
         assert!(line("c-busy-claude").contains(crate::session_list::claude_spinner(0)));
         assert!(line("d-busy-codex").contains(crate::session_list::spinner(0)));
         assert!(!line("b-idle-claude").contains(crate::session_list::claude_spinner(0)));
+    }
+
+    fn tmux_claude(add: Value) -> Value {
+        let mut s = claude_session("running");
+        s["attachment"] = json!({"host":"tmux"});
+        s["capabilities"]["add_to_herdr"] = add;
+        s
+    }
+    fn placed(sessions: Vec<Value>) -> Manager {
+        let mut m = Manager {
+            page: Page::Session("c".into()),
+            sessions,
+            host: json!({"session":"named","socket":"/chosen.sock"}),
+            focused_space: Some("w2".into()),
+            ..Default::default()
+        };
+        m.capabilities = json!({"resume":{"version":1},"resume_placement":{"version":1}});
+        m
+    }
+    fn api(intents: &[Intent]) -> (u64, Vec<String>) {
+        let Intent::Api(token, args) = &intents[0] else {
+            panic!("expected an API request, got {intents:?}")
+        };
+        (*token, args.clone())
+    }
+    fn refreshes(intents: &[Intent]) -> bool {
+        intents
+            .iter()
+            .any(|i| matches!(i, Intent::Api(_, a) if a == &strings(&["state"])))
+    }
+    fn state_token(intents: &[Intent]) -> u64 {
+        intents
+            .iter()
+            .find_map(|i| match i {
+                Intent::Api(t, a) if a == &strings(&["state"]) => Some(*t),
+                _ => None,
+            })
+            .expect("a state refresh")
+    }
+    fn space_choices() -> Value {
+        json!({"session_id":"c","generation":"g","herdr_session":"named","current_space_id":null,"spaces":[{"id":"w1","name":"Origin","current":false},{"id":"w2","name":"Work","current":false}],"pane":null})
+    }
+    #[test]
+    fn add_to_herdr_replaces_focus_and_shows_the_backend_reason_text() {
+        let mut s = tmux_claude(json!(false));
+        s["capability_reasons"] =
+            json!({"add_to_herdr":"INTERACTIVE_ELSEWHERE: Open in another terminal"});
+        let rows = crate::session_list::actions(&s, true);
+        assert_eq!(rows[0].0.label, "Add to HERDR");
+        assert!(!rows[0].0.enabled);
+        assert_eq!(rows[0].1, crate::session_list::Action::AddToHerdr);
+        let mut canvas = Canvas::new(80, 24);
+        let mut m = placed(vec![s.clone()]);
+        m.paint(&mut canvas, 23);
+        let text: String = canvas.cells.iter().map(|c| c.glyph.as_str()).collect();
+        assert!(text.contains("Open in another terminal"));
+        assert!(!text.contains("INTERACTIVE_ELSEWHERE"));
+        assert!(m.activate().is_empty(), "disabled row sends nothing");
+        // Codex shares the row; a HERDR pane or an older backend keeps Focus Session.
+        let mut codex = json!({"id":"x","availability":"running","attachment":{"host":"tmux"},"capabilities":{"add_to_herdr":true}});
+        assert_eq!(
+            crate::session_list::actions(&codex, true)[0].0.label,
+            "Add to HERDR"
+        );
+        codex["attachment"] = json!({"host":"herdr"});
+        assert_eq!(
+            crate::session_list::actions(&codex, true)[0].0.label,
+            "Focus Session"
+        );
+        let mut old = tmux_claude(json!(true));
+        old["capabilities"]
+            .as_object_mut()
+            .unwrap()
+            .remove("add_to_herdr");
+        assert_eq!(
+            crate::session_list::actions(&old, true)[0].0.label,
+            "Focus Session"
+        );
+    }
+    #[test]
+    fn add_to_herdr_picks_a_space_names_it_and_offers_verified_focus() {
+        let mut m = placed(vec![tmux_claude(json!(true))]);
+        let (token, args) = api(&m.activate());
+        assert_eq!(
+            args,
+            strings(&[
+                "spaces",
+                "--session",
+                "c",
+                "--expected-generation",
+                "g",
+                "--herdr-session",
+                "named",
+                "--herdr-socket",
+                "/chosen.sock"
+            ])
+        );
+        m.response(token, Ok(space_choices()));
+        assert_eq!(m.page, Page::Spaces("c".into()));
+        assert_eq!(m.options.selected, 1, "defaults to the focused Space");
+        assert!(m.activate().is_empty());
+        let dialog = m.dialog.as_ref().unwrap();
+        assert_eq!(dialog.title, "Add to HERDR");
+        assert_eq!(
+            dialog.fields[0].input.value, "Work",
+            "name defaults to the session name"
+        );
+        // Cancelling the name dialog mutates nothing.
+        assert!(m.submit(1, vec![]).is_empty());
+        m.activate();
+        let (token, args) = api(&m.submit(0, vec!["Renamed".into()]));
+        assert_eq!(
+            args,
+            strings(&[
+                "session",
+                "add-to-herdr",
+                "--session",
+                "c",
+                "--expected-generation",
+                "g",
+                "--herdr-session",
+                "named",
+                "--herdr-socket",
+                "/chosen.sock",
+                "--space",
+                "w2",
+                "--name",
+                "Renamed"
+            ])
+        );
+        let sent = m.response(token, Ok(json!({"state":"attached","session_id":"c","generation":"g2","host":"herdr","herdr_session":"named","space_id":"w2","tab_id":"t","pane_id":"p","target":"herdr/named/w2:p","name":"Renamed","job_id":"j","attachment":{"host":"herdr"},"starts_agent":false,"sends_input":false})));
+        assert!(refreshes(&sent), "attached refreshes the list");
+        assert_eq!(m.page, Page::Sessions);
+        let dialog = m.dialog.as_ref().unwrap();
+        assert_eq!(dialog.title, "Added to HERDR");
+        assert_eq!(dialog.buttons[0].label, "Focus tab");
+        let focus = m.submit(0, vec![]);
+        assert!(
+            matches!(&focus[..], [Intent::Focus(s)] if s["id"] == "c" && s["generation"] == "g2")
+        );
+    }
+    #[test]
+    fn unconfirmed_attachment_is_reported_honestly_and_never_retried() {
+        let mut m = placed(vec![tmux_claude(json!(true))]);
+        let (token, _) = api(&m.activate());
+        m.response(token, Ok(space_choices()));
+        m.activate();
+        let (token, _) = api(&m.submit(0, vec!["Work".into()]));
+        let sent = m.response(token, Ok(json!({"state":"attach_unconfirmed","session_id":"c","generation":null,"attachment":null,"starts_agent":false,"sends_input":false})));
+        assert!(refreshes(&sent));
+        assert!(
+            sent.iter()
+                .all(|i| matches!(i, Intent::Api(_, a) if a[0] != "session" && a[0] != "resume")),
+            "never retried"
+        );
+        let dialog = m.dialog.as_ref().unwrap();
+        assert_eq!(dialog.title, "Attachment not confirmed");
+        assert_eq!(dialog.buttons.len(), 1);
+        assert!(dialog.body.join(" ").contains("Nothing was retried"));
+        assert!(m.submit(0, vec![]).is_empty());
+    }
+    #[test]
+    fn mismatched_space_lists_are_refused() {
+        let mut m = placed(vec![tmux_claude(json!(true))]);
+        let (token, _) = api(&m.activate());
+        let mut other = space_choices();
+        other["herdr_session"] = json!("someone-else");
+        m.response(token, Ok(other));
+        assert_eq!(m.page, Page::Session("c".into()));
+        assert!(m.note.contains("Session changed"));
+    }
+    #[test]
+    fn start_session_offers_space_and_name_only_when_placement_is_advertised() {
+        let mut stopped = claude_session("stopped");
+        stopped["capabilities"]["resume"] = json!(true);
+        for advertised in [true, false] {
+            let mut m = placed(vec![stopped.clone()]);
+            if !advertised {
+                m.capabilities = json!({"resume":{"version":1}});
+            }
+            let (token, args) = api(&m.activate());
+            assert_eq!(args[0], "session");
+            let mut fresh = stopped.clone();
+            fresh["original_host"] =
+                json!({"session":"named","socket":"/chosen.sock","workspace_id":"w1"});
+            let sent = m.response(token, Ok(fresh));
+            if !advertised {
+                assert!(matches!(&sent[..], [Intent::Resume(s)] if s["id"] == "c"));
+                continue;
+            }
+            let (token, args) = api(&sent);
+            assert_eq!(args[0], "spaces");
+            assert!(args.contains(&"named".to_string()));
+            m.response(token, Ok(space_choices()));
+            assert_eq!(
+                m.options.selected, 0,
+                "remembered Space beats the focused one"
+            );
+            m.activate();
+            assert_eq!(m.dialog.as_ref().unwrap().title, "Start Session");
+            assert_eq!(m.dialog.as_ref().unwrap().fields[0].input.value, "Work");
+            let (token, args) = api(&m.submit(0, vec!["Fresh".into()]));
+            assert_eq!(
+                args,
+                strings(&[
+                    "resume",
+                    "--session",
+                    "c",
+                    "--expected-generation",
+                    "g",
+                    "--herdr-session",
+                    "named",
+                    "--space",
+                    "w1",
+                    "--name",
+                    "Fresh"
+                ])
+            );
+            let sent = m.response(token, Ok(json!({"state":"started"})));
+            assert!(refreshes(&sent));
+            assert_eq!(m.dialog.as_ref().unwrap().title, "Session start requested");
+        }
+    }
+    #[test]
+    fn session_details_show_continuations_forks_and_native_kind_only_when_known() {
+        let mut s = claude_session("running");
+        s["previous_conversation_ids"] = json!(["old-1", "old-2"]);
+        s["forked_from_conversation_id"] = json!("parent");
+        s["native"] = json!({"kind":"bg","job_id":"job-7"});
+        let text = Manager::session_detail_lines(&s).join("\n");
+        for line in [
+            "Earlier native session IDs: old-1, old-2",
+            "Forked from: parent",
+            "Native kind: background",
+            "Native job ID: job-7",
+        ] {
+            assert!(text.contains(line), "{line}");
+        }
+        s["native"] = json!({"kind":"interactive"});
+        let text = Manager::session_detail_lines(&s).join("\n");
+        assert!(text.contains("Native kind: interactive") && !text.contains("job ID"));
+        s["native"] = json!({});
+        assert!(
+            Manager::session_detail_lines(&s)
+                .join("\n")
+                .contains("Native kind: unknown")
+        );
+        let plain = Manager::session_detail_lines(&claude_session("running")).join("\n");
+        assert!(
+            !plain.contains("Earlier")
+                && !plain.contains("Forked")
+                && !plain.contains("Native kind")
+        );
+        let mut codex =
+            json!({"id":"x","previous_conversation_ids":["a"],"forked_from_conversation_id":"b"});
+        let text = Manager::session_detail_lines(&codex).join("\n");
+        assert!(text.contains("Earlier native session IDs: a") && text.contains("Forked from: b"));
+        codex["previous_conversation_ids"] = json!([]);
+        assert!(
+            !Manager::session_detail_lines(&codex)
+                .join("\n")
+                .contains("Earlier")
+        );
+    }
+    #[test]
+    fn merged_sessions_refresh_and_select_the_survivor_from_any_call() {
+        let survivor = "11111111-1111-4111-8111-111111111111";
+        assert_eq!(
+            merged_survivor(&format!(
+                "SESSION_MERGED: {survivor} (renamed). Refresh the list."
+            ))
+            .as_deref(),
+            Some(survivor)
+        );
+        assert_eq!(
+            merged_survivor("SESSION_MERGED: abc").as_deref(),
+            Some("abc")
+        );
+        assert_eq!(merged_survivor("STALE_TARGET: nope"), None);
+        let sessions = vec![
+            json!({"id":"dead","generation":"g","name":"Dead","availability":"stopped"}),
+            json!({"id":survivor,"generation":"g","name":"Alive","availability":"stopped"}),
+        ];
+        let mut m = Manager {
+            page: Page::Session("dead".into()),
+            sessions: sessions.clone(),
+            sessions_known: true,
+            ..Default::default()
+        };
+        let sent = m.preview(
+            "Resume session",
+            Manager::target(&sessions[0], "session"),
+            Purpose::Resume("dead".into()),
+        );
+        let (token, _) = api(&sent);
+        let sent = m.response(token, Err(format!("SESSION_MERGED: {survivor}")));
+        assert_eq!(m.page, Page::Sessions);
+        assert!(m.dialog.is_none());
+        let token = state_token(&sent);
+        m.response(
+            token,
+            Ok(json!({"sessions":[sessions[1].clone()],"capabilities":{}})),
+        );
+        let row = m.options.selected;
+        assert_eq!(
+            crate::session_list::session_index(&m.sessions, row).map(|i| id(&m.sessions[i])),
+            Some(survivor)
+        );
+        // Failures outside a tracked request (focus) follow the same path.
+        let mut m = Manager {
+            page: Page::Session("dead".into()),
+            sessions,
+            sessions_known: true,
+            ..Default::default()
+        };
+        let sent = m.failure(format!("SESSION_MERGED: {survivor}"));
+        assert_eq!(m.page, Page::Sessions);
+        assert!(refreshes(&sent));
+        assert!(m.failure("HERDR_ATTACHMENT_MISMATCH".into()).is_empty());
+        assert_eq!(m.note, "HERDR_ATTACHMENT_MISMATCH");
     }
 }

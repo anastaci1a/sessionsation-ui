@@ -84,6 +84,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("picker", 60, 20),
         ("providers", 60, 16),
         ("claude-session", 80, 24),
+        ("add-to-herdr", 80, 24),
         ("modal", 60, 24),
         ("login-codex", 70, 20),
         ("login-claude-wait", 70, 20),
@@ -160,6 +161,12 @@ fn management_geometry_usage_markers_and_picker_columns() {
                 m.inventory(all);
                 m.page = Page::Accounts;
                 m.options.selected = 6;
+            }
+            "add-to-herdr" => {
+                m.page = Page::Session("c".into());
+                m.sessions = vec![
+                    serde_json::json!({"id":"c","name":"Claude work","provider":"claude","account_id":"claude:claude-main","availability":"running","attachment":{"host":"tmux"},"capabilities":{"focus":false,"rename":true,"resume":false,"add_to_herdr":false},"capability_reasons":{"add_to_herdr":"INTERACTIVE_ELSEWHERE: Open in another terminal"}}),
+                ];
             }
             "claude-session" => {
                 m.page = Page::Session("c".into());
