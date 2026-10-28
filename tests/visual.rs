@@ -69,6 +69,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("inline-usage-focus", 100, 30),
         ("attention", 100, 30),
         ("sessions-wide", 110, 24),
+        ("sessions-claude-busy", 80, 20),
         ("archives-wide", 110, 24),
         ("archives-compact", 40, 18),
         ("sessions-loading", 60, 18),
@@ -84,6 +85,8 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("providers", 60, 16),
         ("claude-session", 80, 24),
         ("modal", 60, 24),
+        ("login-codex", 70, 20),
+        ("login-claude-wait", 70, 20),
         ("operations-wide", 120, 24),
         ("operations-compact", 50, 20),
         ("operations-tiny", 40, 10),
@@ -127,6 +130,15 @@ fn management_geometry_usage_markers_and_picker_columns() {
                 ];
                 m.options.selected = sessionsation_ui::session_list::session_row(&m.sessions, 1);
             }
+            "sessions-claude-busy" => {
+                m.page = Page::Sessions;
+                m.sessions_known = true;
+                m.sessions = vec![
+                    serde_json::json!({"name":"Codex busy","id":"a","account_id":"codex:personal","availability":"running","activity":"busy","active_since":1}),
+                    serde_json::json!({"name":"Claude busy","id":"c","provider":"claude","account_id":"claude:main","availability":"running","native_status":"busy","activity":"busy"}),
+                    serde_json::json!({"name":"Claude idle","id":"d","provider":"claude","account_id":"claude:main","availability":"running","native_status":"idle","activity":"idle"}),
+                ];
+            }
             "operations-wide" | "operations-compact" | "operations-tiny" => {
                 m.page = Page::Operations;
                 m.operations = vec![
@@ -154,6 +166,27 @@ fn management_geometry_usage_markers_and_picker_columns() {
                 m.sessions = vec![
                     serde_json::json!({"id":"c","name":"Claude work","provider":"claude","account_id":"claude:claude-main","availability":"running","attachment":null,"capabilities":{"focus":false,"rename":true,"resume":false}}),
                 ];
+            }
+            "login-codex" => {
+                m.dialog = Some(Dialog::new(
+                    "Complete provider login",
+                    vec![
+                        "https://example.invalid/device".into(),
+                        "Code: ABCD-EFGH".into(),
+                        "Complete login in your browser. Closing this dialog does not cancel enrollment.".into(),
+                    ],
+                    &["Continue in background"],
+                ))
+            }
+            "login-claude-wait" => {
+                m.dialog = Some(Dialog::new(
+                    "Complete provider login",
+                    vec![
+                        "Complete the Claude Code login in the opened pane…".into(),
+                        "This dialog closes when sign-in succeeds. Cancel only stops waiting; it does not cancel the login.".into(),
+                    ],
+                    &["Cancel"],
+                ))
             }
             "modal" => {
                 m.dialog = Some(Dialog::new(

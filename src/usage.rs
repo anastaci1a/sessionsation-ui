@@ -9,6 +9,16 @@ pub fn short_name(id: &str) -> String {
     let name = id.split_once(':').map_or(id, |(_, n)| n);
     clipped_name(name, 12)
 }
+/// Account name for lists and tags: the backend display name when set, else the
+/// short name derived from the ID.
+pub fn account_title(a: &Account) -> String {
+    a.details
+        .get("display_name")
+        .and_then(|v| v.as_str())
+        .map(|n| clipped_name(n, 12))
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| short_name(&a.id))
+}
 pub fn display_name(name: &str) -> String {
     clipped_name(name, 16)
 }
@@ -402,7 +412,7 @@ impl AccountsLayout {
         }
         let names = accounts
             .iter()
-            .map(|a| UnicodeWidthStr::width(short_name(&a.id).as_str()))
+            .map(|a| UnicodeWidthStr::width(account_title(a).as_str()))
             .max()
             .unwrap_or(0);
         let digits = uses.iter().map(Usage::digits).max().unwrap_or(2);
@@ -443,7 +453,7 @@ impl AccountsLayout {
             canvas.accent_text(
                 self.left + 2,
                 y,
-                &short_name(&account.id),
+                &account_title(account),
                 Accent {
                     brightness: if depressed || name_focus && !active {
                         600

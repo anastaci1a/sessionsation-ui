@@ -100,6 +100,7 @@ pub enum Effect {
     Exit,
     Api(u64, Vec<String>),
     FocusSession(Value, bool),
+    LaunchLogin(Vec<String>),
 }
 enum StartConfirmation {
     SharedDirectory(PathBuf),
@@ -216,6 +217,7 @@ impl App {
             use crate::management::Intent;
             match intent {
                 Intent::Api(id, args) => effects.push(Effect::Api(id, args)),
+                Intent::LaunchLogin(argv) => effects.push(Effect::LaunchLogin(argv)),
                 Intent::New => {
                     if self.request.is_some() && !self.success {
                         self.manager.note="A launch is still in progress; inspect Operations before starting another.".into();
@@ -353,7 +355,12 @@ impl App {
                         self.draft
                             .account
                             .as_deref()
-                            .map(crate::usage::short_name)
+                            .map(|id| {
+                                self.accounts.iter().find(|a| a.id == id).map_or_else(
+                                    || crate::usage::short_name(id),
+                                    crate::usage::account_title,
+                                )
+                            })
                             .unwrap_or_else(|| UNSET.into()),
                     ),
                     (
@@ -432,7 +439,7 @@ impl App {
                     .unwrap_or(0);
                 let name_width = visible
                     .iter()
-                    .map(|a| UnicodeWidthStr::width(crate::usage::short_name(&a.id).as_str()))
+                    .map(|a| UnicodeWidthStr::width(crate::usage::account_title(a).as_str()))
                     .max()
                     .unwrap_or(0);
                 let tagged = self.accounts.iter().any(|a| a.provider() != "codex");
@@ -451,7 +458,7 @@ impl App {
                         };
                         let column = 2 + name_width + 1 + preview_width + tag_width
                             - UnicodeWidthStr::width(usage.as_str());
-                        Row::gate(crate::usage::short_name(&a.id), a.selectable)
+                        Row::gate(crate::usage::account_title(a), a.selectable)
                             .with_column_preview(usage, column, false)
                             .preview_gap(1)
                             .preview_color(crate::widgets::SECONDARY)

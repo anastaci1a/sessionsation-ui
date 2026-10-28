@@ -48,6 +48,9 @@ enum Command {
     },
     Popup,
     Open,
+    /// Runs a backend login plan handed over by the manager in a plugin pane.
+    #[command(hide = true)]
+    LoginRun,
     Demo {
         #[arg(long, default_value_t = 80)]
         width: usize,
@@ -99,6 +102,7 @@ enum Message {
     Inventory(Result<(Vec<Account>, Vec<Workspace>, Value), String>),
     Managed(u64, Result<Value, String>),
     SessionFocused(Result<(), String>),
+    LoginLaunched(Result<(), String>),
     Theme(Result<(sessionsation_ui::dialog::Palette, Option<String>), String>),
     Directory(u64, Result<Listing, String>),
     Validation(u64, Result<(), String>),
@@ -150,6 +154,32 @@ impl Effects {
                             .await
                             .map_err(|e| e.to_string());
                         let _ = tx.send(Message::SessionFocused(result)).await;
+                    });
+                }
+                Effect::LaunchLogin(argv) => {
+                    tokio::spawn(async move {
+                        // The plan travels only in the pane's environment, never in
+                        // logs or errors; failures carry no plan text.
+                        let plan = serde_json::to_string(&argv).unwrap_or_default();
+                        let result = client
+                            .host(&[
+                                "plugin",
+                                "pane",
+                                "open",
+                                "--plugin",
+                                "sessionsation",
+                                "--entrypoint",
+                                "login",
+                                "--placement",
+                                "overlay",
+                                "--focus",
+                                "--env",
+                                &format!("{LOGIN_ENV}={plan}"),
+                            ])
+                            .await
+                            .map(|_| ())
+                            .map_err(|_| "HERDR could not open the login pane".to_string());
+                        let _ = tx.send(Message::LoginLaunched(result)).await;
                     });
                 }
                 Effect::Inspect(revision, input) => {
@@ -325,6 +355,7 @@ async fn main() -> Result<()> {
             benchmark();
             Ok(())
         }
+        Command::LoginRun => login_run(),
         Command::Open => {
             let client = Client::load()?;
             client
@@ -362,6 +393,32 @@ async fn main() -> Result<()> {
         }
         Command::Popup => popup(args.preferences).await,
     }
+}
+const LOGIN_ENV: &str = "SESSIONSATION_LOGIN_ARGV";
+/// Runs the backend-owned login plan on this pane's terminal. The plan is read from
+/// the environment, removed from the child's environment and never printed.
+fn login_run() -> Result<()> {
+    let plan = std::env::var(LOGIN_ENV).context("No login plan was provided")?;
+    let argv: Vec<String> = serde_json::from_str(&plan).context("Invalid login plan")?;
+    ensure!(
+        !argv.is_empty() && argv.iter().all(|a| !a.is_empty() && !a.contains('\0')),
+        "Invalid login plan"
+    );
+    println!("Sessionsation provider login. Complete the sign-in below.\n");
+    let status = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .env_remove(LOGIN_ENV)
+        .status();
+    match status {
+        Ok(s) if s.success() => println!("\nLogin finished. Press Enter to close this pane."),
+        Ok(_) => println!("\nLogin did not complete. Press Enter to close this pane."),
+        Err(e) => println!(
+            "\nCould not start the login command ({}). Press Enter to close this pane.",
+            e.kind()
+        ),
+    }
+    let _ = std::io::stdin().read_line(&mut String::new());
+    Ok(())
 }
 async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     ensure!(
@@ -508,6 +565,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           Message::Inventory(result)=>{inventory_pending=false;match result{Ok((accounts,spaces,capabilities))=>{app.launch_supported=capabilities["launch"]["version"]==1;let changed=app.manager.capabilities!=capabilities;app.manager.capabilities=capabilities;next=app.inventory(accounts,spaces,now());if changed{let intents=app.manager.refresh();next.extend(app.management(intents));}
           if !app.launch_supported{app.error="Backend launch API is not installed; creation disabled".into();}},Err(e)=>{app.manager.note=e.clone();app.error=e;app.draft.name_valid=false;}}app.dirty=true;},
           Message::Managed(token,result)=>{let intents=app.manager.response(token,result);next=app.management(intents);},
+          Message::LoginLaunched(result)=>{let intents=app.manager.login_launched(result);next=app.management(intents);app.dirty=true;},
           Message::SessionFocused(result)=>{match result{Ok(())=>app.exit=true,Err(e)=>app.manager.note=e}app.dirty=true;},
           Message::Theme(result)=>{match result{Ok((palette,note))=>{app.manager.palette=palette;if let Some(note)=note{app.manager.note=note;}},Err(e)=>app.manager.note=e}app.dirty=true;},
           Message::Directory(revision,result)=>app.listing(revision,result),

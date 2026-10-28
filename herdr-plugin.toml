@@ -22,3 +22,9 @@ id = "manage"
 title = "Accounts and sessions"
 placement = "overlay"
 command = ["./bin/sessionsation-ui", "manage"]
+
+[[panes]]
+id = "login"
+title = "Provider login"
+placement = "overlay"
+command = ["./bin/sessionsation-popup", "login-run"]

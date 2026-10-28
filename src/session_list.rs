@@ -42,6 +42,14 @@ fn session_gate(s: &Value, label: &str, capability: &str) -> Row {
     row.with_selected_preview(format!("({reason})"))
         .preview_gap(1)
 }
+/// Account tag for a session: the UI-attached display name, else the short name.
+fn account_tag(s: &Value) -> String {
+    s["account_label"]
+        .as_str()
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| short_name(s["account_id"].as_str().unwrap_or("?")))
+}
 pub fn is_claude(s: &Value) -> bool {
     s["provider"] == "claude"
         || s["account_id"]
@@ -246,6 +254,11 @@ pub fn duration(seconds: i64) -> String {
 pub fn spinner(now_ms: u64) -> &'static str {
     ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][(now_ms / 100 % 10) as usize]
 }
+/// Claude Code's own busy glyphs, captured from 2.1.312: a ping-pong cycle of
+/// single-cell frames, one frame every 120 ms, always at normal weight.
+pub fn claude_spinner(now_ms: u64) -> &'static str {
+    ["·", "✢", "*", "✶", "✻", "✽", "✻", "✶", "*", "✢"][(now_ms / 120 % 10) as usize]
+}
 fn busy(session: &Value) -> bool {
     session["availability"] == "running" && session["activity"] == "busy"
 }
@@ -336,9 +349,7 @@ pub fn paint_with_archives(
     let account_width = sessions
         .iter()
         .filter(|s| s["availability"] == "running")
-        .map(|s| {
-            UnicodeWidthStr::width(short_name(s["account_id"].as_str().unwrap_or("?")).as_str()) + 6
-        })
+        .map(|s| UnicodeWidthStr::width(account_tag(s).as_str()) + 6)
         .max()
         .unwrap_or(4);
     let max_name = canvas.width.saturating_sub(account_width + 8);
@@ -467,10 +478,7 @@ pub fn paint_with_archives(
                 }
                 continue;
             }
-            let account = format!(
-                "[{}]",
-                short_name(session["account_id"].as_str().unwrap_or("?"))
-            );
+            let account = format!("[{}]", account_tag(session));
             let pad = account_width.saturating_sub(UnicodeWidthStr::width(account.as_str()) + 4);
             let x = left + 2 + name_width + pad;
             canvas.accent_text(
@@ -495,11 +503,16 @@ pub fn paint_with_archives(
             if busy(session) {
                 let now_ms = canvas.theme.as_ref().map_or(0, |t| t.now);
                 let mut style = canvas.cells[y * canvas.width + end - 1].clone();
-                style.bold = true;
+                style.bold = false;
                 if options.back {
                     style.fg = style.fg.map(|n| (u16::from(n) * 60 / 100) as u8);
                 }
-                canvas.text(end + 1, y, spinner(now_ms), style, false);
+                let glyph = if is_claude(session) {
+                    claude_spinner(now_ms)
+                } else {
+                    spinner(now_ms)
+                };
+                canvas.text(end + 1, y, glyph, style, false);
             }
         }
     }
@@ -690,6 +703,21 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn claude_spinner_ping_pongs_at_120ms_per_frame() {
+        let frames: Vec<_> = (0..10).map(|i| claude_spinner(i * 120)).collect();
+        assert_eq!(frames, ["·", "✢", "*", "✶", "✻", "✽", "✻", "✶", "*", "✢"]);
+        assert_eq!(claude_spinner(119), "·");
+        assert_eq!(claude_spinner(120), "✢");
+        assert_eq!(claude_spinner(1200), "·");
+        // Slow ticks advance by elapsed time, skipping frames.
+        assert_eq!(claude_spinner(1200 + 5 * 120 + 7), "✽");
+        assert!(
+            frames
+                .iter()
+                .all(|f| unicode_width::UnicodeWidthStr::width(*f) == 1)
+        );
     }
     #[test]
     fn reference_spinner_is_persistent_but_disappears_on_idle_exit_or_unknown() {

@@ -65,6 +65,6 @@ export function usageSummary(a) {
   if (['missing','no_windows','error'].includes(state)||!u.observed_at) return 'usage unavailable';
   return `5h ${windowText(u.short,300)} / wk ${windowText(u.weekly,10080)}${state==='stale'||a.usage_fresh===false?' (stale)':''}`;
 }
-export const accountLabel=a=>`${a.id} [${providerLabel(providerOf(a))}] ${usageSummary(a)}`;
+export const accountLabel=a=>`${a.id}${typeof a.display_name==="string"&&a.display_name?` "${a.display_name.replace(/[\u0000-\u001f\u007f]/g,"")}"`:""} [${providerLabel(providerOf(a))}] ${usageSummary(a)}`;
 /** Shell-quoted, control-free rendering of a backend exec plan; the UI never runs it. */
 export const loginCommand=argv=>argv.map(x=>{const s=display(x); return /^[A-Za-z0-9_./:=@%+,-]+$/.test(s)?s:`'${s.replaceAll("'","'\\''")}'`;}).join(' ');

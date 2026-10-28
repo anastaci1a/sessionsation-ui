@@ -243,8 +243,19 @@ editable and exact confirmation IDs remain intact. See the
 [rendering specification](cli-specification/architecture.md#account-and-session-management)
 for the precise glyph, alignment and motion rules.
 
-Account actions group Usage details/Limits, Login/Enable/Disable, and
-Deregister/Restore/Delete with dot separators. Limits edit minimum remaining
+Account actions begin with Details/Limits/Rename for every account, then group
+Login/Enable/Disable and Deregister/Restore/Delete with dot separators. Rename sets a
+backend display name (empty clears it) and is enabled only when the provider reports
+`account_rename`; display names replace short names in lists and session tags.
+Deregister/Restore and Delete are enabled only when the provider reports
+`account_removal`/`account_deletion`; a disabled row shows the backend reason when
+published. Delete confirmations show backend semantics text when present (for Claude
+without it: a managed home is removed with history preserved, an adopted external
+directory is left in place). Add and Login for Claude run the backend login plan
+(`claude auth login --claudeai`) automatically in a HERDR overlay pane
+(`login` plugin pane), poll the account every 2 s for up to 10 minutes, and return to
+the account page on success; the command is shown only if the pane cannot open. Claude
+sessions derive busy/idle from `native_status` and sort/render like Codex sessions. Limits edit minimum remaining
 percentages through the existing owner. Deregister preserves credentials/history;
 Restore reverses deregistration. Delete removes local account files and credentials
 while preserving saved/archived conversations. The upstream provider account is
