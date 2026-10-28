@@ -38,6 +38,8 @@ pub struct Usage {
     pub windows: Vec<Window>,
     pub status: String,
     pub stale: bool,
+    /// Compact age of the observation (`42m ago`) once it is 60 s old or more.
+    pub age: Option<String>,
 }
 /// Backend usage state (`fresh|partial|stale|missing|no_windows|error`), read from
 /// the usage object or the account-level mirror.
@@ -46,8 +48,45 @@ pub fn usage_state(a: &Account) -> Option<&str> {
         .as_str()
         .or_else(|| a.details.get("usage_state").and_then(|v| v.as_str()))
 }
+static CLOCK_OVERRIDE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// Pin the wall clock (Unix seconds) used for usage ages; 0 restores the real clock.
+pub fn set_clock(now: i64) {
+    CLOCK_OVERRIDE.store(now, std::sync::atomic::Ordering::Relaxed);
+}
+fn clock() -> i64 {
+    match CLOCK_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        0 if cfg!(test) => 100,
+        0 => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64),
+        pinned => pinned,
+    }
+}
+/// A usable observation time in Unix seconds: null, 0, negative and future
+/// values mean "never observed".
+pub fn observed_at(a: &Account, now: i64) -> Option<i64> {
+    let then = a.usage["observed_at"].as_i64()?;
+    let then = if then > 100_000_000_000 {
+        then / 1000
+    } else {
+        then
+    };
+    (then > 0 && then <= now).then_some(then)
+}
+/// `1m ago`, `2h ago`, `3d ago`; nothing below 60 s.
+pub fn compact_age(age: i64) -> Option<String> {
+    match age {
+        i64::MIN..=59 => None,
+        60..=3599 => Some(format!("{}m ago", age / 60)),
+        3600..=86399 => Some(format!("{}h ago", age / 3600)),
+        _ => Some(format!("{}d ago", age / 86400)),
+    }
+}
 impl Usage {
     pub fn account(a: &Account) -> Self {
+        Self::account_at(a, clock())
+    }
+    pub fn account_at(a: &Account, now: i64) -> Self {
         let state = usage_state(a);
         let fresh_flag = a.details.get("usage_fresh").and_then(|v| v.as_bool());
         let stale = match state {
@@ -75,7 +114,7 @@ impl Usage {
             } else if state == Some("unsupported") {
                 "Usage unsupported"
             } else if matches!(state, Some("missing" | "no_windows" | "error"))
-                || a.usage["observed_at"].as_i64().is_none()
+                || observed_at(a, now).is_none()
             {
                 "Usage unavailable"
             } else if stale {
@@ -119,6 +158,7 @@ impl Usage {
             windows,
             status,
             stale,
+            age: observed_at(a, now).and_then(|t| compact_age(now - t)),
         }
     }
     pub fn status_only(&self) -> bool {
@@ -145,11 +185,20 @@ impl Usage {
             2
         }
     }
+    /// Text shown in place of the bars: lowercase, in parentheses.
+    pub fn status_label(&self) -> String {
+        format!("({})", self.status.to_lowercase())
+    }
+    /// Left edge of the status text: centred in the bar span alone, or the bar's
+    /// left edge when the text is wider than the span.
+    pub fn status_x(&self, x: usize, bar: usize) -> usize {
+        x + bar.saturating_sub(UnicodeWidthStr::width(self.status_label().as_str())) / 2
+    }
     pub fn width(&self, bar: usize, digits: usize) -> usize {
         if self.status_only() {
-            UnicodeWidthStr::width(self.status.as_str())
+            UnicodeWidthStr::width(self.status_label().as_str()).max(bar)
         } else {
-            bar + digits + 5 + if self.stale { 6 } else { 0 }
+            bar + digits + 5 + self.age.as_ref().map_or(0, |a| a.len() + 3)
         }
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, digits: usize) {
@@ -165,10 +214,12 @@ impl Usage {
     ) {
         self.paint_selected(canvas, x, y, bar, digits, true);
         if self.status_only() {
+            let sx = self.status_x(x, bar);
+            let label = self.status_label();
             canvas.accent_text(
-                x,
+                sx,
                 y,
-                &self.status,
+                &label,
                 Accent {
                     bold: true,
                     flash: false,
@@ -176,7 +227,7 @@ impl Usage {
                 },
             );
             canvas.accent_text(
-                x + self.width(bar, digits),
+                sx + UnicodeWidthStr::width(label.as_str()),
                 y,
                 " ◀",
                 Accent {
@@ -210,7 +261,7 @@ impl Usage {
         digits: usize,
     ) {
         if self.status_only() {
-            self.paint_status(canvas, x, y, 600);
+            self.paint_status(canvas, x, y, bar, 600);
             return;
         }
         self.paint_selected(canvas, x, y, bar, digits, false);
@@ -245,11 +296,11 @@ impl Usage {
             }
         }
     }
-    fn paint_status(&self, canvas: &mut Canvas, x: usize, y: usize, brightness: i64) {
+    fn paint_status(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, brightness: i64) {
         canvas.accent_text(
-            x,
+            self.status_x(x, bar),
             y,
-            &self.status,
+            &self.status_label(),
             Accent {
                 brightness,
                 bold: false,
@@ -268,7 +319,7 @@ impl Usage {
         selected: bool,
     ) {
         if self.status_only() {
-            self.paint_status(canvas, x, y, 1000);
+            self.paint_status(canvas, x, y, bar, 1000);
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
@@ -318,7 +369,7 @@ impl Usage {
                         y + row,
                         glyph,
                         Accent {
-                            brightness: if self.stale { 300 } else { 1000 },
+                            brightness: 1000,
                             bold: true,
                             flash: false,
                             ..Accent::default()
@@ -334,7 +385,9 @@ impl Usage {
                 "{:>digits$}% {}{}",
                 percent,
                 window.label,
-                if self.stale { " stale" } else { "" }
+                self.age
+                    .as_ref()
+                    .map_or(String::new(), |a| format!(" ({a})"))
             );
             canvas.text(
                 x + bar + 1,
@@ -392,81 +445,143 @@ fn bar_glyph(col: usize, width: usize, filled: f64, marker: Option<usize>) -> &'
     }
 }
 
-/// One layout calculation supplies the fit decision and actual coordinates.
+/// Provider symbol drawn before every account name. One place to change them; each
+/// is a single terminal cell wide (checked by a unit test).
+pub fn provider_symbol(provider: &str) -> &'static str {
+    match provider {
+        "claude" => "✻",
+        "gemini" => "✦",
+        _ => "⬢",
+    }
+}
+/// Smallest bar the home list shrinks to on narrow screens.
+const MIN_BAR: usize = 6;
+const MAX_BAR: usize = 24;
+/// One layout calculation supplies the coordinates and the scroll window. Columns
+/// from left: selection lane (1) + space, provider symbol (1) + space, names padded
+/// to one width, space, bars (identical length for every account), values.
 #[derive(Clone, Debug)]
 pub struct AccountsLayout {
     pub left: usize,
+    pub symbol_x: usize,
+    pub name_x: usize,
+    pub name_width: usize,
     pub bars: usize,
     pub bar_width: usize,
     pub digits: usize,
     pub height: usize,
 }
 impl AccountsLayout {
-    pub fn fit(accounts: &[Account], width: usize, available_height: usize) -> Option<Self> {
+    pub fn fit(accounts: &[Account], width: usize) -> Self {
         let uses: Vec<_> = accounts.iter().map(Usage::account).collect();
         let height = uses
             .iter()
             .map(|u| u.height() + 1)
             .sum::<usize>()
             .saturating_sub(1);
-        if height > available_height {
-            return None;
-        }
-        let names = accounts
+        let mut names = accounts
             .iter()
             .map(|a| UnicodeWidthStr::width(account_title(a).as_str()))
             .max()
             .unwrap_or(0);
         let digits = uses.iter().map(Usage::digits).max().unwrap_or(2);
-        let right = uses.iter().map(|u| u.width(12, digits)).max().unwrap_or(0) + 2;
-        // Two-column selection lane, then one space between the name and bar.
-        let prefix = names + 3;
-        let min_width = prefix + right;
-        if min_width + 2 > width {
-            return None;
+        // Lane + symbol columns, then names and one space before the bars.
+        let right = |bar: usize| uses.iter().map(|u| u.width(bar, digits)).max().unwrap_or(0) + 2;
+        let fixed = |names: usize| 4 + names + 1;
+        let mut bar = MAX_BAR;
+        while bar > MIN_BAR && fixed(names) + right(bar) + 2 > width {
+            bar -= 1;
         }
-        let extra = (width - 2 - min_width).min(12);
-        let left = width.saturating_sub(min_width + extra) / 2;
-        Some(Self {
+        // Still too wide at the smallest bar: names give way last.
+        while names > 3 && fixed(names) + right(bar) + 2 > width {
+            names -= 1;
+        }
+        let total = fixed(names) + right(bar);
+        let left = width.saturating_sub(total) / 2;
+        Self {
             left,
-            bars: left + prefix,
-            bar_width: 12 + extra,
+            symbol_x: left + 2,
+            name_x: left + 4,
+            name_width: names,
+            bars: left + fixed(names),
+            bar_width: bar,
             digits,
             height,
-        })
+        }
     }
+    /// First account to draw so `selected` is visible in `rows` terminal rows.
+    pub fn scroll_for(
+        accounts: &[Account],
+        first: usize,
+        selected: Option<usize>,
+        rows: usize,
+    ) -> usize {
+        let heights: Vec<usize> = accounts
+            .iter()
+            .map(|a| Usage::account(a).height() + 1)
+            .collect();
+        let mut first = first.min(accounts.len().saturating_sub(1));
+        let Some(sel) = selected.filter(|s| *s < accounts.len()) else {
+            return first;
+        };
+        first = first.min(sel);
+        // Rows needed to show first..=sel (the last account has no trailing blank).
+        while first < sel && heights[first..=sel].iter().sum::<usize>() - 1 > rows {
+            first += 1;
+        }
+        first
+    }
+    #[allow(clippy::too_many_arguments)]
     pub fn paint(
         &self,
         canvas: &mut Canvas,
         accounts: &[Account],
         top: usize,
+        bottom: usize,
+        first: usize,
         selected: Option<usize>,
         back: bool,
         usage_focus: bool,
+        moving: Option<usize>,
     ) {
         let depressed = back || selected.is_none_or(|i| i >= accounts.len());
         let name_focus = !depressed && !usage_focus;
         let mut y = top;
-        for (index, account) in accounts.iter().enumerate() {
+        for (index, account) in accounts.iter().enumerate().skip(first) {
+            let usage = Usage::account(account);
+            if y + usage.height() > bottom {
+                break;
+            }
             let active = selected == Some(index) && !back;
             if active && !usage_focus {
                 canvas.accent_text(self.left, y, "▶", Accent::default());
             }
-            canvas.accent_text(
-                self.left + 2,
-                y,
-                &account_title(account),
-                Accent {
-                    brightness: if depressed || name_focus && !active {
-                        600
-                    } else {
-                        1000
-                    },
-                    bold: active && !usage_focus,
-                    ..Accent::default()
+            let name_style = Accent {
+                brightness: if depressed || name_focus && !active {
+                    600
+                } else {
+                    1000
                 },
+                bold: active && !usage_focus,
+                ..Accent::default()
+            };
+            let moving_row = moving == Some(index);
+            canvas.accent_text(
+                self.symbol_x,
+                y,
+                if moving_row {
+                    "⇅"
+                } else {
+                    provider_symbol(account.provider())
+                },
+                name_style,
             );
-            let usage = Usage::account(account);
+            canvas.accent_text(
+                self.name_x,
+                y,
+                &crate::widgets::ellipsize(&account_title(account), self.name_width),
+                name_style,
+            );
             if active && usage_focus {
                 usage.paint_focused(canvas, self.bars, y, self.bar_width, self.digits);
             } else if depressed || usage_focus {
@@ -479,6 +594,14 @@ impl AccountsLayout {
                     self.bar_width,
                     self.digits,
                     active && usage.status == "Login required",
+                );
+            }
+            if moving_row {
+                canvas.accent_text(
+                    self.bars + usage.width(self.bar_width, self.digits) + 1,
+                    y,
+                    "(moving)",
+                    Accent::default(),
                 );
             }
             y += usage.height() + 1;
@@ -500,7 +623,7 @@ mod tests {
         accounts[2]
             .details
             .insert("auth_required".into(), json!(true));
-        let layout = AccountsLayout::fit(&accounts, 100, 30).unwrap();
+        let layout = AccountsLayout::fit(&accounts, 100);
         let mut field = crate::render::Field::new(100, 40, 1967);
         for time in [0, 4200, 8300] {
             let base = field.paint(time);
@@ -515,14 +638,24 @@ mod tests {
                 (None, false, false),
             ] {
                 let mut c = base.clone();
-                layout.paint(&mut c, &accounts, 3, selected, back, usage_focus);
+                layout.paint(
+                    &mut c,
+                    &accounts,
+                    3,
+                    40,
+                    0,
+                    selected,
+                    back,
+                    usage_focus,
+                    None,
+                );
                 let mut y = 3;
                 for (i, a) in accounts.iter().enumerate() {
                     let active = selected == Some(i) && !back;
                     let dim_name = back || selected.is_none() || !usage_focus && !active;
                     let mut expected = base.clone();
                     expected.accent_text(
-                        layout.left + 2,
+                        layout.name_x,
                         y,
                         &short_name(&a.id),
                         Accent {
@@ -531,7 +664,7 @@ mod tests {
                             ..Accent::default()
                         },
                     );
-                    let cell = y * 100 + layout.left + 2;
+                    let cell = y * 100 + layout.name_x;
                     assert_eq!(c.cells[cell], expected.cells[cell]);
                     let usage = Usage::account(a);
                     if usage.status_only() {
@@ -540,10 +673,15 @@ mod tests {
                         } else {
                             1000
                         };
-                        usage.paint_status(&mut expected, layout.bars, y, brightness);
-                        for x in
-                            layout.bars..layout.bars + usage.width(layout.bar_width, layout.digits)
-                        {
+                        usage.paint_status(
+                            &mut expected,
+                            layout.bars,
+                            y,
+                            layout.bar_width,
+                            brightness,
+                        );
+                        let sx = usage.status_x(layout.bars, layout.bar_width);
+                        for x in sx..sx + UnicodeWidthStr::width(usage.status_label().as_str()) {
                             expected.cells[y * 100 + x].bold = active && usage_focus;
                             assert_eq!(c.cells[y * 100 + x], expected.cells[y * 100 + x]);
                         }
@@ -584,6 +722,7 @@ mod tests {
             }],
             status: "Ready".into(),
             stale: false,
+            age: None,
         };
         let mut plain = Canvas::new(40, 4);
         let mut focus = Canvas::new(40, 4);
@@ -622,11 +761,13 @@ mod tests {
                 status: status.into(),
                 windows: vec![],
                 stale: false,
+                age: None,
             };
             let mut c = field.paint(4200);
             let mut expected = c.clone();
             u.paint_focused(&mut c, 2, 2, 20, 2);
-            let end = 2 + UnicodeWidthStr::width(status);
+            let sx = u.status_x(2, 20);
+            let end = sx + UnicodeWidthStr::width(u.status_label().as_str());
             assert_eq!(c.cells[120 + end].glyph, " ");
             assert_eq!(c.cells[120 + end + 1].glyph, "◀");
             expected.accent_text(
@@ -640,7 +781,7 @@ mod tests {
                 },
             );
             assert_eq!(expected.cells[120 + end + 1], c.cells[120 + end + 1]);
-            assert!(c.cells[122].bold);
+            assert!(c.cells[120 + sx].bold);
         }
     }
     #[test]
@@ -657,18 +798,19 @@ mod tests {
         let mut c = Canvas::new(60, 5);
         u.paint_selected(&mut c, 1, 1, 20, 3, true);
         let mut expected = Canvas::new(60, 5);
+        let sx = u.status_x(1, 20);
         expected.accent_text(
+            sx,
             1,
-            1,
-            "Disabled",
+            "(disabled)",
             Accent {
                 bold: false,
                 flash: false,
                 ..Accent::default()
             },
         );
-        assert_eq!(c.cells[61].fg, expected.cells[61].fg);
-        assert!(!c.cells[61].bold);
+        assert_eq!(c.cells[60 + sx].fg, expected.cells[60 + sx].fg);
+        assert!(!c.cells[60 + sx].bold);
         assert!(c.cells.iter().all(|c| c.glyph != "━"));
         assert_eq!(display_name("abcdefghijklmnopqrstuvwx"), "abcdefghijklmno…");
         assert_eq!(short_name("codex:abcdefghijklmnopqrstuvwx"), "abcdefghijk…");
@@ -735,7 +877,7 @@ mod tests {
             let mut c = Canvas::new(50, 4);
             Usage::account(&a).paint(&mut c, 1, 1, 20, 2);
             let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
-            assert!(text.contains(expected));
+            assert!(text.contains(&format!("({})", expected.to_lowercase())));
             assert!(!text.contains("Loading"));
         }
     }
@@ -750,7 +892,7 @@ mod tests {
         let mut c = Canvas::new(40, 4);
         Usage::account(&a).paint(&mut c, 1, 1, 20, 2);
         let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
-        assert!(text.contains("Usage unavailable"));
+        assert!(text.contains("(usage unavailable)"));
         assert!(!text.contains("Ready"));
     }
     #[test]
@@ -816,21 +958,109 @@ mod tests {
         assert_eq!(Usage::account(&a).status, "Usage unavailable");
     }
     #[test]
-    fn fit_is_all_or_nothing_and_shares_columns() {
+    fn provider_symbols_are_one_cell_wide_and_distinct() {
+        let all = ["codex", "claude", "gemini"].map(provider_symbol);
+        assert_eq!(all, ["⬢", "✻", "✦"]);
+        for symbol in all {
+            assert_eq!(UnicodeWidthStr::width(symbol), 1, "{symbol}");
+        }
+        assert_eq!(provider_symbol("unknown"), "⬢");
+    }
+    #[test]
+    fn mixed_providers_share_symbol_name_and_bar_columns_at_every_width() {
+        let mk = |v: serde_json::Value| -> Account { serde_json::from_value(v).unwrap() };
+        let both = json!({"state":"fresh","observed_at":100,"short":{"duration_minutes":300,"used_percent":35},"weekly":{"duration_minutes":10080,"used_percent":60}});
+        let wk = json!({"state":"fresh","observed_at":100,"short":null,"weekly":{"duration_minutes":10080,"used_percent":8}});
+        let accounts = vec![
+            mk(
+                json!({"id":"claude:z","provider":"claude","selectable":true,"enabled":true,"usage_fresh":true,"usage":both}),
+            ),
+            mk(
+                json!({"id":"codex:a-rather-long-name","selectable":true,"enabled":true,"usage_fresh":true,"usage":wk}),
+            ),
+            mk(
+                json!({"id":"gemini:g","provider":"gemini","selectable":true,"enabled":true,"usage_fresh":false,"usage_state":"unsupported","usage":{"state":"unsupported","observed_at":null}}),
+            ),
+            mk(
+                json!({"id":"codex:mid","selectable":true,"enabled":true,"usage_fresh":true,"usage":both}),
+            ),
+        ];
+        for width in [100, 60, 40, 30] {
+            let l = AccountsLayout::fit(&accounts, width);
+            let mut c = Canvas::new(width, 20);
+            l.paint(&mut c, &accounts, 1, 20, 0, None, false, false, None);
+            let cell = |x: usize, y: usize| c.cells[y * width + x].glyph.clone();
+            let mut y = 1;
+            for a in &accounts {
+                let u = Usage::account(a);
+                assert_eq!(cell(l.symbol_x, y), provider_symbol(a.provider()));
+                assert_eq!(
+                    cell(l.name_x, y),
+                    account_title(a).chars().next().unwrap().to_string()
+                );
+                assert!(
+                    l.name_x + l.name_width < l.bars,
+                    "names end before the bars"
+                );
+                if !u.status_only() {
+                    for row in y..y + u.height() {
+                        // Every bar is exactly bar_width cells of bar glyphs ...
+                        for x in l.bars..l.bars + l.bar_width {
+                            assert!(
+                                cell(x, row)
+                                    .chars()
+                                    .all(|g| ('\u{2500}'..='\u{257f}').contains(&g)),
+                                "{width} {a:?} {x},{row}: {:?}",
+                                cell(x, row)
+                            );
+                        }
+                        // ... followed by one space and a right-aligned value column.
+                        assert_eq!(cell(l.bars + l.bar_width, row), " ");
+                        assert_eq!(cell(l.bars + l.bar_width + 1 + l.digits, row), "%");
+                    }
+                } else {
+                    // Status text centres inside the same bar span.
+                    let sx = u.status_x(l.bars, l.bar_width);
+                    assert_eq!(cell(sx, y), "(");
+                    if UnicodeWidthStr::width(u.status_label().as_str()) <= l.bar_width {
+                        assert!(sx >= l.bars && sx < l.bars + l.bar_width);
+                    }
+                }
+                y += u.height() + 1;
+            }
+        }
+    }
+    #[test]
+    fn layout_always_fits_by_shrinking_bars_and_scrolls_instead_of_dropping_to_a_menu() {
         let accounts = vec![account(), account()];
-        assert!(AccountsLayout::fit(&accounts, 80, 4).is_none());
-        let l = AccountsLayout::fit(&accounts, 80, 5).unwrap();
+        let l = AccountsLayout::fit(&accounts, 80);
         assert_eq!(l.height, 5);
         assert_eq!(l.digits, 3);
-        assert!(AccountsLayout::fit(&accounts, 30, 40).is_none());
-        assert!(l.bars + l.bar_width + 10 < 80);
         assert_eq!(l.bar_width, 24);
-        let wide = AccountsLayout::fit(&accounts, 140, 5).unwrap();
+        let wide = AccountsLayout::fit(&accounts, 140);
         assert_eq!(wide.bar_width, l.bar_width);
         assert_eq!(wide.left, l.left + 30);
-        let narrow = AccountsLayout::fit(&accounts, 40, 5).unwrap();
-        assert!(narrow.bar_width < wide.bar_width);
+        let narrow = AccountsLayout::fit(&accounts, 40);
+        assert!(narrow.bar_width < wide.bar_width && narrow.bar_width >= MIN_BAR);
         assert!(narrow.left >= 1);
+        assert!(narrow.bars + narrow.bar_width + 6 <= 40, "{narrow:?}");
+        let tiny = AccountsLayout::fit(&accounts, 24);
+        assert_eq!(tiny.bar_width, MIN_BAR);
+        // Scrolling keeps the selected account inside the window.
+        let many: Vec<_> = (0..10).map(|_| account()).collect();
+        assert_eq!(AccountsLayout::scroll_for(&many, 0, Some(0), 8), 0);
+        let first = AccountsLayout::scroll_for(&many, 0, Some(9), 8);
+        assert!(first > 0);
+        let rows: usize = many[first..=9]
+            .iter()
+            .map(|a| Usage::account(a).height() + 1)
+            .sum();
+        assert!(rows - 1 <= 8);
+        assert_eq!(
+            AccountsLayout::scroll_for(&many, first, Some(first + 1), 8),
+            first
+        );
+        assert_eq!(AccountsLayout::scroll_for(&many, first, Some(0), 8), 0);
     }
 }
 
@@ -927,6 +1157,68 @@ mod picker_tests {
             json!({"state":"missing","observed_at":null,"short":null,"weekly":null}),
         );
         assert_eq!(Usage::account(&none).status, "Usage unavailable");
+    }
+    #[test]
+    fn status_text_is_lowercase_parenthesised_centred_on_the_bar_span() {
+        let mut a = account(Some(80.), 80.);
+        a.details.insert("enabled".into(), json!(false));
+        let u = Usage::account(&a);
+        assert_eq!(u.status_label(), "(disabled)");
+        // 10 wide in a 24-cell bar span starting at x=5: (24-10)/2 = 7 -> x=12.
+        assert_eq!(u.status_x(5, 24), 12);
+        // Odd slack rounds toward the left edge.
+        assert_eq!(u.status_x(0, 13), 1);
+        // Wider than the span: start at the bar's left edge and grow right.
+        assert_eq!(u.status_x(5, 8), 5);
+        assert_eq!(u.width(8, 2), 10);
+        assert_eq!(u.width(24, 2), 24);
+        let mut c = Canvas::new(60, 2);
+        u.paint(&mut c, 5, 0, 24, 2);
+        let row: String = (0..60).map(|x| c.cells[x].glyph.as_str()).collect();
+        assert_eq!(row.find("(disabled)"), Some(12));
+        // Selector: exactly one space, then the triangle, right of the text.
+        let mut c = Canvas::new(60, 2);
+        u.paint_focused(&mut c, 5, 0, 24, 2);
+        let row: String = (0..60).map(|x| c.cells[x].glyph.as_str()).collect();
+        assert!(row.contains("(disabled) ◀"), "{row:?}");
+        assert!(!row.contains("(disabled)  ◀"));
+        // Overflow: the selector follows the grown text.
+        let mut c = Canvas::new(60, 2);
+        u.paint_focused(&mut c, 5, 0, 8, 2);
+        let row: String = (0..60).map(|x| c.cells[x].glyph.as_str()).collect();
+        assert_eq!(row.find("(disabled) ◀"), Some(5));
+    }
+    #[test]
+    fn bars_show_compact_age_from_sixty_seconds_and_never_dim() {
+        let a = claude_account(json!({"state":"stale","observed_at":100,
+            "short":{"duration_minutes":300,"used_percent":40},"weekly":null}));
+        for (now, age) in [
+            (159, None),
+            (160, Some("1m ago")),
+            (100 + 42 * 60, Some("42m ago")),
+            (100 + 2 * 3600, Some("2h ago")),
+            (100 + 3 * 86400, Some("3d ago")),
+        ] {
+            let u = Usage::account_at(&a, now);
+            assert_eq!(u.age.as_deref(), age);
+            let mut c = Canvas::new(60, 3);
+            u.paint(&mut c, 0, 0, 12, 2);
+            let row: String = (0..60).map(|x| c.cells[x].glyph.as_str()).collect();
+            assert!(!row.contains("stale"));
+            assert_eq!(row.contains("ago"), age.is_some());
+            if let Some(age) = age {
+                assert!(row.contains(&format!("({age})")));
+            }
+        }
+    }
+    #[test]
+    fn zero_null_negative_and_future_observations_have_no_age() {
+        for bogus in [json!(0), json!(null), json!(-1), json!(10_000)] {
+            let a = claude_account(json!({"state":"fresh","observed_at":bogus,
+                "short":{"duration_minutes":300,"used_percent":40},"weekly":null}));
+            assert_eq!(Usage::account_at(&a, 5000).age, None);
+            assert_eq!(observed_at(&a, 5000), None);
+        }
     }
     #[test]
     fn stale_and_partial_claude_usage_keep_known_windows_and_mark_the_rest() {

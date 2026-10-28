@@ -459,6 +459,7 @@ impl App {
                         let column = 2 + name_width + 1 + preview_width + tag_width
                             - UnicodeWidthStr::width(usage.as_str());
                         Row::gate(crate::usage::account_title(a), a.selectable)
+                            .with_symbol(crate::usage::provider_symbol(a.provider()))
                             .with_column_preview(usage, column, false)
                             .preview_gap(1)
                             .preview_color(crate::widgets::SECONDARY)
@@ -993,7 +994,7 @@ impl App {
     }
     pub fn refresh_live(&mut self) -> Vec<Effect> {
         let intents = if self.page == Page::Summary && self.resume.is_none() {
-            self.manager.read_sessions()
+            self.manager.poll_sessions(true)
         } else {
             self.manager.refresh_live()
         };
@@ -1014,7 +1015,8 @@ impl App {
             && self.launch_supported()
             && (!self.pending || self.resume.is_some())
             && self.request.is_none()
-            && (self.resume.is_some() || self.manager.sessions_known)
+            && (self.resume.is_some()
+                || (self.manager.sessions_known && !self.manager.cached_snapshot))
     }
     fn begin_start(&mut self) -> Vec<Effect> {
         if !self.start_ready() {
@@ -1948,7 +1950,7 @@ mod tests {
         assert!(
             lines(&c)
                 .iter()
-                .any(|l| l.contains("○ b") && l.contains("Login required"))
+                .any(|l| l.contains("⬢ b") && l.contains("Login required"))
         );
         assert_eq!(
             (
@@ -2303,7 +2305,6 @@ mod tests {
         );
         app.manager
             .paint(&mut crate::render::Canvas::new(100, 40), 39);
-        assert!(app.manager.inline);
         let last = app.manager.rows().len() - 1;
         assert_eq!(last, 5);
         app.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
@@ -2562,7 +2563,16 @@ mod tests {
                 assert!(!row.account);
                 let mut canvas = Canvas::new(80, 4);
                 row.paint(&mut canvas, 0, 0, index == 0, false);
-                assert_eq!(canvas.cells[0].glyph, if index == 0 { "●" } else { "○" });
+                assert_eq!(
+                    canvas.cells[0].glyph,
+                    if row.symbol.is_some() {
+                        "⬢"
+                    } else if index == 0 {
+                        "●"
+                    } else {
+                        "○"
+                    }
+                );
                 assert_eq!(
                     canvas.cells[2].fg,
                     if index == 0 { [238; 3] } else { [188; 3] }

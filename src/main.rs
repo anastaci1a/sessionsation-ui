@@ -225,8 +225,8 @@ impl Effects {
                     // one-shot submitter survives closure of this viewer.
                     // Only the small durable click record precedes the task;
                     // cold executable spawn must not block input/rendering.
-                    let accepted = journal.accept(&request);
                     tokio::task::spawn_blocking(move || {
+                        let accepted = journal.accept(&request);
                         let result = match accepted {
                             Ok(()) => {
                                 let result = std::env::current_exe()
@@ -326,8 +326,19 @@ fn now() -> i64 {
         .unwrap_or_default()
         .as_secs() as i64
 }
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
+/// Effect tasks (backend JSON parsing, journal fsyncs, child spawns) run on worker
+/// threads. The thread that reads input and redraws only drives the select loop, so
+/// slow or blocking work in a task can never stall key handling or rendering.
+fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+}
+fn main() -> Result<()> {
+    runtime()?.block_on(run())
+}
+async fn run() -> Result<()> {
     let args = Args::parse();
     match args.command.unwrap_or(Command::Popup) {
         Command::Demo {
@@ -409,15 +420,13 @@ fn login_run() -> Result<()> {
         .args(&argv[1..])
         .env_remove(LOGIN_ENV)
         .status();
-    match status {
-        Ok(s) if s.success() => println!("\nLogin finished. Press Enter to close this pane."),
-        Ok(_) => println!("\nLogin did not complete. Press Enter to close this pane."),
-        Err(e) => println!(
-            "\nCould not start the login command ({}). Press Enter to close this pane.",
-            e.kind()
-        ),
+    let (message, wait) = login_outcome(&status);
+    println!("\n{message}");
+    if wait {
+        let _ = std::io::stdin().read_line(&mut String::new());
+    } else {
+        std::thread::sleep(std::time::Duration::from_secs(2));
     }
-    let _ = std::io::stdin().read_line(&mut String::new());
     Ok(())
 }
 async fn popup(preferences: Option<PathBuf>) -> Result<()> {
@@ -499,6 +508,11 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
             previous = Some(canvas);
         }
     });
+    let cache_path = pref.with_file_name("state-cache.json");
+    let cache_root = client.root.clone();
+    if let Some(sessions) = sessionsation_ui::state_cache::load(&cache_path, &cache_root) {
+        app.manager.show_cached(&sessions);
+    }
     let mut effects = Effects {
         client: client.clone(),
         sender: tx.clone(),
@@ -552,7 +566,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
         tokio::select! {
          _=term_signal.recv()=>{app.exit=true;},_ = hup_signal.recv()=>{app.exit=true;},
          _=frame.tick()=>{next=app.flush_navigation();app.dirty=true;},
-         _=refresh.tick(),if !inventory_pending=>{inventory_pending=true;effects.inventory();let intents=app.manager.refresh();next=app.management(intents);},
+         _=refresh.tick(),if !inventory_pending=>{inventory_pending=true;effects.inventory();let intents=app.manager.refresh_poll();next=app.management(intents);},
          _=session_refresh.tick()=>{next=app.refresh_live();},
          _=receipt.tick(),if app.request.is_some()&&!app.success&&receipt_pending.as_deref()!=app.request.as_ref().and_then(|r|r["request_id"].as_str())=>{receipt_pending=app.request.as_ref().and_then(|r|r["request_id"].as_str()).map(str::to_owned);effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
          message=rx.recv()=>match message.context("Input channel closed")? {
@@ -560,11 +574,11 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
          Message::Input(Event::Key(k))=>{if prefixes.matches(k){app.exit=true;}else{next=app.key(k);}},
           Message::Input(Event::Paste(s))=>{next=app.paste(&s);},
           Message::Input(Event::Resize(w,h))=>{dimensions=(w as usize,h as usize);app.dirty=true;},
-          Message::Input(Event::FocusGained)=>{app.dirty=true;},Message::Input(_)=>{},
+          Message::Input(Event::FocusGained)=>{app.manager.visible=true;let intents=app.manager.read_sessions();next=app.management(intents);app.dirty=true;},Message::Input(Event::FocusLost)=>{app.manager.visible=false;},Message::Input(_)=>{},
           Message::InputError(e)=>{app.error=e;app.exit=true;},
           Message::Inventory(result)=>{inventory_pending=false;match result{Ok((accounts,spaces,capabilities))=>{app.launch_supported=capabilities["launch"]["version"]==1;let changed=app.manager.capabilities!=capabilities;app.manager.capabilities=capabilities;next=app.inventory(accounts,spaces,now());if changed{let intents=app.manager.refresh();next.extend(app.management(intents));}
           if !app.launch_supported{app.error="Backend launch API is not installed; creation disabled".into();}},Err(e)=>{app.manager.note=e.clone();app.error=e;app.draft.name_valid=false;}}app.dirty=true;},
-          Message::Managed(token,result)=>{let intents=app.manager.response(token,result);next=app.management(intents);},
+          Message::Managed(token,result)=>{let intents=app.manager.response(token,result);next=app.management(intents);if let Some(sessions)=app.manager.cache_out.take(){let (path,root)=(cache_path.clone(),cache_root.clone());tokio::task::spawn_blocking(move||{let _=sessionsation_ui::state_cache::save(&path,&root,&sessions);});}},
           Message::LoginLaunched(result)=>{let intents=app.manager.login_launched(result);next=app.management(intents);app.dirty=true;},
           Message::SessionFocused(result)=>{match result{Ok(())=>app.exit=true,Err(e)=>{let intents=app.manager.failure(e);next=app.management(intents);}}app.dirty=true;},
           Message::Theme(result)=>{match result{Ok((palette,note))=>{app.manager.palette=palette;if let Some(note)=note{app.manager.note=note;}},Err(e)=>app.manager.note=e}app.dirty=true;},
@@ -624,5 +638,96 @@ fn benchmark() {
             "{}",
             json!({"width":w,"height":h,"samples":samples.len(),"p50_ms":samples[samples.len()/2],"p95_ms":samples[samples.len()*95/100],"max_ms":samples.last(),"mean_bytes":bytes/samples.len()})
         );
+    }
+}
+
+/// What the login pane says for the child's result, and whether it waits for
+/// Enter. A successful login closes by itself; a failure stays readable.
+fn login_outcome(status: &std::io::Result<std::process::ExitStatus>) -> (String, bool) {
+    match status {
+        Ok(s) if s.success() => ("Login complete. This pane closes automatically.".into(), false),
+        Ok(_) => (
+            "Login did not complete. Press Enter to close this pane, then choose Login on the account page to retry.".into(),
+            true,
+        ),
+        Err(e) => (
+            format!(
+                "Could not start the login command ({}). Press Enter to close this pane.",
+                e.kind()
+            ),
+            true,
+        ),
+    }
+}
+
+#[cfg(test)]
+mod responsiveness_tests {
+    use std::time::{Duration, Instant};
+    /// The input loop must keep ticking while a slow backend call (2 s) and a
+    /// blocking synchronous task (journal fsync, large JSON parse) are in flight.
+    #[test]
+    fn input_loop_stays_responsive_during_slow_backend_and_blocking_work() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("slow-backend");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\nsleep 2\nprintf '{\"api_version\":1,\"ok\":true,\"result\":{}}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let client = sessionsation_ui::client::Client {
+            binary: bin,
+            root: dir.path().into(),
+            herdr: dir.path().join("herdr"),
+            socket: dir.path().join("sock"),
+            session: "s".into(),
+        };
+        let rt = super::runtime().unwrap();
+        let worst = rt.block_on(async move {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Instant>(64);
+            let api = tokio::spawn(async move { client.api(&["state"], None).await.is_ok() });
+            let blocker = tokio::spawn(async { std::thread::sleep(Duration::from_millis(600)) });
+            // Stand-in for the input thread: a key event every 20 ms.
+            tokio::task::spawn_blocking(move || {
+                for _ in 0..90 {
+                    std::thread::sleep(Duration::from_millis(20));
+                    if tx.blocking_send(Instant::now()).is_err() {
+                        break;
+                    }
+                }
+            });
+            let mut worst = Duration::ZERO;
+            let mut selected = 0;
+            while let Some(sent) = rx.recv().await {
+                selected += 1; // Down arrow moved the selection
+                worst = worst.max(sent.elapsed());
+                if selected == 90 {
+                    break;
+                }
+            }
+            assert!(!api.is_finished() || api.await.unwrap());
+            blocker.await.unwrap();
+            worst
+        });
+        assert!(worst < Duration::from_millis(100), "key latency {worst:?}");
+    }
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::login_outcome;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    #[test]
+    fn success_closes_itself_and_failure_waits_for_enter() {
+        let (m, wait) = login_outcome(&Ok(ExitStatus::from_raw(0)));
+        assert!(m.starts_with("Login complete") && !wait);
+        let (m, wait) = login_outcome(&Ok(ExitStatus::from_raw(1 << 8)));
+        assert!(m.starts_with("Login did not complete") && wait);
+        let err = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let (m, wait) = login_outcome(&Err(err));
+        assert!(m.contains("not found") && wait);
     }
 }

@@ -156,6 +156,8 @@ pub struct Row {
     pub preview_accent: bool,
     pub preview_fg: [u8; 3],
     pub account: bool,
+    /// Provider symbol drawn in place of the selection bullet.
+    pub symbol: Option<&'static str>,
     pub preview_gap: usize,
     pub separator: bool,
     left_aligned: bool,
@@ -189,6 +191,7 @@ impl Row {
             preview_accent: false,
             preview_fg: SECONDARY,
             account: false,
+            symbol: None,
             preview_gap: 2,
             separator: false,
             left_aligned: false,
@@ -219,6 +222,10 @@ impl Row {
             .status
             .as_ref()
             .map_or(0, |(s, _)| 1 + UnicodeWidthStr::width(s.as_str()))
+    }
+    pub fn with_symbol(mut self, symbol: &'static str) -> Self {
+        self.symbol = Some(symbol);
+        self
     }
     pub fn account(mut self) -> Self {
         self.account = true;
@@ -288,6 +295,7 @@ impl Row {
     }
     pub fn separator() -> Self {
         Self {
+            symbol: None,
             label: String::new(),
             enabled: false,
             status: None,
@@ -405,7 +413,9 @@ impl Row {
         canvas.accent_text(
             x,
             y,
-            if self.account {
+            if let Some(symbol) = self.symbol {
+                symbol
+            } else if self.account {
                 if selected && !back { "▶" } else { " " }
             } else if selected {
                 "●"

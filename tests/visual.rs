@@ -7,6 +7,7 @@ use sessionsation_ui::{
 
 #[test]
 fn fixed_seed_time_and_geometry_match_cell_goldens() {
+    sessionsation_ui::usage::set_clock(100);
     for (width, height, time) in [(80, 24, 0), (80, 24, 4060), (80, 24, 4700), (40, 16, 8000)] {
         let mut field = Field::new(width, height, 1967);
         let mut options = Options::default();
@@ -57,6 +58,7 @@ fn fixed_seed_time_and_geometry_match_cell_goldens() {
 
 #[test]
 fn management_geometry_usage_markers_and_picker_columns() {
+    sessionsation_ui::usage::set_clock(100);
     use sessionsation_ui::{
         client::Account,
         dialog::Dialog,
@@ -81,6 +83,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("directory-loading", 80, 26),
         ("directory-scroll", 80, 26),
         ("compact", 60, 16),
+        ("mixed", 100, 30),
         ("actions", 80, 24),
         ("picker", 60, 20),
         ("providers", 60, 16),
@@ -171,7 +174,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
                 let mut all = accounts.clone();
                 all.push(gemini_account());
                 m.inventory(all);
-                m.page = Page::Accounts;
+                m.page = Page::Home;
                 m.options.selected = 6;
             }
             "login-gemini-wait" => {
@@ -179,7 +182,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
                     "Complete provider login",
                     vec![
                         "Complete the Gemini CLI login in the opened pane…".into(),
-                        "This dialog closes when sign-in succeeds. Cancel only stops waiting; it does not cancel the login.".into(),
+                        "This popup closes once the login pane opens; the pane reports the result. Cancel only stops waiting; it does not cancel the login.".into(),
                     ],
                     &["Cancel"],
                 ))
@@ -192,8 +195,21 @@ fn management_geometry_usage_markers_and_picker_columns() {
                 ];
             }
             "compact" => {
-                m.page = Page::Accounts;
-                m.options.selected = 2;
+                m.page = Page::Home;
+                m.options.selected = 7;
+            }
+            "mixed" => {
+                let mk = |v: serde_json::Value| -> Account { serde_json::from_value(v).unwrap() };
+                let both = serde_json::json!({"state":"fresh","observed_at":100,"short":{"duration_minutes":300,"used_percent":35},"weekly":{"duration_minutes":10080,"used_percent":60}});
+                let wk = serde_json::json!({"state":"fresh","observed_at":100,"short":null,"weekly":{"duration_minutes":10080,"used_percent":8}});
+                m.inventory(vec![
+                    mk(serde_json::json!({"id":"claude:z","provider":"claude","selectable":true,"enabled":true,"usage_fresh":true,"usage":both})),
+                    mk(serde_json::json!({"id":"codex:a-rather-long-name","selectable":true,"enabled":true,"usage_fresh":true,"usage":wk})),
+                    gemini_account(),
+                    mk(serde_json::json!({"id":"codex:mid","selectable":true,"enabled":true,"usage_fresh":true,"usage":both})),
+                    mk(serde_json::json!({"id":"claude:a-rather-long-name","provider":"claude","selectable":true,"enabled":true,"usage_fresh":true,"usage":wk})),
+                ]);
+                m.options.selected = 7;
             }
             "actions" => m.page = Page::Account("codex:fixture0".into()),
             "providers" => {
@@ -203,7 +219,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
                     serde_json::from_value(serde_json::json!({"id":"claude:claude-new","provider":"claude","selectable":true,"enabled":true,"usage_fresh":false,"usage":{"state":"missing","source":"claude-code-statusline","observed_at":null,"short":null,"weekly":null}})).unwrap(),
                 ]);
                 m.inventory(all);
-                m.page = Page::Accounts;
+                m.page = Page::Home;
                 m.options.selected = 6;
             }
             "add-to-herdr" => {
@@ -234,7 +250,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
                     "Complete provider login",
                     vec![
                         "Complete the Claude Code login in the opened pane…".into(),
-                        "This dialog closes when sign-in succeeds. Cancel only stops waiting; it does not cancel the login.".into(),
+                        "This popup closes once the login pane opens; the pane reports the result. Cancel only stops waiting; it does not cancel the login.".into(),
                     ],
                     &["Cancel"],
                 ))

@@ -215,6 +215,22 @@ impl Dialog {
             (self.selected < self.fields.len()).then_some(self.selected)
         }
     }
+    /// Make Cancel its own group: a bullet separator row directly above it.
+    pub fn separate_cancel(&mut self) {
+        if let Some(i) = self.buttons.iter().position(|b| b.label == "Cancel")
+            && i > 0
+            && !self.buttons[i - 1].separator
+        {
+            self.buttons.insert(i, Row::separator());
+        }
+    }
+    fn selectable(&self, index: usize) -> bool {
+        index < self.field_slots()
+            || self
+                .buttons
+                .get(index - self.field_slots())
+                .is_none_or(|b| !b.separator)
+    }
     fn field_slots(&self) -> usize {
         if self.fields.len() == 1 {
             0
@@ -245,6 +261,7 @@ impl Dialog {
         }
         let slots = self.field_slots();
         let count = slots + self.buttons.len();
+        let mask: Vec<bool> = (0..count).map(|i| self.selectable(i)).collect();
         self.selected = self.selected.min(count.saturating_sub(1));
         match key.code {
             KeyCode::Esc => return Event::Dismiss,
@@ -264,19 +281,21 @@ impl Dialog {
                     count,
                     key.code == KeyCode::Up,
                     wrap,
-                    |_| true,
+                    |i| mask.get(i).copied().unwrap_or(true),
                 );
             }
             KeyCode::Home | KeyCode::End if self.editor().is_none() => {
-                self.selected = self.navigation.boundary(
-                    self.selected,
-                    count,
-                    key.code == KeyCode::End,
-                    |_| true,
-                );
+                self.selected =
+                    self.navigation
+                        .boundary(self.selected, count, key.code == KeyCode::End, |i| {
+                            mask.get(i).copied().unwrap_or(true)
+                        });
             }
             KeyCode::Tab if count > 0 => {
                 self.selected = (self.selected + 1) % count;
+                while !self.selectable(self.selected) {
+                    self.selected = (self.selected + 1) % count;
+                }
             }
             KeyCode::Enter if self.selected >= slots => {
                 let button = self.selected - slots;
@@ -599,6 +618,19 @@ mod tests {
             d.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
             Event::Dismiss
         ));
+    }
+    #[test]
+    fn title_uses_the_border_style_and_is_never_bold() {
+        let mut d = Dialog::new("Session details", vec!["Body".into()], &["Close"]);
+        let mut canvas = Canvas::new(60, 24);
+        d.paint(&mut canvas, &Palette::default());
+        let corner = canvas.cells.iter().position(|c| c.glyph == "┌").unwrap();
+        let border = canvas.cells[corner].clone();
+        for i in 0.."Session details".chars().count() {
+            let cell = &canvas.cells[corner + 1 + i];
+            assert_ne!(cell.glyph, "─");
+            assert_eq!((cell.fg, cell.bg, cell.bold), (border.fg, border.bg, false));
+        }
     }
     #[test]
     fn title_touches_herdr_corner_without_padding_and_keeps_right_corner() {

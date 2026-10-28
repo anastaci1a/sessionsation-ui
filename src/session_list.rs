@@ -79,11 +79,20 @@ fn add_reason(s: &Value) -> String {
 }
 /// Account tag for a session: the UI-attached display name, else the short name.
 fn account_tag(s: &Value) -> String {
-    s["account_label"]
+    let provider = s["provider"]
+        .as_str()
+        .or_else(|| {
+            s["account_id"]
+                .as_str()
+                .and_then(|id| id.split_once(':').map(|(p, _)| p))
+        })
+        .unwrap_or("codex");
+    let name = s["account_label"]
         .as_str()
         .filter(|l| !l.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| short_name(s["account_id"].as_str().unwrap_or("?")))
+        .unwrap_or_else(|| short_name(s["account_id"].as_str().unwrap_or("?")));
+    format!("{} {name}", crate::usage::provider_symbol(provider))
 }
 pub fn is_gemini(s: &Value) -> bool {
     s["provider"] == "gemini"
@@ -307,10 +316,14 @@ pub fn spinner(now_ms: u64) -> &'static str {
 pub fn gemini_spinner(now_ms: u64) -> &'static str {
     ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][(now_ms / 80 % 10) as usize]
 }
-/// Claude Code's own busy glyphs, captured from 2.1.312: a ping-pong cycle of
-/// single-cell frames, one frame every 120 ms, always at normal weight.
+/// Claude Code 2.1.312 busy spinner: six single-cell frames on a cosine ease over a
+/// 2000 ms cycle (dwelling on the first and last), elapsed time quantized down to
+/// 100 ms, always at normal weight.
 pub fn claude_spinner(now_ms: u64) -> &'static str {
-    ["·", "✢", "*", "✶", "✻", "✽", "✻", "✶", "*", "✢"][(now_ms / 120 % 10) as usize]
+    const FRAMES: [&str; 6] = ["·", "✢", "*", "✶", "✻", "✽"];
+    let t = (now_ms / 100 * 100 % 2000) as f64;
+    let phase = (1. - (std::f64::consts::TAU * t / 2000.).cos()) / 2. * 5.;
+    FRAMES[(phase.round() as usize).min(5)]
 }
 fn busy(session: &Value) -> bool {
     session["availability"] == "running" && session["activity"] == "busy"
@@ -774,19 +787,15 @@ mod tests {
         );
     }
     #[test]
-    fn claude_spinner_ping_pongs_at_120ms_per_frame() {
-        let frames: Vec<_> = (0..10).map(|i| claude_spinner(i * 120)).collect();
-        assert_eq!(frames, ["·", "✢", "*", "✶", "✻", "✽", "✻", "✶", "*", "✢"]);
-        assert_eq!(claude_spinner(119), "·");
-        assert_eq!(claude_spinner(120), "✢");
-        assert_eq!(claude_spinner(1200), "·");
-        // Slow ticks advance by elapsed time, skipping frames.
-        assert_eq!(claude_spinner(1200 + 5 * 120 + 7), "✽");
-        assert!(
-            frames
-                .iter()
-                .all(|f| unicode_width::UnicodeWidthStr::width(*f) == 1)
-        );
+    fn claude_spinner_follows_cosine_ease_with_100ms_quantization() {
+        let frames = ["·", "✢", "*", "✶", "✻", "✽"];
+        let want = [0, 0, 0, 1, 2, 2, 3, 4, 5, 5, 5, 5, 5, 4, 3, 3, 2, 1, 0, 0];
+        let got: Vec<_> = (0..20).map(|i| claude_spinner(i * 100)).collect();
+        assert_eq!(got, want.map(|i| frames[i]));
+        assert_eq!(claude_spinner(99), "·");
+        assert_eq!(claude_spinner(899), claude_spinner(800));
+        assert_eq!(claude_spinner(2000 + 800), claude_spinner(800));
+        assert_eq!(claude_spinner(1_000_000_000_050), "·");
     }
     #[test]
     fn reference_spinner_is_persistent_but_disappears_on_idle_exit_or_unknown() {
@@ -1089,8 +1098,8 @@ mod tests {
                 UnicodeWidthStr::width(&lines[0][..lines[0].find('[').unwrap()]),
                 UnicodeWidthStr::width(&lines[1][..lines[1].find('*').unwrap()])
             );
-            assert!(lines[0].contains("[a]"));
-            assert!(!lines[1].contains("[personal]"));
+            assert!(lines[0].contains("[⬢ a]"));
+            assert!(!lines[1].contains("[⬢ personal]"));
             let marker = c.cells[5 * width..6 * width]
                 .iter()
                 .find(|c| c.glyph == "*")

@@ -12,6 +12,7 @@ pub mod dialog;
 pub mod host_theme;
 pub mod management;
 pub mod popup;
+pub mod state_cache;
 pub mod status;
 pub mod usage;
 pub mod widgets;

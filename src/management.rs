@@ -2,7 +2,7 @@
 use crate::{
     client::Account,
     dialog::{self, Dialog, Field, Palette, Rule},
-    render::{Canvas, Cell},
+    render::Canvas,
     usage::{AccountsLayout, Usage, account_title},
     widgets::{NAME_MAX_CHARS, Options, Row, hint_lines},
 };
@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Page {
     Home,
-    Accounts,
     Account(String),
     Sessions,
     Archives,
@@ -112,12 +111,25 @@ pub struct Manager {
     pub dialog: Option<Dialog>,
     pub palette: Palette,
     pub note: String,
-    pub inline: bool,
+    /// First account drawn on the (scrollable) home list.
+    pub account_scroll: usize,
+    /// Order before an unsaved move; present only while move mode is active.
+    moving: Option<Vec<Account>>,
     pub usage_focus: bool,
     pub inventory_known: bool,
     pub sessions_known: bool,
+    /// True while the session list comes from the on-disk cache or a stale snapshot:
+    /// rows are shown but no session action is offered until fresh state arrives.
+    pub cached_snapshot: bool,
+    /// A finished full state result to persist (taken by the event loop).
+    pub cache_out: Option<Value>,
+    /// False while the popup is not visible: background polling pauses.
+    pub visible: bool,
+    ticks_since_state: u32,
+    ticks_since_full: u32,
+    cached_tokens: std::collections::BTreeSet<u64>,
+    last_full_token: u64,
     form: Form,
-    provider_filter: Option<String>,
     sequence: u64,
     pending: BTreeMap<u64, Purpose>,
     readiness: BTreeMap<String, Value>,
@@ -164,12 +176,19 @@ impl Default for Manager {
             dialog: None,
             palette: Palette::default(),
             note: String::new(),
-            inline: false,
+            account_scroll: 0,
+            moving: None,
             usage_focus: false,
             inventory_known: false,
             sessions_known: false,
+            cached_snapshot: false,
+            cache_out: None,
+            visible: true,
+            ticks_since_state: 0,
+            ticks_since_full: 0,
+            cached_tokens: Default::default(),
+            last_full_token: 0,
             form: Form::None,
-            provider_filter: None,
             sequence: 0,
             pending: BTreeMap::new(),
             readiness: BTreeMap::new(),
@@ -236,7 +255,7 @@ fn relative(now: i64, then: Option<i64>) -> String {
 }
 /// Usage details body. Missing windows and unknown state are stated, never 0%.
 fn usage_lines(a: &Account, now: i64) -> Vec<String> {
-    let usage = Usage::account(a);
+    let usage = Usage::account_at(a, now);
     let mut body = vec![a.id.clone()];
     if let Some(name) = a
         .details
@@ -263,10 +282,9 @@ fn usage_lines(a: &Account, now: i64) -> Vec<String> {
     if let Some(semantics) = a.usage["semantics"].as_str() {
         body.push(format!("Semantics: {}", clean(semantics)));
     }
-    body.push(format!(
-        "Observed: {}",
-        relative(now, a.usage["observed_at"].as_i64())
-    ));
+    if let Some(then) = crate::usage::observed_at(a, now) {
+        body.push(format!("Observed: {}", relative(now, Some(then))));
+    }
     for (window, label) in [("short", "Short window"), ("weekly", "Weekly")] {
         let w = &a.usage[window];
         let used = w["used_percent"].as_f64().filter(|n| n.is_finite());
@@ -450,6 +468,20 @@ impl Manager {
                 .preview_gap(1)
         }
     }
+    fn logout_account_row(&self, key: &str, removed: bool) -> Row {
+        let provider = self.provider_of(key);
+        let supported = self.provider_cap(&provider, "account_logout");
+        let row = Row::gate("Log out", !removed && supported);
+        if supported {
+            row
+        } else {
+            let reason = self
+                .provider_reason(&provider, "account_logout")
+                .unwrap_or_else(|| "unsupported".into());
+            row.with_selected_preview(format!("({reason})"))
+                .preview_gap(1)
+        }
+    }
     fn rename_account_row(&self, key: &str) -> Row {
         let provider = self.provider_of(key);
         let row = Row::gate("Rename", self.provider_cap(&provider, "account_rename"));
@@ -494,56 +526,6 @@ impl Manager {
             })
             .collect()
     }
-    fn mixed_providers(&self) -> bool {
-        self.accounts
-            .iter()
-            .any(|a| a.provider() != self.accounts[0].provider())
-    }
-    /// Provider filter is meaningful only when more than one provider is listed.
-    fn filter_row(&self) -> bool {
-        self.mixed_providers()
-    }
-    fn active_filter(&self) -> Option<&str> {
-        self.provider_filter
-            .as_deref()
-            .filter(|_| self.filter_row())
-    }
-    /// Accounts shown on Manage Accounts, after the provider filter.
-    fn visible_accounts(&self) -> Vec<&Account> {
-        self.accounts
-            .iter()
-            .filter(|a| self.active_filter().is_none_or(|f| a.provider() == f))
-            .collect()
-    }
-    /// Row index of the first account on Manage Accounts.
-    fn account_base(&self) -> usize {
-        2 + usize::from(self.filter_row())
-    }
-    fn cycle_filter(&mut self) {
-        let mut providers: Vec<String> = vec![];
-        for a in &self.accounts {
-            if !providers.iter().any(|p| p == a.provider()) {
-                providers.push(a.provider().to_owned());
-            }
-        }
-        providers.sort();
-        self.provider_filter = match self.active_filter() {
-            None => providers.first().cloned(),
-            Some(current) => providers
-                .iter()
-                .position(|p| p == current)
-                .and_then(|i| providers.get(i + 1))
-                .cloned(),
-        };
-        self.options.selected = 1;
-    }
-    fn filter_label(&self) -> String {
-        format!(
-            "Provider: {}",
-            self.active_filter()
-                .map_or("All", crate::client::provider_label)
-        )
-    }
     fn delete_account_row(&self, key: &str) -> Row {
         let preview = self.deletion_previews.get(key);
         let reason = if !self.provider_cap(&self.provider_of(key), "account_deletion") {
@@ -585,22 +567,74 @@ impl Manager {
                 .accounts
                 .get(self.options.selected - 5)
                 .map(|a| a.id.clone()),
-            Page::Accounts if self.options.selected >= self.account_base() => self
-                .visible_accounts()
-                .get(self.options.selected - self.account_base())
-                .map(|a| a.id.clone()),
             Page::Account(id) => Some(id.clone()),
             _ => None,
         }
     }
     fn usage_selectable(&self) -> bool {
         self.page == Page::Home
-            && self.inline
             && self
                 .selected_account()
                 .as_deref()
                 .and_then(|id| self.account(id))
                 .is_some()
+    }
+    /// `m` is offered only with an account row focused and a backend that can save order.
+    fn can_start_move(&self) -> bool {
+        self.page == Page::Home
+            && self.dialog.is_none()
+            && self.moving.is_none()
+            && !self.options.back
+            && !self.usage_focus
+            && self.capabilities["account_reorder"] == true
+            && self.options.selected >= 5
+            && self.options.selected - 5 < self.accounts.len()
+    }
+    /// Keys while an account is picked up. Returns None when not in move mode.
+    fn move_key(&mut self, key: KeyEvent) -> Option<Vec<Intent>> {
+        let original = self.moving.as_ref()?;
+        let at = self.options.selected.saturating_sub(5);
+        match key.code {
+            KeyCode::Up | KeyCode::Down => {
+                let to = if key.code == KeyCode::Up {
+                    at.checked_sub(1)
+                } else {
+                    (at + 1 < self.accounts.len()).then_some(at + 1)
+                };
+                if let Some(to) = to {
+                    self.accounts.swap(at, to);
+                    self.options.selected = 5 + to;
+                }
+                Some(vec![])
+            }
+            KeyCode::Enter => {
+                let id = self.accounts[at].id.clone();
+                let unchanged = original
+                    .iter()
+                    .map(|a| &a.id)
+                    .eq(self.accounts.iter().map(|a| &a.id));
+                self.moving = None;
+                if unchanged {
+                    return Some(vec![]);
+                }
+                Some(self.mutate(strings(&[
+                    "account",
+                    "reorder",
+                    &id,
+                    "--position",
+                    &at.to_string(),
+                ])))
+            }
+            KeyCode::Esc => {
+                let id = self.accounts.get(at).map(|a| a.id.clone());
+                self.accounts = self.moving.take().unwrap_or_default();
+                if let Some(i) = id.and_then(|id| self.accounts.iter().position(|a| a.id == id)) {
+                    self.options.selected = 5 + i;
+                }
+                Some(vec![])
+            }
+            _ => Some(vec![]),
+        }
     }
     fn show_usage(&mut self, a: &Account) {
         let now = std::time::SystemTime::now()
@@ -660,6 +694,9 @@ impl Manager {
         self.refresh()
     }
     pub fn inventory(&mut self, accounts: Vec<Account>) {
+        if self.moving.is_some() {
+            return;
+        }
         let selected = self.selected_account();
         self.accounts = accounts;
         self.derive_session_fields();
@@ -667,28 +704,21 @@ impl Manager {
         self.validate_dialog_names();
         if let Some(id) = selected {
             if let Some(index) = self.accounts.iter().position(|a| a.id == id) {
-                match self.page {
-                    Page::Home if self.inline => self.options.selected = 5 + index,
-                    Page::Accounts => {
-                        self.options.selected = self
-                            .visible_accounts()
-                            .iter()
-                            .position(|a| a.id == id)
-                            .map_or(0, |i| self.account_base() + i)
-                    }
-                    _ => {}
+                if self.page == Page::Home {
+                    self.options.selected = 5 + index;
                 }
-            } else if matches!(self.page, Page::Home | Page::Accounts) {
+            } else if self.page == Page::Home {
                 self.options.selected = 0;
             }
         }
     }
     fn validate_dialog_names(&mut self) {
         let excluded = match &self.form {
-            // Names are unique across providers, so every existing name is taken.
-            Form::Add(_) => self
+            // Names are unique per provider; other providers may reuse them.
+            Form::Add(provider) => self
                 .accounts
                 .iter()
+                .filter(|a| a.provider() == provider)
                 .filter_map(|a| a.id.split_once(':').map(|(_, name)| name.to_owned()))
                 .collect(),
             Form::Rename(target) | Form::Placement(target, ..) => self
@@ -706,11 +736,11 @@ impl Manager {
     pub fn title(&self) -> String {
         match &self.page {
             Page::Home => "",
-            Page::Accounts => "Manage Accounts",
             Page::Account(key) => {
+                let (provider, name) = key.split_once(':').unwrap_or(("codex", key.as_str()));
                 return format!(
-                    "Account: {}",
-                    key.split_once(':').map_or(key.as_str(), |(_, name)| name)
+                    "Account: {} {name}",
+                    crate::usage::provider_symbol(provider)
                 );
             }
             Page::Sessions => "Manage Sessions",
@@ -747,7 +777,7 @@ impl Manager {
     fn focus(&self) -> Option<Focus> {
         let index = self.options.selected;
         match &self.page {
-            Page::Home | Page::Accounts if self.selected_account().is_some() => {
+            Page::Home if self.selected_account().is_some() => {
                 self.selected_account().map(Focus::Account)
             }
             Page::Sessions
@@ -792,19 +822,11 @@ impl Manager {
         self.options.navigation = Default::default();
         self.options.preview_visible = false;
         let selected = match location.focus {
-            Some(Focus::Account(key)) => {
-                if self.page == Page::Home {
-                    self.accounts
-                        .iter()
-                        .position(|a| a.id == key)
-                        .map(|i| i + 5)
-                } else {
-                    self.visible_accounts()
-                        .iter()
-                        .position(|a| a.id == key)
-                        .map(|i| i + self.account_base())
-                }
-            }
+            Some(Focus::Account(key)) => self
+                .accounts
+                .iter()
+                .position(|a| a.id == key)
+                .map(|i| i + 5),
             Some(Focus::Session(key)) => match self.page {
                 Page::Archives => self.archives.iter().position(|s| id(s) == key),
                 _ => self
@@ -837,23 +859,12 @@ impl Manager {
         true
     }
     fn account_back(&mut self, key: &str) {
-        self.go(if self.inline {
-            Page::Home
-        } else {
-            Page::Accounts
-        });
-        self.options.selected = if self.inline {
-            self.accounts
-                .iter()
-                .position(|a| a.id == key)
-                .map(|i| i + 5)
-        } else {
-            self.visible_accounts()
-                .iter()
-                .position(|a| a.id == key)
-                .map(|i| i + self.account_base())
-        }
-        .unwrap_or(0);
+        self.go(Page::Home);
+        self.options.selected = self
+            .accounts
+            .iter()
+            .position(|a| a.id == key)
+            .map_or(0, |i| i + 5);
     }
     pub fn rows(&self) -> Vec<Row> {
         match &self.page {
@@ -861,66 +872,16 @@ impl Manager {
                 let mut rows = vec![
                     Row::yes("New Session"),
                     Row::yes("Manage Sessions"),
-                    Row::yes(if self.inline {
-                        "Add Account"
-                    } else {
-                        "Manage Accounts"
-                    }),
+                    Row::yes("Add Account"),
                     Row::separator(),
                     Row::yes("Settings"),
                 ];
-                if self.inline {
-                    rows.extend(
-                        self.accounts
-                            .iter()
-                            .map(|a| Row::yes(account_title(a)).account()),
-                    );
-                }
+                rows.extend(
+                    self.accounts
+                        .iter()
+                        .map(|a| Row::yes(account_title(a)).account()),
+                );
                 rows
-            }
-            Page::Accounts => {
-                let column = self
-                    .accounts
-                    .iter()
-                    .map(|a| unicode_width::UnicodeWidthStr::width(account_title(a).as_str()))
-                    .max()
-                    .unwrap_or(0)
-                    + 4;
-                let visible = self.visible_accounts();
-                let tagged = self.accounts.iter().any(|a| a.provider() != "codex");
-                std::iter::once(Row::yes("Add Account"))
-                    .chain(self.filter_row().then(|| Row::yes(self.filter_label())))
-                    .chain((!visible.is_empty()).then(Row::separator))
-                    .chain(visible.into_iter().map(|a| {
-                        let enabled =
-                            a.details.get("enabled").and_then(Value::as_bool) == Some(true);
-                        let state = if enabled {
-                            if Usage::account(a).status != "Ready"
-                                || a.details
-                                    .get("switch_thresholds")
-                                    .is_some_and(|v| v["needs_plan_review"] == true)
-                            {
-                                "Enabled*"
-                            } else {
-                                "Enabled"
-                            }
-                        } else {
-                            "Disabled"
-                        };
-                        Row::yes(account_title(a)).with_column_preview(
-                            if tagged {
-                                format!(
-                                    "{:<11} {state}",
-                                    crate::client::provider_label(a.provider())
-                                )
-                            } else {
-                                state.to_owned()
-                            },
-                            column,
-                            enabled,
-                        )
-                    }))
-                    .collect()
             }
             Page::Account(key) => {
                 let a = self.account(key);
@@ -933,15 +894,30 @@ impl Manager {
                 }
                 let removed =
                     a.is_some_and(|a| a.details.get("membership").is_some_and(|v| v == "removed"));
+                let logged_in =
+                    !a.is_some_and(|a| a.details.get("auth_required").is_some_and(|v| v == true));
+                let provider = self.provider_of(key);
                 let mut rows = vec![
                     Row::yes("Details"),
-                    self.limits_account_row(key, removed),
                     self.rename_account_row(key),
                     Row::separator(),
-                    Row::gate(
-                        "Login",
-                        !removed && self.provider_cap(&self.provider_of(key), "enrollment"),
-                    ),
+                ];
+                if logged_in {
+                    rows.push(self.limits_account_row(key, removed));
+                    // Older backends omit the capability: hide Log out entirely.
+                    if self.provider_cap(&provider, "account_logout")
+                        || self.provider_denies(&provider, "account_logout")
+                    {
+                        rows.push(self.logout_account_row(key, removed));
+                    }
+                } else {
+                    rows.push(Row::gate(
+                        "Log in",
+                        !removed && self.provider_cap(&provider, "enrollment"),
+                    ));
+                }
+                rows.extend([
+                    Row::separator(),
                     Row::gate(
                         if a.is_some_and(|a| a.details.get("enabled").is_some_and(|v| v == false)) {
                             "Enable"
@@ -950,13 +926,9 @@ impl Manager {
                         },
                         !removed,
                     ),
-                    Row::separator(),
                     self.remove_account_row(key, removed),
                     self.delete_account_row(key),
-                ];
-                if !a.is_some_and(|a| a.details.get("auth_required").is_some_and(|v| v == true)) {
-                    rows.remove(4);
-                }
+                ]);
                 rows
             }
             Page::Sessions => crate::session_list::rows_with_archives(
@@ -1153,6 +1125,13 @@ impl Manager {
             .find(|r| r["request"]["request_id"] == key)
     }
     pub fn refresh(&mut self) -> Vec<Intent> {
+        self.refresh_with(false)
+    }
+    /// Periodic refresh: like `refresh`, but session state is throttled.
+    pub fn refresh_poll(&mut self) -> Vec<Intent> {
+        self.refresh_with(true)
+    }
+    fn refresh_with(&mut self, poll: bool) -> Vec<Intent> {
         let mut out = vec![];
         if let Page::Account(key) = self.page.clone()
             && self.provider_cap(&self.provider_of(&key), "account_deletion")
@@ -1199,7 +1178,11 @@ impl Manager {
                 Purpose::Launch(kind, key),
             ));
         }
-        out.extend(self.refresh_sessions());
+        if poll {
+            out.extend(self.poll_sessions(false));
+        } else {
+            out.extend(self.refresh_sessions());
+        }
         if (self.active_operation.is_some()
             || matches!(self.form, Form::Operation(_) | Form::OperationApproval(..))
             || matches!(self.page, Page::Operations | Page::Operation(_)))
@@ -1231,25 +1214,116 @@ impl Manager {
         }
         out
     }
+    const STATE_POLL_TICKS: u32 = 5;
+    const FULL_STATE_TICKS: u32 = 30;
+    fn state_cached_supported(&self) -> bool {
+        self.capabilities["state_cached"] == true
+    }
+    /// Single-flight full `state`; with a cached read available and nothing shown
+    /// yet, a cheap `state --cached` rides along for the first paint.
+    fn request_full_state(&mut self) -> Vec<Intent> {
+        self.ticks_since_state = 0;
+        self.ticks_since_full = 0;
+        let mut out = vec![];
+        if self.state_cached_supported()
+            && (!self.sessions_known || self.cached_snapshot)
+            && self.cached_tokens.is_empty()
+        {
+            let mut cached = self.request(strings(&["state", "--cached"]), Purpose::State);
+            if let Some(Intent::Api(token, _)) = cached.first() {
+                self.cached_tokens.insert(*token);
+            }
+            out.append(&mut cached);
+        }
+        if !self
+            .pending
+            .iter()
+            .any(|(t, p)| matches!(p, Purpose::State) && !self.cached_tokens.contains(t))
+        {
+            out.extend(self.request(strings(&["state"]), Purpose::State));
+        }
+        out
+    }
+    /// Explicit read (page entry, mutation, focus): always the full state.
     pub fn read_sessions(&mut self) -> Vec<Intent> {
-        if !self.pending.values().any(|p| matches!(p, Purpose::State)) {
-            self.request(strings(&["state"]), Purpose::State)
+        self.request_full_state()
+    }
+    pub fn refresh_sessions(&mut self) -> Vec<Intent> {
+        if matches!(self.page, Page::Sessions | Page::Session(_)) {
+            self.request_full_state()
         } else {
             vec![]
         }
     }
-    pub fn refresh_sessions(&mut self) -> Vec<Intent> {
-        if matches!(self.page, Page::Sessions | Page::Session(_))
-            && !self.pending.values().any(|p| matches!(p, Purpose::State))
+    /// Timer-driven read: every 5 ticks (seconds), cheap when the backend offers a
+    /// cached read, full every 30 s, and nothing while the UI is hidden.
+    pub fn poll_sessions(&mut self, any_page: bool) -> Vec<Intent> {
+        self.ticks_since_state += 1;
+        self.ticks_since_full += 1;
+        let eligible = any_page || matches!(self.page, Page::Sessions | Page::Session(_));
+        if !self.visible
+            || !eligible
+            || self.ticks_since_state < Self::STATE_POLL_TICKS
+            || self.pending.values().any(|p| matches!(p, Purpose::State))
         {
-            self.request(strings(&["state"]), Purpose::State)
-        } else {
-            vec![]
+            return vec![];
         }
+        if self.state_cached_supported() && self.ticks_since_full < Self::FULL_STATE_TICKS {
+            self.ticks_since_state = 0;
+            let out = self.request(strings(&["state", "--cached"]), Purpose::State);
+            if let Some(Intent::Api(token, _)) = out.first() {
+                self.cached_tokens.insert(*token);
+            }
+            out
+        } else {
+            self.request_full_state()
+        }
+    }
+    /// Paint the saved session list immediately. Capabilities and generations are
+    /// dropped, so no session action can be enabled from it.
+    pub fn show_cached(&mut self, sessions: &Value) {
+        if self.sessions_known {
+            return;
+        }
+        let sessions: Vec<Value> = sessions
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|s| {
+                let mut s = s.clone();
+                if let Some(o) = s.as_object_mut() {
+                    o.remove("generation");
+                    o.insert("capabilities".into(), json!({}));
+                    o.insert("activity".into(), json!("unknown"));
+                }
+                s
+            })
+            .collect();
+        self.sequence += 1;
+        let token = self.sequence;
+        self.pending.insert(token, Purpose::State);
+        let capabilities = self.capabilities.clone();
+        self.response(
+            token,
+            Ok(json!({"sessions":sessions,"capabilities":capabilities})),
+        );
+        self.cached_snapshot = true;
+        self.cache_out = None;
+        self.note = "Showing saved sessions; refreshing…".into();
     }
     /// Result of opening the login pane. Only a failure is surfaced, with the
     /// command a person can run themselves.
     pub fn login_launched(&mut self, result: Result<(), String>) -> Vec<Intent> {
+        if result.is_ok() {
+            // Get out of the way: the login pane is focused and its sign-in link must
+            // not sit under this popup. The pane reports success or failure itself.
+            if self.login_wait.take().is_some() {
+                self.dialog = None;
+                self.form = Form::None;
+                return vec![Intent::Exit];
+            }
+            return vec![];
+        }
         if let Err(e) = result
             && let Some(wait) = self.login_wait.take()
             && matches!(&self.form, Form::LoginWait(k) if *k == wait.key)
@@ -1380,9 +1454,9 @@ impl Manager {
             Page::Operations | Page::Operation(_) | Page::Launch(..)
         ) || matches!(self.form, Form::Operation(_) | Form::OperationApproval(..))
         {
-            self.refresh()
+            self.refresh_with(true)
         } else {
-            self.refresh_sessions()
+            self.poll_sessions(false)
         }
     }
     /// Continuation, branch and native-kind facts; absent facts are simply not shown.
@@ -1596,7 +1670,9 @@ impl Manager {
         self.form = Form::None;
         self.foreground = None;
         self.details_open = false;
-        self.login_wait = None;
+        if self.login_wait.take().is_some() {
+            self.note = "Stopped waiting for sign-in. A login pane that is already open keeps running; finish or close it there.".into();
+        }
     }
     fn confirm(&mut self, title: &str, body: Vec<String>, args: Vec<String>) {
         self.show(title, body, &["Confirm", "Cancel"], Form::Confirm(args));
@@ -1620,6 +1696,13 @@ impl Manager {
             }
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return vec![];
+        }
+        if let Some(out) = self.move_key(key) {
+            return out;
+        }
+        if key.code == KeyCode::Char('m') && self.can_start_move() {
+            self.moving = Some(self.accounts.clone());
             return vec![];
         }
         match key.code {
@@ -1718,6 +1801,7 @@ impl Manager {
                 &buttons,
                 Form::AddProvider(providers),
             );
+            self.dialog.as_mut().unwrap().separate_cancel();
         } else {
             self.add_for(providers.first().copied().unwrap_or("codex"));
         }
@@ -1738,6 +1822,7 @@ impl Manager {
             &["Add account", "Cancel"],
             Form::Add(provider.to_owned()),
         );
+        self.dialog.as_mut().unwrap().separate_cancel();
         self.dialog
             .as_mut()
             .unwrap()
@@ -1767,8 +1852,7 @@ impl Manager {
                     self.enter(Page::Sessions);
                     return self.refresh();
                 }
-                2 if self.inline => self.add(),
-                2 => self.enter(Page::Accounts),
+                2 => self.add(),
                 4 => return vec![Intent::Settings],
                 i if i >= 5 => {
                     if let Some(a) = self.accounts.get(i - 5) {
@@ -1777,18 +1861,6 @@ impl Manager {
                 }
                 _ => {}
             },
-            Page::Accounts => {
-                if index == 0 {
-                    self.add()
-                } else if self.filter_row() && index == 1 {
-                    self.cycle_filter();
-                } else if let Some(key) = index
-                    .checked_sub(self.account_base())
-                    .and_then(|i| self.visible_accounts().get(i).map(|a| a.id.clone()))
-                {
-                    self.enter(Page::Account(key));
-                }
-            }
             Page::Account(key) => {
                 let Some(a) = self.account(&key).cloned() else {
                     self.note = "Account is no longer available".into();
@@ -1797,22 +1869,21 @@ impl Manager {
                 if let Some(operation) = a.details.get("deletion").filter(|v| v["id"].is_string()) {
                     return self.deletion_operation(operation.clone());
                 }
-                let index =
-                    if a.details.get("auth_required").is_some_and(|v| v == true) || index < 4 {
-                        index
-                    } else {
-                        index + 1
-                    };
-                match index {
-                    0 => self.show_usage(&a),
-                    1 => {
+                let label = self
+                    .rows()
+                    .get(index)
+                    .map(|r| r.label.clone())
+                    .unwrap_or_default();
+                match label.as_str() {
+                    "Details" => self.show_usage(&a),
+                    "Limits" => {
                         return self.preview(
                             "Account limits",
                             strings(&["account", "limits", &key]),
                             Purpose::Limits(key),
                         );
                     }
-                    2 if self.provider_cap(&self.provider_of(&key), "account_rename") => {
+                    "Rename" if self.provider_cap(&self.provider_of(&key), "account_rename") => {
                         let current = a
                             .details
                             .get("display_name")
@@ -1834,15 +1905,25 @@ impl Manager {
                             .fields
                             .push(Field::new("Display name", current));
                     }
-                    4 => self.show_login(&key),
-                    5 => {
+                    "Log in" => self.show_login(&key),
+                    "Log out" if self.provider_cap(&self.provider_of(&key), "account_logout") => {
+                        self.confirm(
+                            "Log out",
+                            vec![format!(
+                                "Sign out of {}? Sessions keep their history; you can log in again later.",
+                                account_label(&key)
+                            )],
+                            strings(&["account", "logout", &key]),
+                        );
+                    }
+                    "Enable" | "Disable" => {
                         if a.details.get("enabled").is_some_and(|v| v == false) {
                             return self.mutate(strings(&["account", "enable", &key]));
                         } else {
                             self.confirm("Disable account",vec![format!("Disable {key} for future selection? Existing agents keep running.")],strings(&["account","disable",&key]));
                         }
                     }
-                    7 => {
+                    "Deregister account" | "Restore account" => {
                         if a.details.get("membership").is_some_and(|v| v == "removed") {
                             return self.mutate(strings(&["account", "restore", &key]));
                         } else {
@@ -1853,7 +1934,7 @@ impl Manager {
                             );
                         }
                     }
-                    8 => {
+                    "Delete account" => {
                         return self.preview(
                             "Delete account",
                             strings(&["account", "delete", &key]),
@@ -2551,6 +2632,7 @@ impl Manager {
         let Some(purpose) = self.pending.remove(&token) else {
             return vec![];
         };
+        let cached_req = self.cached_tokens.remove(&token);
         if let Purpose::LoginPoll(key) = purpose {
             if let Ok(value) = result {
                 self.login_polled(key, value);
@@ -2616,6 +2698,32 @@ impl Manager {
                 }
             }
             Purpose::State => {
+                let mut value = value;
+                if cached_req {
+                    // A late cheap read must never replace newer full state.
+                    if self.sessions_known && !self.cached_snapshot && token < self.last_full_token
+                    {
+                        return vec![];
+                    }
+                    if value["snapshot"]["fresh"] == false && !self.sessions_known {
+                        if let Some(list) = value["sessions"].as_array_mut() {
+                            for s in list {
+                                if let Some(o) = s.as_object_mut() {
+                                    o.remove("generation");
+                                    o.insert("capabilities".into(), json!({}));
+                                }
+                            }
+                        }
+                        self.cached_snapshot = true;
+                    }
+                } else {
+                    self.last_full_token = token;
+                    self.cached_snapshot = false;
+                    self.cache_out = Some(value["sessions"].clone());
+                    if self.note.starts_with("Showing saved sessions") {
+                        self.note.clear();
+                    }
+                }
                 let initial_sessions = self.page == Page::Sessions && !self.sessions_known;
                 let archives_selected = self.sessions_known
                     && self.page == Page::Sessions
@@ -3056,7 +3164,7 @@ impl Manager {
                                 "Complete provider login",
                                 vec![
                                     format!("Complete the {label} login in the opened pane…"),
-                                    "This dialog closes when sign-in succeeds. Cancel only stops waiting; it does not cancel the login.".into(),
+                                    "This popup closes once the login pane opens; the pane reports the result. Cancel only stops waiting; it does not cancel the login.".into(),
                                 ],
                                 &["Cancel"],
                                 Form::LoginWait(key.clone()),
@@ -3126,6 +3234,7 @@ impl Manager {
         self.paint_at(canvas, footer, now);
     }
     pub fn paint_at(&mut self, canvas: &mut Canvas, footer: usize, now: i64) {
+        let _ = footer; // retained for callers; the layout derives rows from the canvas
         if let Page::Spaces(key) = self.page.clone() {
             let options = self.options.clone();
             let dialog = self.dialog.take();
@@ -3174,50 +3283,33 @@ impl Manager {
             }
             return;
         }
-        let hints = hint_lines(
-            &[
-                "▲/▼/◀/▶: Move",
-                "Enter/Space: Select",
-                if self.page == Page::Home {
-                    "Esc: Close"
-                } else {
-                    "Esc: Back"
-                },
-            ],
-            canvas.width,
-        );
+        let hints = if self.moving.is_some() {
+            hint_lines(&["▲/▼: Move", "Enter: Save", "Esc: Cancel"], canvas.width)
+        } else {
+            let mut tokens = vec!["▲/▼/◀/▶: Move", "Enter/Space: Select"];
+            if self.can_start_move() {
+                tokens.push("m: Move");
+            }
+            tokens.push(if self.page == Page::Home {
+                "Esc: Close"
+            } else {
+                "Esc: Back"
+            });
+            hint_lines(&tokens, canvas.width)
+        };
         let controls_start = canvas.height.saturating_sub(hints.len());
         let list_controls = if self.note.is_empty() {
             controls_start
         } else {
             controls_start.saturating_sub(2)
         };
-        let layout = AccountsLayout::fit(&self.accounts, canvas.width, footer.saturating_sub(10));
-        let was = self.inline;
-        // Unknown inventory is not evidence of overflow. Render the empty inline
-        // layout immediately; switch to Manage Accounts only when rows won't fit.
-        self.inline = layout.is_some();
-        if self.inline && !was && self.page == Page::Accounts && self.dialog.is_none() {
-            let selected = self.selected_account();
-            self.go(Page::Home);
-            if let Some(key) = selected {
-                self.options.selected = self
-                    .accounts
-                    .iter()
-                    .position(|a| a.id == key)
-                    .map(|i| i + 5)
-                    .unwrap_or(0);
-            }
-        }
-        if !self.inline && was && self.page == Page::Home && self.options.selected >= 5 {
-            self.options.selected = 2;
-        }
+        let layout = AccountsLayout::fit(&self.accounts, canvas.width);
         if self.usage_focus && !self.usage_selectable() {
             self.usage_focus = false;
         }
         let rows = self.rows();
-        if self.page == Page::Home && self.inline {
-            let l = layout.as_ref().unwrap();
+        if self.page == Page::Home {
+            let l = &layout;
             let longest = rows
                 .iter()
                 .take(5)
@@ -3234,37 +3326,31 @@ impl Manager {
                     self.options.back || self.options.selected >= 5,
                 );
             }
+            let bottom = list_controls.saturating_sub(1).max(10);
+            let selected = self.options.selected.checked_sub(5);
+            self.account_scroll = AccountsLayout::scroll_for(
+                &self.accounts,
+                self.account_scroll,
+                selected,
+                bottom.saturating_sub(9),
+            );
+            let moving = self.moving.is_some().then_some(selected).flatten();
             l.paint(
                 canvas,
                 &self.accounts,
                 9,
-                self.options.selected.checked_sub(5),
+                bottom,
+                self.account_scroll,
+                selected,
                 self.options.back,
                 self.usage_focus,
+                moving,
             );
             self.options.paint_back(canvas, top_left, 3, "Close");
         } else {
-            let selected = self.selected_account();
-            let usage = if self.page == Page::Accounts {
-                selected
-                    .as_ref()
-                    .and_then(|key| self.account(key))
-                    .filter(|a| {
-                        !self.options.back
-                            && a.details.get("enabled").and_then(Value::as_bool) != Some(false)
-                    })
-                    .map(Usage::account)
-            } else {
-                None
-            };
-            let preview_height = usage.as_ref().map(Usage::height).unwrap_or(0);
-            let menu_controls = if preview_height > 0 {
-                list_controls.saturating_sub(preview_height + 1)
-            } else {
-                list_controls
-            };
+            let menu_controls = list_controls;
             let bottom = menu_controls.saturating_sub(1);
-            let (left, capacity) = if self.page == Page::Sessions {
+            let (left, _) = if self.page == Page::Sessions {
                 crate::session_list::paint_with_archives(
                     canvas,
                     &mut self.options,
@@ -3289,31 +3375,6 @@ impl Manager {
                     "Back"
                 },
             );
-            if let Some(u) = usage {
-                let bar = 24.min(canvas.width.saturating_sub(20));
-                if bar < 12 {
-                    canvas.text(
-                        1,
-                        footer.saturating_sub(3),
-                        "Widen to view usage",
-                        Cell::default(),
-                        false,
-                    );
-                }
-                if bar >= 12 {
-                    u.paint_preview(
-                        canvas,
-                        canvas.width.saturating_sub(u.width(bar, u.digits())) / 2,
-                        if rows.len() > capacity {
-                            3 + capacity + 2
-                        } else {
-                            3 + rows.len().saturating_sub(self.options.scroll).min(capacity) + 1
-                        },
-                        bar,
-                        u.digits(),
-                    );
-                }
-            }
         }
         if !self.note.is_empty() {
             crate::widgets::paint_status(canvas, controls_start, &self.note);
@@ -3553,23 +3614,17 @@ mod tests {
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         let mut m = setup();
-        m.options.selected = 2;
-        m.key(enter);
-        assert_eq!(m.page, Page::Accounts);
-        m.options.selected = 3;
+        m.options.selected = 6;
         m.options.scroll = 1;
         m.key(enter);
         assert_eq!(m.page, Page::Account("codex:account2".into()));
         m.accounts.reverse();
         m.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         m.key(enter);
-        assert_eq!(m.page, Page::Accounts);
-        assert_eq!(m.options.selected, 2);
-        assert_eq!(m.options.scroll, 1);
-        assert!(!m.options.back);
-        m.key(escape);
+        // Back restores the parent and follows the account to its new row.
         assert_eq!(m.page, Page::Home);
-        assert_eq!(m.options.selected, 2);
+        assert_eq!(m.options.selected, 5);
+        assert!(!m.options.back);
 
         m.sessions = vec![json!({"id":"a","name":"A"}), json!({"id":"b","name":"B"})];
         m.sessions_known = true;
@@ -3988,7 +4043,9 @@ mod tests {
                 .iter()
                 .any(|s| s == "Generation: new")
         );
-        let sent = m.refresh_live();
+        // State polls are throttled to one per five ticks.
+        let sent = (0..5).flat_map(|_| m.refresh_live()).collect::<Vec<_>>();
+        assert_eq!(sent.len(), 1);
         let Intent::Api(token, _) = sent[0] else {
             panic!()
         };
@@ -4072,7 +4129,7 @@ mod tests {
     #[test]
     fn stale_target_uses_centered_status_lane_and_reserves_menu_space() {
         let mut m = setup();
-        m.page = Page::Accounts;
+        m.page = Page::Home;
         m.inventory((1..20).map(account).collect());
         let sent = m.preview(
             "Details",
@@ -4302,6 +4359,342 @@ mod tests {
         m.dismiss();
         assert_eq!(m.page, Page::Operation("switch".into()));
     }
+    fn session_state_args(intents: &[Intent]) -> Vec<Vec<String>> {
+        intents
+            .iter()
+            .filter_map(|i| match i {
+                Intent::Api(_, a) if a.first().is_some_and(|x| x == "state") => Some(a.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+    #[test]
+    fn operations_button_always_opens_at_the_top_item() {
+        let mut m = setup();
+        m.sessions_known = true;
+        m.operations = vec![
+            json!({"id":"op1","kind":"restart","phase":"complete"}),
+            json!({"id":"op2","kind":"restart","phase":"complete"}),
+            json!({"id":"op3","kind":"restart","phase":"complete"}),
+        ];
+        for previous in [0, 2] {
+            m.go(Page::Sessions);
+            m.options.selected = m.rows().len() - 1; // the Operations row
+            m.activate();
+            assert_eq!(m.page, Page::Operations);
+            assert_eq!(m.options.selected, 0);
+            m.options.selected = previous;
+            // Leave without Esc bookkeeping; re-open from the Sessions page.
+            m.go(Page::Sessions);
+        }
+        // Even a remembered position from a sibling visit does not carry over.
+        m.go(Page::Operations);
+        m.options.selected = 2;
+        m.pending.clear();
+        m.go(Page::Sessions);
+        m.options.selected = m.rows().len() - 1;
+        let sent = m.activate();
+        let Some(Intent::Api(token, _)) = sent
+            .iter()
+            .find(|i| matches!(i, Intent::Api(_, a) if a == &strings(&["operations"])))
+        else {
+            panic!("operations were not requested: {sent:?}")
+        };
+        m.response(*token, Ok(json!(m.operations.clone())));
+        assert_eq!(m.options.selected, 0);
+    }
+    fn screen_text(c: &Canvas) -> String {
+        c.cells
+            .chunks(c.width)
+            .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+    #[test]
+    fn move_mode_reorders_saves_by_qualified_id_and_cancels_with_esc() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let mut m = dual_providers();
+        m.capabilities["account_reorder"] = json!(true);
+        let ids = |m: &Manager| m.accounts.iter().map(|a| a.id.clone()).collect::<Vec<_>>();
+        let original = ids(&m);
+        // Footer: the Move hint appears only while an account row is focused.
+        m.options.selected = 0;
+        assert!(
+            !screen_text(&{
+                let mut c = Canvas::new(90, 30);
+                m.paint(&mut c, 29);
+                c
+            })
+            .contains("m: Move")
+        );
+        m.options.selected = 6;
+        let focused = {
+            let mut c = Canvas::new(90, 30);
+            m.paint(&mut c, 29);
+            screen_text(&c)
+        };
+        assert!(focused.contains("m: Move"));
+        // Pick up the Claude account, move it to the top and see the marker.
+        m.key(key(KeyCode::Char('m')));
+        m.key(key(KeyCode::Up));
+        assert_eq!(m.options.selected, 5);
+        assert_eq!(m.accounts[0].id, "claude:claude-main");
+        let moving = {
+            let mut c = Canvas::new(90, 30);
+            m.paint(&mut c, 29);
+            screen_text(&c)
+        };
+        assert!(moving.contains("⇅") && moving.contains("(moving)"));
+        assert!(
+            moving.contains("▲/▼: Move")
+                && moving.contains("Enter: Save")
+                && moving.contains("Esc: Cancel")
+        );
+        assert!(!moving.contains("m: Move"));
+        // Up at the top and other keys do nothing; Esc restores the old order.
+        m.key(key(KeyCode::Up));
+        assert_eq!(m.options.selected, 5);
+        m.key(key(KeyCode::Esc));
+        assert_eq!(ids(&m), original);
+        assert_eq!(m.options.selected, 6);
+        assert_eq!(m.page, Page::Home);
+        // Enter saves with the provider-qualified id and the new position.
+        m.key(key(KeyCode::Char('m')));
+        m.key(key(KeyCode::Down));
+        let sent = m.key(key(KeyCode::Enter));
+        assert!(
+            matches!(&sent[..], [Intent::Api(_, a)] if a == &strings(&["account", "reorder", "claude:claude-main", "--position", "2"])),
+            "{sent:?}"
+        );
+        // Not advertised: no move mode and no hint.
+        let mut m = dual_providers();
+        m.options.selected = 6;
+        m.key(key(KeyCode::Char('m')));
+        let mut c = Canvas::new(90, 30);
+        m.paint(&mut c, 29);
+        assert!(!screen_text(&c).contains("m: Move") && !screen_text(&c).contains("⇅"));
+    }
+    #[test]
+    fn accounts_keep_backend_order_and_duplicate_names_are_keyed_by_qualified_id() {
+        let mut m = Manager::default();
+        let mk = |id: &str| -> Account {
+            serde_json::from_value(json!({"id":id,"selectable":true,"enabled":true,"usage_fresh":true,"usage":{"observed_at":100}})).unwrap()
+        };
+        m.inventory(vec![
+            mk("gemini:work"),
+            mk("claude:work"),
+            mk("codex:work"),
+            mk("codex:alpha"),
+        ]);
+        let ids: Vec<_> = m.accounts.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["gemini:work", "claude:work", "codex:work", "codex:alpha"]
+        );
+        // Selecting the second "work" and re-ordering the inventory follows the id.
+        m.options.selected = 6;
+        m.inventory(vec![mk("codex:alpha"), mk("codex:work"), mk("claude:work")]);
+        assert_eq!(m.options.selected, 5 + 2);
+        m.activate();
+        assert_eq!(m.page, Page::Account("claude:work".into()));
+        assert!(m.title().contains('✻'));
+        // The home list shows distinguishing symbols for the identical names.
+        let mut c = Canvas::new(90, 30);
+        m.go(Page::Home);
+        m.paint(&mut c, 29);
+        let text = screen_text(&c);
+        assert!(text.contains("✻ work") && text.contains("⬢ work"));
+    }
+    #[test]
+    fn home_list_scrolls_instead_of_opening_a_submenu_and_keeps_the_selection_visible() {
+        let mut m = setup();
+        m.inventory((0..30).map(account).collect());
+        let mut c = Canvas::new(60, 20);
+        m.paint(&mut c, 19);
+        assert_eq!(m.rows()[2].label, "Add Account");
+        assert!(screen_text(&c).contains("account0"));
+        m.options.selected = 5 + 29;
+        let mut c = Canvas::new(60, 20);
+        m.paint(&mut c, 19);
+        let text = screen_text(&c);
+        assert!(m.account_scroll > 0);
+        assert!(text.contains("account29") && !text.contains("account0 "));
+        assert!(
+            text.contains("5h") || text.contains("wk"),
+            "bars still drawn"
+        );
+        m.options.selected = 5;
+        let mut c = Canvas::new(60, 20);
+        m.paint(&mut c, 19);
+        assert_eq!(m.account_scroll, 0);
+        assert!(!m.rows().iter().any(|r| r.label == "Manage Accounts"));
+    }
+    #[test]
+    fn page_selection_resets_on_entry_and_is_restored_on_return() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let mut m = setup();
+        m.sessions_known = true;
+        m.sessions = vec![json!({"id":"a","name":"A"}), json!({"id":"b","name":"B"})];
+        m.operations = vec![
+            json!({"id":"op1","kind":"restart","phase":"complete"}),
+            json!({"id":"op2","kind":"restart","phase":"complete"}),
+        ];
+        // Home (row 1) -> Sessions: fresh top selection.
+        m.options.selected = 1;
+        m.key(key(KeyCode::Enter));
+        assert_eq!(m.page, Page::Sessions);
+        assert_eq!(m.options.selected, 0);
+        // Sessions (row 1) -> Session: fresh; its own position changes.
+        m.options.selected = 1;
+        m.key(key(KeyCode::Enter));
+        assert_eq!(m.page, Page::Session("b".into()));
+        assert_eq!(m.options.selected, 0);
+        m.options.selected = 2;
+        // Back: parent keeps the position it had (the entered session).
+        m.key(key(KeyCode::Esc));
+        assert_eq!(m.page, Page::Sessions);
+        assert_eq!(m.options.selected, 1);
+        // Sessions -> Operations -> Operation, a nested chain, then all the way back.
+        m.options.selected = m.rows().len() - 1;
+        m.key(key(KeyCode::Enter));
+        assert_eq!(m.page, Page::Operations);
+        assert_eq!(m.options.selected, 0);
+        m.options.selected = 1;
+        m.key(key(KeyCode::Enter));
+        assert_eq!(m.page, Page::Operation("op2".into()));
+        assert_eq!(m.options.selected, 0);
+        m.key(key(KeyCode::Esc));
+        assert_eq!((m.page.clone(), m.options.selected), (Page::Operations, 1));
+        m.key(key(KeyCode::Esc));
+        assert_eq!(m.page, Page::Sessions);
+        assert_eq!(m.options.selected, m.rows().len() - 1);
+        m.key(key(KeyCode::Esc));
+        assert_eq!((m.page.clone(), m.options.selected), (Page::Home, 1));
+        // Re-entering Operations later always starts at the top again.
+        m.options.selected = 1;
+        m.key(key(KeyCode::Enter));
+        m.options.selected = m.rows().len() - 1;
+        m.key(key(KeyCode::Enter));
+        assert_eq!((m.page.clone(), m.options.selected), (Page::Operations, 0));
+        // Home -> an account page starts at its first row, back lands on the account.
+        m.go(Page::Home);
+        m.options.selected = 6;
+        m.key(key(KeyCode::Enter));
+        assert_eq!(m.options.selected, 0);
+        m.key(key(KeyCode::Esc));
+        assert_eq!((m.page.clone(), m.options.selected), (Page::Home, 6));
+    }
+    #[test]
+    fn first_render_comes_from_cache_without_actions_then_fresh_state_replaces_it() {
+        let mut m = setup();
+        m.page = Page::Sessions;
+        let cached = json!([{"id":"s1","name":"Saved copy","generation":"old","availability":"running","activity":"busy",
+            "capabilities":{"stop":true,"rename":true,"restore":true}}]);
+        m.show_cached(&cached);
+        // Rendered immediately: no request needed, known, marked refreshing.
+        assert!(m.sessions_known && m.cached_snapshot);
+        assert_eq!(m.sessions[0]["name"], "Saved copy");
+        assert!(m.note.starts_with("Showing saved sessions"));
+        assert!(m.cache_out.is_none(), "cache is never re-saved from itself");
+        // Nothing from the cache can be acted on: no generation, no capabilities.
+        assert!(m.sessions[0].get("generation").is_none());
+        assert_eq!(m.sessions[0]["capabilities"], json!({}));
+        assert_eq!(m.sessions[0]["activity"], "unknown");
+        m.go(Page::Session("s1".into()));
+        assert!(
+            m.rows()
+                .iter()
+                .all(|r| !r.enabled || r.label == "Session Details"),
+            "{:?}",
+            m.rows()
+                .iter()
+                .map(|r| (&r.label, r.enabled))
+                .collect::<Vec<_>>()
+        );
+        // Fresh state replaces it and is persisted.
+        m.page = Page::Sessions;
+        let sent = m.read_sessions();
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        m.response(token, Ok(json!({"sessions":[{"id":"s1","name":"Fresh","generation":"new","availability":"running","activity":"idle","capabilities":{"stop":true}}]})));
+        assert!(!m.cached_snapshot);
+        assert_eq!(m.sessions[0]["name"], "Fresh");
+        assert_eq!(m.sessions[0]["generation"], "new");
+        assert!(!m.note.starts_with("Showing saved"));
+        assert_eq!(m.cache_out.take().unwrap()[0]["name"], "Fresh");
+        // A cache arriving after fresh data is ignored.
+        m.show_cached(&cached);
+        assert_eq!(m.sessions[0]["name"], "Fresh");
+    }
+    #[test]
+    fn state_polls_every_five_seconds_only_while_visible() {
+        let mut m = setup();
+        m.page = Page::Sessions;
+        let mut sent = 0;
+        for tick in 1..=20 {
+            let out = m.refresh_live();
+            let n = session_state_args(&out).len();
+            if n > 0 {
+                assert_eq!(tick % 5, 0, "poll at tick {tick}");
+                let Intent::Api(token, _) = out[0] else {
+                    panic!()
+                };
+                m.response(token, Ok(json!({"sessions":[]})));
+            }
+            sent += n;
+        }
+        assert_eq!(sent, 4);
+        m.visible = false;
+        assert!((0..20).all(|_| session_state_args(&m.refresh_live()).is_empty()));
+        // Regaining focus reads immediately.
+        m.visible = true;
+        assert_eq!(session_state_args(&m.read_sessions()).len(), 1);
+    }
+    #[test]
+    fn cached_read_serves_polls_and_first_paint_with_full_state_every_thirty_seconds() {
+        let mut m = setup();
+        m.capabilities = json!({"state_cached": true});
+        m.page = Page::Sessions;
+        // Entering the page: cheap read plus the authoritative full read.
+        let first = session_state_args(&m.read_sessions());
+        assert_eq!(
+            first,
+            vec![strings(&["state", "--cached"]), strings(&["state"])]
+        );
+        let cached = json!({"sessions":[{"id":"c","name":"Cheap","generation":"g","availability":"saved","capabilities":{"stop":true}}],
+            "snapshot":{"observed_at":1,"fresh":false},"capabilities":{"state_cached":true}});
+        let tokens: Vec<u64> = (m.sequence - 1..=m.sequence).collect();
+        m.response(tokens[0], Ok(cached));
+        assert!(m.cached_snapshot, "stale snapshot shows without actions");
+        assert_eq!(m.sessions[0]["capabilities"], json!({}));
+        m.response(tokens[1], Ok(json!({"sessions":[{"id":"c","name":"Full","generation":"g2","availability":"saved"}],"capabilities":{"state_cached":true}})));
+        assert!(!m.cached_snapshot);
+        assert_eq!(m.sessions[0]["name"], "Full");
+        // Periodic polls use the cheap read; every 30 s the full one.
+        let mut kinds = vec![];
+        for tick in 1..=30 {
+            let out = m.refresh_live();
+            for args in session_state_args(&out) {
+                kinds.push((tick, args.len() == 2));
+                let Intent::Api(token, _) = out[0] else {
+                    panic!()
+                };
+                m.response(token, Ok(json!({"sessions":[],"snapshot":{"fresh":true},"capabilities":{"state_cached":true}})));
+            }
+        }
+        assert_eq!(
+            kinds,
+            vec![
+                (5, true),
+                (10, true),
+                (15, true),
+                (20, true),
+                (25, true),
+                (30, false)
+            ]
+        );
+    }
     #[test]
     fn live_state_refresh_is_single_flight_and_errors_clear_busy_claims() {
         let mut m = setup();
@@ -4325,31 +4718,6 @@ mod tests {
         assert_eq!(m.sessions[0]["activity"], "unknown");
         m.page = Page::Home;
         assert!(m.refresh_sessions().is_empty());
-    }
-    #[test]
-    fn disabled_accounts_have_no_hover_usage_and_login_requires_attention() {
-        let mut m = setup();
-        m.accounts[0].details.insert("enabled".into(), json!(false));
-        m.accounts[1]
-            .details
-            .insert("auth_required".into(), json!(true));
-        m.accounts.extend((3..9).map(account));
-        m.page = Page::Accounts;
-        let rows = m.rows();
-        assert_eq!(rows[2].preview.as_deref(), Some("Disabled"));
-        assert_eq!(rows[2].preview_fg, crate::widgets::MUTED);
-        assert_eq!(rows[3].preview.as_deref(), Some("Enabled*"));
-        m.options.selected = 2;
-        let mut c = Canvas::new(40, 18);
-        m.paint(&mut c, 17);
-        for y in 7..16 {
-            let row = c.cells[y * 40..(y + 1) * 40]
-                .iter()
-                .map(|c| c.glyph.as_str())
-                .collect::<String>();
-            assert!(!row.contains("Disabled"));
-            assert!(!row.contains('━'));
-        }
     }
     fn account(n: usize) -> Account {
         serde_json::from_value(json!({"id":format!("codex:account{n}"),"selectable":true,"enabled":true,"usage_fresh":true,"usage":{"observed_at":100,"short":{"duration_minutes":300,"used_percent":25},"weekly":{"duration_minutes":10080,"used_percent":35}},"switch_thresholds":{"customized":true,"short_percent":80,"weekly_percent":90}})).unwrap()
@@ -4391,7 +4759,6 @@ mod tests {
     #[test]
     fn home_usage_focus_limits_returns_to_same_selection() {
         let mut m = setup();
-        m.inline = true;
         m.options.selected = 5;
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         m.key(key(KeyCode::Right));
@@ -4457,7 +4824,6 @@ mod tests {
             ),
         ] {
             let mut m = setup();
-            m.inline = true;
             m.options.selected = 5;
             m.accounts[0].details.insert(field.into(), value);
             assert_eq!(Usage::account(&m.accounts[0]).status, status);
@@ -4512,36 +4878,6 @@ mod tests {
             serde_json::from_value(json!({"id":"codex:fresh","selectable":false})).unwrap();
         m.inventory(vec![fresh]);
         assert!(!m.dialog.as_ref().unwrap().fields[0].valid());
-    }
-    #[test]
-    fn account_status_column_and_preview_follow_list_or_pagination() {
-        let mut m = setup();
-        m.accounts[0].id = "codex:a".into();
-        m.accounts[1].details.insert("enabled".into(), json!(false));
-        m.page = Page::Accounts;
-        let rows = m.rows();
-        assert_eq!(
-            rows[2].preview_position(60, 5),
-            rows[3].preview_position(60, 5)
-        );
-        assert_eq!(rows[2].preview.as_deref(), Some("Enabled"));
-        assert!(rows[2].preview_accent);
-        assert!(!rows[3].preview_accent);
-        m.inventory((0..30).map(account).collect());
-        m.page = Page::Accounts;
-        m.options.selected = 10;
-        let mut c = Canvas::new(60, 18);
-        m.paint(&mut c, 17);
-        let row = |y: usize| {
-            c.cells[y * 60..(y + 1) * 60]
-                .iter()
-                .map(|c| c.glyph.as_str())
-                .collect::<String>()
-        };
-        let range = (0..18).find(|y| row(*y).contains(" of ")).unwrap();
-        assert!(!row(range + 1).contains('━'));
-        assert!(row(range + 2).contains("5h"));
-        assert!(row(range + 3).contains("wk"));
     }
     #[test]
     fn selected_operation_id_falls_below_list_only_when_it_fits() {
@@ -4739,81 +5075,19 @@ mod tests {
         assert_eq!(m.options.selected, 2);
         m.inventory((0..30).map(account).collect());
         m.paint(&mut Canvas::new(80, 30), 29);
-        assert_eq!(m.rows()[2].label, "Manage Accounts");
-        assert_eq!(m.options.selected, 2);
-    }
-    #[test]
-    fn inline_fit_compact_preview_and_resize_preserve_account_navigation() {
-        let mut m = setup();
-        m.paint(&mut Canvas::new(80, 30), 29);
-        assert!(m.inline);
         assert_eq!(m.rows()[2].label, "Add Account");
-        m.options.selected = 6;
-        m.paint(&mut Canvas::new(40, 16), 14);
-        assert!(!m.inline);
         assert_eq!(m.options.selected, 2);
-        assert_eq!(m.rows()[2].label, "Manage Accounts");
-        m.activate();
-        assert_eq!(m.page, Page::Accounts);
-        m.options.selected = 3;
-        let mut canvas = Canvas::new(60, 16);
-        m.paint(&mut canvas, 14);
-        let row = |n: usize| {
-            canvas.cells[n * 60..(n + 1) * 60]
-                .iter()
-                .map(|c| c.glyph.as_str())
-                .collect::<String>()
-        };
-        assert!(row(7).trim().is_empty());
-        assert!(row(8).contains("5h"));
-        assert!(row(9).contains("wk"));
-        assert!(m.rows().iter().all(|r| !r.account));
-        assert!(row(6).contains("●"));
-        assert!(!row(6).contains("▶"));
-        let name_x = row(6).find("account2").unwrap();
-        assert_eq!(canvas.cells[6 * 60 + name_x].fg, [238; 3]);
-        for y in [8, 9] {
-            let percent = row(y).chars().position(|c| c == '%').unwrap();
-            assert!(!canvas.cells[y * 60 + percent].bold);
-            assert_eq!(canvas.cells[y * 60 + percent].fg, crate::widgets::SELECTED);
-        }
-        assert!(!row(13).contains('━'));
-        m.paint(&mut Canvas::new(100, 40), 39);
-        assert_eq!(m.page, Page::Home);
-        assert_eq!(m.options.selected, 6);
-        m.activate();
-        assert_eq!(m.page, Page::Account("codex:account2".into()));
-        m.paint(&mut Canvas::new(40, 16), 14);
-        m.options.selected = 4;
-        m.activate();
-        m.dialog
-            .as_mut()
-            .unwrap()
-            .body
-            .push("Preserved input state".into());
-        m.paint(&mut Canvas::new(100, 40), 39);
-        assert!(
-            m.dialog
-                .as_ref()
-                .unwrap()
-                .body
-                .contains(&"Preserved input state".into())
-        );
-        m.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        m.back();
-        assert_eq!(m.page, Page::Home);
-        assert_eq!(m.options.selected, 6);
     }
     #[test]
     fn grouped_actions_skip_separators_and_confirmation_binds_original_generation() {
         let mut m = setup();
         m.go(Page::Account("codex:account1".into()));
-        assert!(m.rows()[3].separator && m.rows()[5].separator);
-        m.options.selected = 1;
+        assert!(m.rows()[2].separator && m.rows()[4].separator);
+        m.options.selected = 0;
         m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(m.options.selected, 2);
+        assert_eq!(m.options.selected, 1);
         m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(m.options.selected, 4);
+        assert_eq!(m.options.selected, 3);
         let s = json!({"id":"stable","name":"Test","generation":"old","availability":"running","capabilities":{"stop":true}});
         m.sessions = vec![s];
         m.go(Page::Session("stable".into()));
@@ -4904,18 +5178,51 @@ mod tests {
         json!({"id":"c","generation":"g","name":"Work","provider":"claude","account_id":"claude:claude-main","conversation_id":"native-1","directory":null,"availability":availability,"native_status":"idle","native_name":null,"attachment":null,"capabilities":{"focus":false,"rename":true,"resume":availability=="stopped"}})
     }
     #[test]
+    fn add_account_dialogs_put_a_separator_above_cancel() {
+        use crate::dialog::Event;
+        let mut m = dual_providers();
+        m.add();
+        let d = m.dialog.as_ref().unwrap();
+        let labels: Vec<_> = d
+            .buttons
+            .iter()
+            .map(|b| (b.label.as_str(), b.separator))
+            .collect();
+        let n = labels.len();
+        assert!(d.buttons[n - 2].separator && d.buttons[n - 1].label == "Cancel");
+        // Arrow navigation skips the separator.
+        let d = m.dialog.as_mut().unwrap();
+        d.selected = n - 3;
+        d.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(d.selected, n - 1);
+        d.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(d.selected, n - 3);
+        assert!(matches!(
+            { d.selected = n - 1; d.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) },
+            Event::Choose(i, _) if i == n - 1
+        ));
+        // Provider choice and Cancel still resolve through the raw button index.
+        m.submit(1, vec![]);
+        let d = m.dialog.as_ref().unwrap();
+        assert!(d.body[0].starts_with("Claude Code account name"));
+        let n = d.buttons.len();
+        assert!(d.buttons[n - 2].separator && d.buttons[n - 1].label == "Cancel");
+        m.submit(n - 1, vec![]);
+        assert!(m.dialog.is_none());
+    }
+    #[test]
     fn add_account_chooses_provider_then_runs_the_provider_flow() {
         let mut m = dual_providers();
         m.add();
         let d = m.dialog.as_ref().unwrap();
         let buttons: Vec<_> = d.buttons.iter().map(|b| b.label.as_str()).collect();
-        assert_eq!(buttons, ["Codex", "Claude Code", "Cancel"]);
+        assert_eq!(buttons, ["Codex", "Claude Code", "", "Cancel"]);
         assert!(d.fields.is_empty());
         m.submit(1, vec![]);
         let d = m.dialog.as_ref().unwrap();
         assert!(d.body[0].starts_with("Claude Code account name"));
-        // Names are unique across providers: a Codex name is taken for Claude too.
-        assert!(d.fields[0].excluded.contains(&"account1".to_owned()));
+        // Names are unique per provider only: a Codex name may be reused for Claude.
+        assert!(!d.fields[0].excluded.contains(&"account1".to_owned()));
         assert!(d.fields[0].excluded.contains(&"claude-main".to_owned()));
         let sent = m.submit(0, vec!["claude-two".into()]);
         assert!(
@@ -4959,13 +5266,47 @@ mod tests {
         assert_eq!(d.body.len(), 1);
     }
     #[test]
+    fn logout_row_is_gated_by_capability_and_confirms_before_running() {
+        let mut m = dual_providers();
+        let labels =
+            |m: &Manager| -> Vec<String> { m.rows().iter().map(|r| r.label.clone()).collect() };
+        m.go(Page::Account("claude:claude-main".into()));
+        // Older backend: no capability, no row; logged in so no Log in either.
+        assert!(!labels(&m).iter().any(|l| l == "Log out" || l == "Log in"));
+        m.capabilities["providers"][1]["account_logout"] = json!(false);
+        m.capabilities["providers"][1]["operations"] =
+            json!({"account_logout":{"reason":"not yet available"}});
+        let at = labels(&m).iter().position(|l| l == "Log out").unwrap();
+        assert!(!m.rows()[at].enabled);
+        m.capabilities["providers"][1]["account_logout"] = json!(true);
+        let l = labels(&m);
+        assert_eq!(l[..2], ["Details", "Rename"]);
+        assert_eq!(l[3..5], ["Limits", "Log out"]);
+        assert!(m.rows()[at].enabled);
+        m.options.selected = at;
+        m.activate();
+        let d = m.dialog.as_ref().unwrap();
+        assert!(d.body[0].starts_with("Sign out of claude-claude-main? Sessions keep"));
+        let sent = m.submit(0, vec![]);
+        assert!(
+            matches!(&sent[..], [Intent::Api(_, a)] if a == &strings(&["account", "logout", "claude:claude-main"]))
+        );
+        // Logged-out accounts offer Log in and no Limits or Log out.
+        m.accounts[1]
+            .details
+            .insert("auth_required".into(), json!(true));
+        let l = labels(&m);
+        assert!(l.contains(&"Log in".to_owned()));
+        assert!(!l.iter().any(|x| x == "Limits" || x == "Log out"));
+    }
+    #[test]
     fn claude_account_login_uses_the_account_provider_capability() {
         let mut m = dual_providers();
         m.accounts[1]
             .details
             .insert("auth_required".into(), json!(true));
         m.go(Page::Account("claude:claude-main".into()));
-        let login = m.rows().iter().position(|r| r.label == "Login").unwrap();
+        let login = m.rows().iter().position(|r| r.label == "Log in").unwrap();
         assert!(m.rows()[login].enabled);
         m.options.selected = login;
         m.activate();
@@ -4979,7 +5320,7 @@ mod tests {
         assert!(
             !m.rows()
                 .iter()
-                .find(|r| r.label == "Login")
+                .find(|r| r.label == "Log in")
                 .unwrap()
                 .enabled
         );
@@ -5010,42 +5351,6 @@ mod tests {
         );
     }
     #[test]
-    fn accounts_page_shows_provider_tags_and_filters_by_provider() {
-        let mut m = dual_providers();
-        m.go(Page::Accounts);
-        let rows = m.rows();
-        assert_eq!(rows[1].label, "Provider: All");
-        let tagged: Vec<_> = rows[3..]
-            .iter()
-            .map(|r| (r.label.clone(), r.preview.clone().unwrap()))
-            .collect();
-        assert_eq!(tagged.len(), 3);
-        assert!(tagged[0].1.starts_with("Codex"));
-        assert!(tagged[1].1.starts_with("Claude Code"));
-        for expect in ["Claude Code", "Codex", "All"] {
-            m.options.selected = 1;
-            m.activate();
-            assert_eq!(m.rows()[1].label, format!("Provider: {expect}"));
-        }
-        m.options.selected = 1;
-        m.activate();
-        assert_eq!(m.rows()[1].label, "Provider: Claude Code");
-        assert_eq!(m.rows().len(), 4);
-        m.options.selected = 3;
-        m.activate();
-        assert_eq!(m.page, Page::Account("claude:claude-main".into()));
-        // A Codex-only inventory has neither filter row nor tags.
-        let mut m = setup();
-        m.go(Page::Accounts);
-        assert_eq!(m.rows()[0].label, "Add Account");
-        assert!(m.rows().iter().all(|r| !r.label.starts_with("Provider")));
-        assert!(
-            m.rows()[2..]
-                .iter()
-                .all(|r| r.preview.as_deref().unwrap().starts_with("Enabled"))
-        );
-    }
-    #[test]
     fn usage_details_label_source_semantics_age_and_missing_windows() {
         let lines = usage_lines(&claude("claude-main"), 400);
         let text = lines.join("\n");
@@ -5061,7 +5366,14 @@ mod tests {
         missing.usage = json!({"state":"missing","observed_at":null,"short":null,"weekly":null});
         let text = usage_lines(&missing, 400).join("\n");
         assert!(text.contains("Status: Usage unavailable"));
-        assert!(text.contains("Observed: unknown"));
+        assert!(!text.contains("Observed"));
+        for bogus in [json!(0), json!(null), json!(-5), json!(10_000)] {
+            let mut g = gemini("gem-main");
+            g.usage["observed_at"] = bogus;
+            let text = usage_lines(&g, 400).join("\n");
+            assert!(!text.contains("Observed") && !text.contains("ago"));
+            assert_eq!(Usage::account_at(&g, 400).age, None);
+        }
         assert!(text.contains("Short window: unavailable"));
         assert!(!text.contains("0%"));
         let mut codex = account(1);
@@ -5176,7 +5488,10 @@ mod tests {
         m.add();
         let d = m.dialog.as_ref().unwrap();
         let buttons: Vec<_> = d.buttons.iter().map(|b| b.label.as_str()).collect();
-        assert_eq!(buttons, ["Codex", "Claude Code", "Gemini CLI", "Cancel"]);
+        assert_eq!(
+            buttons,
+            ["Codex", "Claude Code", "Gemini CLI", "", "Cancel"]
+        );
         m.submit(2, vec![]);
         let d = m.dialog.as_ref().unwrap();
         assert!(d.body[0].starts_with("Gemini CLI account name"));
@@ -5184,28 +5499,6 @@ mod tests {
         let sent = m.submit(0, vec!["gem-two".into()]);
         assert!(
             matches!(&sent[..], [Intent::Api(_, args)] if args == &strings(&["account", "add", "gemini:gem-two"]))
-        );
-        m.go(Page::Accounts);
-        let rows = m.rows();
-        assert!(rows.iter().any(|r| {
-            r.preview
-                .as_deref()
-                .is_some_and(|p| p.starts_with("Gemini CLI"))
-        }));
-        let mut seen = vec![];
-        for _ in 0..4 {
-            m.options.selected = 1;
-            m.activate();
-            seen.push(m.rows()[1].label.clone());
-        }
-        assert_eq!(
-            seen,
-            [
-                "Provider: Claude Code",
-                "Provider: Codex",
-                "Provider: Gemini CLI",
-                "Provider: All"
-            ]
         );
         // Unsupported usage is stated, never 0%; Limits is disabled with the backend reason.
         let u = Usage::account(&gemini("gem-main"));
@@ -5391,6 +5684,25 @@ mod tests {
         assert!(m.login_wait.is_none());
     }
     #[test]
+    fn opened_login_pane_closes_the_popup_so_the_link_is_visible() {
+        let mut m = dual_providers();
+        claude_add(&mut m, "new");
+        let out = m.login_launched(Ok(()));
+        assert!(matches!(&out[..], [Intent::Exit]));
+        assert!(m.login_wait.is_none() && m.dialog.is_none());
+        assert!(
+            m.login_launched(Ok(())).is_empty(),
+            "no wait, nothing to close"
+        );
+    }
+    #[test]
+    fn cancelling_the_wait_says_it_stopped_waiting() {
+        let mut m = dual_providers();
+        claude_add(&mut m, "new");
+        m.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(m.note.starts_with("Stopped waiting for sign-in"));
+    }
+    #[test]
     fn codex_login_dialog_ends_right_after_its_last_option() {
         let mut m = dual_providers();
         m.go(Page::Account("codex:account1".into()));
@@ -5542,11 +5854,12 @@ mod tests {
         let key = "codex:account1";
         m.go(Page::Account(key.into()));
         let labels: Vec<_> = m.rows().iter().map(|r| r.label.clone()).collect();
-        assert_eq!(&labels[..3], ["Details", "Limits", "Rename"]);
-        assert!(!m.rows()[2].enabled, "no account_rename capability");
+        assert_eq!(&labels[..2], ["Details", "Rename"]);
+        assert_eq!(labels[3], "Limits");
+        assert!(!m.rows()[1].enabled, "no account_rename capability");
         m.capabilities["providers"][0]["account_rename"] = json!(true);
-        assert!(m.rows()[2].enabled);
-        m.options.selected = 2;
+        assert!(m.rows()[1].enabled);
+        m.options.selected = 1;
         m.activate();
         let d = m.dialog.as_mut().unwrap();
         assert_eq!(d.title, "Rename account");
@@ -5557,7 +5870,7 @@ mod tests {
         );
         m.dialog = None;
         m.form = Form::None;
-        m.options.selected = 2;
+        m.options.selected = 1;
         m.activate();
         let sent = m.submit(0, vec!["".into()]);
         assert!(
@@ -5579,9 +5892,6 @@ mod tests {
             .insert("display_name".into(), json!("Team Work"));
         assert_eq!(account_title(&m.accounts[0]), "Team Work");
         assert_eq!(account_title(&m.accounts[2]), "account2");
-        m.inline = true;
-        assert!(m.rows().iter().any(|r| r.label == "Team Work"));
-        m.go(Page::Accounts);
         assert!(m.rows().iter().any(|r| r.label == "Team Work"));
         m.sessions = vec![
             json!({"id":"s","name":"S","account_id":"codex:account1","availability":"running"}),

@@ -150,9 +150,10 @@ Add Account first asks for a provider when the backend reports more than one
 implemented provider (`capabilities.providers`). Codex shows the verification
 URL and code. Claude Code returns an interactive login plan; the UI shows the
 exact command to run in a terminal and never runs it or handles tokens. Account
-names are unique across providers. When providers are mixed, Manage Accounts and
-the New Session account step tag each account (Codex / Claude Code) and start with
-a `Provider: All` row that cycles the filter. Resume and Switch account lock the
+names are unique per provider (the same name may exist under several providers;
+UI state is keyed by the provider-qualified ID). Every account is preceded by a
+provider symbol: Codex ⬢, Claude Code ✻, Gemini CLI ✦ (one cell wide; mapping in
+`usage::provider_symbol`). Resume and Switch account lock the
 account step to the session's provider. Usage details name the source, semantics,
 age and reset time; a missing or unusable window is shown as unavailable or unknown,
 never as 0%.
@@ -162,24 +163,19 @@ Session Details, Rename Session (Sessionsation name; the native title follows at
 the next launch or resume) and, when stopped, Start Session. Everything else is
 omitted. Stale or unknown sessions explain why they cannot be started.
 
-Home orders New Session, Manage Sessions, Add Account/Manage Accounts, a dot
-separator and Settings. If every account fits above the bottom controls, accounts
-appear inline without selector circles and Add Account is available. The account/bar
-block is centered, caps bar width at 24 cells and shrinks to fit narrower popups.
-While inventory loads, Home starts with Add Account; Manage Accounts appears only
-when the received account rows exceed the available space.
-Otherwise Manage Accounts provides a scrolling list with `[add account]` first,
-normal circle bullets and white/gray account-name text.
-Enabled/Disabled values share a left-aligned column. Enabled uses the selected or
-dimmed accent; Enabled* needs attention. Disabled is muted gray and has no hover
-usage panel.
-Its highlighted enabled account's usage uses white, unbolded percentage/period text
-and starts one blank line below the list, or below
-the visible-range counter when scrolling.
-Growing the screen returns that list to Home; forms remain open and Back chooses
-the appropriate current layout without losing their account selection.
-Back/Esc returns to the actual previous screen and restores the option that opened
-the submenu, including its scroll position. Refreshed lists retain that focus by
+Home orders New Session, Manage Sessions, Add Account, a dot separator and
+Settings, followed by every account in backend order. There is no separate accounts
+page: the list scrolls when it does not fit and bars shrink (down to 6 cells) on
+narrow screens. Columns are fixed per list: selection lane, provider symbol, names
+padded to one width, then identical-length bars and a shared percentage column.
+A status shown instead of bars is lowercase, in parentheses and centred in the bar
+span. Enter opens the account's own action page. With the backend capability
+`account_reorder`, `m` picks up the focused account (marked `⇅`, `(moving)`),
+Up/Down move it, Enter saves with `account reorder <provider:name> --position <i>`
+(zero-based) and Esc restores the previous order; the footer shows `m: Move` only
+while an account is focused.
+Entering a page from its parent always starts at the first selectable row; Back/Esc
+restores the parent's previous selection and scroll. Refreshed lists retain focus by
 stable identity. Close on Home detaches the viewer without stopping agents.
 
 On Home, the name selector uses `▶`. While a name is selected, other account names

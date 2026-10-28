@@ -53,10 +53,8 @@ impl Panel {
             self.x + 1,
             self.y,
             &clip(title, self.width - 2),
-            Cell {
-                bold: true,
-                ..style
-            },
+            // HERDR draws popup titles in the border's own style, never bold.
+            border,
             false,
         );
     }
