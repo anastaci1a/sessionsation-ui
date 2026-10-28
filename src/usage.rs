@@ -189,14 +189,14 @@ impl Usage {
     pub fn status_label(&self) -> String {
         format!("({})", self.status.to_lowercase())
     }
-    /// Left edge of the status text: centred in the bar span alone, or the bar's
-    /// left edge when the text is wider than the span.
-    pub fn status_x(&self, x: usize, bar: usize) -> usize {
-        x + bar.saturating_sub(UnicodeWidthStr::width(self.status_label().as_str())) / 2
+    /// Left edge of the status text: one column right of the bar's first cell (a
+    /// half-cell cap), never centred; longer text keeps this start and grows right.
+    pub fn status_x(&self, x: usize, _bar: usize) -> usize {
+        x + 1
     }
     pub fn width(&self, bar: usize, digits: usize) -> usize {
         if self.status_only() {
-            UnicodeWidthStr::width(self.status_label().as_str()).max(bar)
+            (UnicodeWidthStr::width(self.status_label().as_str()) + 1).max(bar)
         } else {
             bar + digits + 5 + self.age.as_ref().map_or(0, |a| a.len() + 3)
         }
@@ -1019,12 +1019,10 @@ mod tests {
                         assert_eq!(cell(l.bars + l.bar_width + 1 + l.digits, row), "%");
                     }
                 } else {
-                    // Status text centres inside the same bar span.
+                    // Status text starts one column right of the bar's first cell.
                     let sx = u.status_x(l.bars, l.bar_width);
                     assert_eq!(cell(sx, y), "(");
-                    if UnicodeWidthStr::width(u.status_label().as_str()) <= l.bar_width {
-                        assert!(sx >= l.bars && sx < l.bars + l.bar_width);
-                    }
+                    assert_eq!(sx, l.bars + 1);
                 }
                 y += u.height() + 1;
             }
@@ -1159,23 +1157,22 @@ mod picker_tests {
         assert_eq!(Usage::account(&none).status, "Usage unavailable");
     }
     #[test]
-    fn status_text_is_lowercase_parenthesised_centred_on_the_bar_span() {
+    fn status_text_is_lowercase_parenthesised_and_starts_one_column_into_the_bar() {
         let mut a = account(Some(80.), 80.);
         a.details.insert("enabled".into(), json!(false));
         let u = Usage::account(&a);
         assert_eq!(u.status_label(), "(disabled)");
-        // 10 wide in a 24-cell bar span starting at x=5: (24-10)/2 = 7 -> x=12.
-        assert_eq!(u.status_x(5, 24), 12);
-        // Odd slack rounds toward the left edge.
+        // Always bar_x + 1, whatever the span; never centred.
+        assert_eq!(u.status_x(5, 24), 6);
         assert_eq!(u.status_x(0, 13), 1);
-        // Wider than the span: start at the bar's left edge and grow right.
-        assert_eq!(u.status_x(5, 8), 5);
-        assert_eq!(u.width(8, 2), 10);
+        // Wider than the span: same start, growing right.
+        assert_eq!(u.status_x(5, 8), 6);
+        assert_eq!(u.width(8, 2), 11);
         assert_eq!(u.width(24, 2), 24);
         let mut c = Canvas::new(60, 2);
         u.paint(&mut c, 5, 0, 24, 2);
         let row: String = (0..60).map(|x| c.cells[x].glyph.as_str()).collect();
-        assert_eq!(row.find("(disabled)"), Some(12));
+        assert_eq!(row.find("(disabled)"), Some(6));
         // Selector: exactly one space, then the triangle, right of the text.
         let mut c = Canvas::new(60, 2);
         u.paint_focused(&mut c, 5, 0, 24, 2);
@@ -1186,7 +1183,7 @@ mod picker_tests {
         let mut c = Canvas::new(60, 2);
         u.paint_focused(&mut c, 5, 0, 8, 2);
         let row: String = (0..60).map(|x| c.cells[x].glyph.as_str()).collect();
-        assert_eq!(row.find("(disabled) ◀"), Some(5));
+        assert_eq!(row.find("(disabled) ◀"), Some(6));
     }
     #[test]
     fn bars_show_compact_age_from_sixty_seconds_and_never_dim() {

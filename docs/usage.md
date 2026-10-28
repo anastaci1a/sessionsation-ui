@@ -168,8 +168,8 @@ Settings, followed by every account in backend order. There is no separate accou
 page: the list scrolls when it does not fit and bars shrink (down to 6 cells) on
 narrow screens. Columns are fixed per list: selection lane, provider symbol, names
 padded to one width, then identical-length bars and a shared percentage column.
-A status shown instead of bars is lowercase, in parentheses and centred in the bar
-span. Enter opens the account's own action page. With the backend capability
+A status shown instead of bars is lowercase, in parentheses and starts one column right of the bar start (never centred;
+longer text grows right). Enter opens the account's own action page. With the backend capability
 `account_reorder`, `m` picks up the focused account (marked `⇅`, `(moving)`),
 Up/Down move it, Enter saves with `account reorder <provider:name> --position <i>`
 (zero-based) and Esc restores the previous order; the footer shows `m: Move` only
