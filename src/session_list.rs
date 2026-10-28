@@ -1098,8 +1098,8 @@ mod tests {
                 UnicodeWidthStr::width(&lines[0][..lines[0].find('[').unwrap()]),
                 UnicodeWidthStr::width(&lines[1][..lines[1].find('*').unwrap()])
             );
-            assert!(lines[0].contains("[⬢ a]"));
-            assert!(!lines[1].contains("[⬢ personal]"));
+            assert!(lines[0].contains("[⏣ a]"));
+            assert!(!lines[1].contains("[⏣ personal]"));
             let marker = c.cells[5 * width..6 * width]
                 .iter()
                 .find(|c| c.glyph == "*")

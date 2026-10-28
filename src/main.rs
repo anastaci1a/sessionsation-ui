@@ -110,6 +110,26 @@ enum Message {
     Focused(Result<(), String>),
     Saved(Result<(), String>),
 }
+impl Message {
+    fn kind(&self) -> &'static str {
+        match self {
+            Message::Input(Event::Key(_)) => "key",
+            Message::Input(_) => "input",
+            Message::InputError(_) => "input_error",
+            Message::Background(_) => "background",
+            Message::Inventory(_) => "inventory",
+            Message::Managed(..) => "managed",
+            Message::SessionFocused(_) => "session_focused",
+            Message::LoginLaunched(_) => "login_launched",
+            Message::Theme(_) => "theme",
+            Message::Directory(..) => "directory",
+            Message::Validation(..) => "validation",
+            Message::Receipt(..) => "receipt",
+            Message::Focused(_) => "focused",
+            Message::Saved(_) => "saved",
+        }
+    }
+}
 struct Effects {
     client: Client,
     sender: mpsc::Sender<Message>,
@@ -124,6 +144,9 @@ struct Effects {
 impl Effects {
     fn run(&mut self, effects: Vec<Effect>, app: &App) {
         for effect in effects {
+            if sessionsation_ui::trace::enabled() {
+                sessionsation_ui::trace::event("effect", format_args!("{}", effect_kind(&effect)));
+            }
             let tx = self.sender.clone();
             let client = self.client.clone();
             match effect {
@@ -320,6 +343,18 @@ impl Effects {
         });
     }
 }
+fn effect_kind(effect: &Effect) -> String {
+    match effect {
+        Effect::Api(token, args) => format!("api#{token} {}", args.join(" ")),
+        Effect::FocusSession(..) => "focus_session".into(),
+        Effect::LaunchLogin(_) => "launch_login".into(),
+        Effect::Inspect(..) => "inspect".into(),
+        Effect::Validate(..) => "validate".into(),
+        Effect::Start(_) => "start".into(),
+        Effect::Save => "save".into(),
+        Effect::Exit => "exit".into(),
+    }
+}
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -471,11 +506,18 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
                     return;
                 }
             }
-            if !event::poll(Duration::from_millis(50)).unwrap_or(true) {
+            let polled = Instant::now();
+            let ready = event::poll(Duration::from_millis(50)).unwrap_or(true);
+            let poll_us = polled.elapsed().as_micros();
+            if poll_us > 80_000 {
+                sessionsation_ui::trace::event("poll_slow", format_args!("us={poll_us}"));
+            }
+            if !ready {
                 continue;
             }
             match event::read() {
                 Ok(e) => {
+                    sessionsation_ui::trace::event("input", format_args!("{e:?}"));
                     let (events, color) = colors.event(e);
                     if let Some(color) = color
                         && input.blocking_send(Message::Background(color)).is_err()
@@ -499,13 +541,32 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     let (output, frames) = std::sync::mpsc::sync_channel::<Canvas>(1);
     let writer = std::thread::spawn(move || {
         let mut previous = None;
+        let mut rotation = 0;
         while let Ok(canvas) = frames.recv() {
-            let delta = canvas.diff(previous.as_ref());
+            let diffed = Instant::now();
+            // Pacing keeps star-sweep bursts from backing up a slow terminal link
+            // and, through it, HERDR's key forwarding. Frames arrive every 50 ms,
+            // so deferred stars catch up without a dedicated timer.
+            let (delta, shown) = canvas.paced_diff(
+                previous.as_ref(),
+                sessionsation_ui::render::AMBIENT_CELLS_PER_FRAME,
+                &mut rotation,
+            );
+            let diff_us = diffed.elapsed().as_micros();
+            let written = Instant::now();
             if std::io::stderr().write_all(delta.as_bytes()).is_err() {
                 break;
             }
             let _ = std::io::stderr().flush();
-            previous = Some(canvas);
+            sessionsation_ui::trace::event(
+                "write",
+                format_args!(
+                    "bytes={} diff_us={diff_us} write_us={}",
+                    delta.len(),
+                    written.elapsed().as_micros()
+                ),
+            );
+            previous = Some(shown);
         }
     });
     let cache_path = pref.with_file_name("state-cache.json");
@@ -550,26 +611,36 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     let mut term_signal =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut hup_signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
+    let traced = sessionsation_ui::trace::enabled();
     while !app.exit {
         if app.dirty {
+            let painted = Instant::now();
             let canvas = app.paint(
                 &mut field,
                 started.elapsed().as_millis() as u64,
                 dimensions.0,
                 dimensions.1,
             );
-            if output.try_send(canvas).is_ok() {
+            let paint_us = painted.elapsed().as_micros();
+            let sent = output.try_send(canvas).is_ok();
+            if sent {
                 app.dirty = false;
+            }
+            if traced {
+                sessionsation_ui::trace::event("paint", format_args!("us={paint_us} sent={sent}"));
             }
         }
         let mut next = vec![];
+        let waited = Instant::now();
+        let arm: &str;
+        let woke: Instant;
         tokio::select! {
-         _=term_signal.recv()=>{app.exit=true;},_ = hup_signal.recv()=>{app.exit=true;},
-         _=frame.tick()=>{next=app.flush_navigation();app.dirty=true;},
-         _=refresh.tick(),if !inventory_pending=>{inventory_pending=true;effects.inventory();let intents=app.manager.refresh_poll();next=app.management(intents);},
-         _=session_refresh.tick()=>{next=app.refresh_live();},
-         _=receipt.tick(),if app.request.is_some()&&!app.success&&receipt_pending.as_deref()!=app.request.as_ref().and_then(|r|r["request_id"].as_str())=>{receipt_pending=app.request.as_ref().and_then(|r|r["request_id"].as_str()).map(str::to_owned);effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
-         message=rx.recv()=>match message.context("Input channel closed")? {
+         _=term_signal.recv()=>{arm="term";woke=Instant::now();app.exit=true;},_ = hup_signal.recv()=>{arm="hup";woke=Instant::now();app.exit=true;},
+         _=frame.tick()=>{arm="frame";woke=Instant::now();next=app.flush_navigation();app.dirty=true;},
+         _=refresh.tick(),if !inventory_pending=>{arm="refresh";woke=Instant::now();inventory_pending=true;effects.inventory();let intents=app.manager.refresh_poll();next=app.management(intents);},
+         _=session_refresh.tick()=>{arm="session_refresh";woke=Instant::now();next=app.refresh_live();},
+         _=receipt.tick(),if app.request.is_some()&&!app.success&&receipt_pending.as_deref()!=app.request.as_ref().and_then(|r|r["request_id"].as_str())=>{arm="receipt";woke=Instant::now();receipt_pending=app.request.as_ref().and_then(|r|r["request_id"].as_str()).map(str::to_owned);effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
+         message=rx.recv()=>{woke=Instant::now();arm=message.as_ref().map_or("closed",Message::kind);match message.context("Input channel closed")? {
          Message::Background(color)=>{app.terminal_background=color;app.dirty=true;},
          Message::Input(Event::Key(k))=>{if prefixes.matches(k){app.exit=true;}else{next=app.key(k);}},
           Message::Input(Event::Paste(s))=>{next=app.paste(&s);},
@@ -596,7 +667,21 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           if app.launch_dialog&&let Some(d)=&mut app.manager.dialog{d.body=vec![app.error.clone()];if app.success || app.error.starts_with("Launch failed:"){d.finish();}}app.dirty=true;},
           Message::Focused(result)=>{match result { Ok(())=>{app.prefs.last_account=app.draft.account.clone();next.push(Effect::Save);},Err(e)=>{app.error=format!("Session is running; tab focus failed: {e}. Esc closes.");}}app.dirty=true;},
           Message::Saved(result)=>{if let Err(e)=result{app.error=format!("Preferences were not saved: {e}");if !app.success{app.page=Page::Config;}app.dirty=true;}else if app.success && !app.launch_background {app.exit=true;}},
-         }
+         }}
+        }
+        if traced {
+            sessionsation_ui::trace::event(
+                "arm",
+                format_args!(
+                    "{arm} wait_us={} apply_us={} effects={}",
+                    woke.duration_since(waited).as_micros(),
+                    woke.elapsed().as_micros(),
+                    next.len()
+                ),
+            );
+            if arm == "frame" {
+                sessionsation_ui::trace::flush();
+            }
         }
         effects.run(next, &app);
     }

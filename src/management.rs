@@ -4503,7 +4503,7 @@ mod tests {
         m.go(Page::Home);
         m.paint(&mut c, 29);
         let text = screen_text(&c);
-        assert!(text.contains("✻ work") && text.contains("⬢ work"));
+        assert!(text.contains("✻ work") && text.contains("⏣ work"));
     }
     #[test]
     fn home_list_scrolls_instead_of_opening_a_submenu_and_keeps_the_selection_visible() {

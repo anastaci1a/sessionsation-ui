@@ -152,7 +152,7 @@ URL and code. Claude Code returns an interactive login plan; the UI shows the
 exact command to run in a terminal and never runs it or handles tokens. Account
 names are unique per provider (the same name may exist under several providers;
 UI state is keyed by the provider-qualified ID). Every account is preceded by a
-provider symbol: Codex ⬢, Claude Code ✻, Gemini CLI ✦ (one cell wide; mapping in
+provider symbol: Codex ⏣, Claude Code ✻, Gemini CLI ✦ (one cell wide; mapping in
 `usage::provider_symbol`). Resume and Switch account lock the
 account step to the session's provider. Usage details name the source, semantics,
 age and reset time; a missing or unusable window is shown as unavailable or unknown,
@@ -178,7 +178,7 @@ Entering a page from its parent always starts at the first selectable row; Back/
 restores the parent's previous selection and scroll. Refreshed lists retain focus by
 stable identity. Close on Home detaches the viewer without stopping agents.
 
-On Home, the name selector uses `▶`. While a name is selected, other account names
+On Home, the name selector uses the outline `▷` (same width as `▶`; the right-side `◀` stays filled). While a name is selected, other account names
 use the darker bullet hue. Focus on any account name or usage/status also dims
 the top-option bullets, just like Close focus. Selecting a top option or Close dims all account names,
 bars and text statuses; normal deselected gray-white labels/percentages retain

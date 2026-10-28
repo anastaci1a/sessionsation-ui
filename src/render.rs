@@ -36,7 +36,15 @@ pub struct Canvas {
     transient: Vec<bool>,
     baseline_blocked: Vec<bool>,
     foreground: Vec<bool>,
+    /// Star-field cells not covered by any text; only these may be paced.
+    ambient: Vec<bool>,
 }
+/// Star-field cell updates written per frame. The periodic sweep changes most
+/// stars at once (about 30 kB per frame at 180x30); a slow terminal link (SSH)
+/// then backs up behind HERDR's client, which stops reading keys until the burst
+/// drains. Deferred stars are written next frame with their current value, so
+/// text and selection changes are never delayed and nothing is lost.
+pub const AMBIENT_CELLS_PER_FRAME: usize = 200;
 impl Canvas {
     pub fn new(w: usize, h: usize) -> Self {
         Self {
@@ -50,6 +58,7 @@ impl Canvas {
             transient: vec![false; w * h],
             baseline_blocked: vec![false; w * h],
             foreground: vec![false; w * h],
+            ambient: vec![false; w * h],
         }
     }
     /// Composite a temporary panel without feeding its occlusion into star lifetimes.
@@ -82,6 +91,7 @@ impl Canvas {
             }
             {
                 self.foreground[y * self.width + x] = true;
+                self.ambient[y * self.width + x] = false;
                 self.cells[y * self.width + x] = Cell {
                     glyph: glyph.into(),
                     bg: style.bg.or(self.background),
@@ -89,6 +99,7 @@ impl Canvas {
                 };
                 for offset in 1..width {
                     self.foreground[y * self.width + x + offset] = true;
+                    self.ambient[y * self.width + x + offset] = false;
                     self.cells[y * self.width + x + offset] = Cell {
                         glyph: String::new(),
                         bg: style.bg.or(self.background),
@@ -143,6 +154,43 @@ impl Canvas {
         }
     }
     pub fn diff(&self, old: Option<&Self>) -> String {
+        self.encode(old, |_| true)
+    }
+    /// Like [`Canvas::diff`], but writes at most `limit` star-only cell changes,
+    /// round-robin from `rotation`. Returns the delta and the canvas the terminal
+    /// shows afterwards, which is the baseline for the next frame.
+    pub fn paced_diff(
+        &self,
+        shown: Option<&Self>,
+        limit: usize,
+        rotation: &mut usize,
+    ) -> (String, Self) {
+        let Some(old) = shown.filter(|o| o.width == self.width && o.height == self.height) else {
+            return (self.diff(None), self.clone());
+        };
+        let deferrable = (0..self.cells.len())
+            .filter(|&i| {
+                self.ambient[i]
+                    && old.ambient[i]
+                    && old.cells[i] != self.cells[i]
+                    && old.cells[i].bg == self.cells[i].bg
+            })
+            .collect::<Vec<_>>();
+        let mut deferred = vec![false; self.cells.len()];
+        if deferrable.len() > limit {
+            let start = deferrable.partition_point(|&i| i < *rotation);
+            for k in limit..deferrable.len() {
+                deferred[deferrable[(start + k) % deferrable.len()]] = true;
+            }
+            *rotation = deferrable[(start + limit) % deferrable.len()];
+        }
+        let mut next = self.clone();
+        for (i, _) in deferred.iter().enumerate().filter(|(_, d)| **d) {
+            next.cells[i] = old.cells[i].clone();
+        }
+        (self.encode(Some(old), |i| !deferred[i]), next)
+    }
+    fn encode(&self, old: Option<&Self>, write: impl Fn(usize) -> bool) -> String {
         let old = old.filter(|o| o.width == self.width && o.height == self.height);
         let mut out = String::new();
         let cursor = self
@@ -155,7 +203,7 @@ impl Canvas {
         let mut last_style = None;
         let mut previous: Option<(usize, usize)> = None;
         for (i, c) in self.cells.iter().enumerate() {
-            if c.glyph.is_empty() || old.is_some_and(|o| o.cells[i] == *c) {
+            if c.glyph.is_empty() || old.is_some_and(|o| o.cells[i] == *c) || !write(i) {
                 continue;
             }
             let (x, y) = (i % self.width, i / self.width);
@@ -659,6 +707,7 @@ impl Field {
                 ..Cell::default()
             };
             canvas.transient[index] = twinkle.is_some();
+            canvas.ambient[index] = true;
         }
         canvas
     }
@@ -666,6 +715,89 @@ impl Field {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Live trace: every 4 s the star sweep rewrote ~770 stars per frame (about
+    /// 24 kB) for half a second. Over a ~300-500 kB/s SSH link HERDR's client
+    /// blocked on that output and held keys for 200-800 ms. The model link below
+    /// drains 250 kB/s; paced frames must never queue a key change behind it.
+    #[test]
+    fn star_sweep_is_paced_so_a_slow_link_never_queues_key_changes() {
+        fn worst_backlog_ms(paced: bool) -> u64 {
+            let mut field = Field::new(180, 30, 1967);
+            let (mut shown, mut rotation, mut queued, mut worst) = (None::<Canvas>, 0, 0u64, 0);
+            for (frame, now) in (4000..12000).step_by(50).enumerate() {
+                let mut canvas = field.paint(now);
+                // A held arrow key moves the highlighted row every frame.
+                let label = if frame % 2 == 0 {
+                    "> Home"
+                } else {
+                    "> Sessions"
+                };
+                canvas.text(4, 1, label, Cell::default(), false);
+                let delta = if paced {
+                    let (delta, next) =
+                        canvas.paced_diff(shown.as_ref(), AMBIENT_CELLS_PER_FRAME, &mut rotation);
+                    // Text is never deferred: the terminal shows this frame's row.
+                    assert_eq!(
+                        next.cells[180 + 4..180 + 14],
+                        canvas.cells[180 + 4..180 + 14]
+                    );
+                    shown = Some(next);
+                    delta
+                } else {
+                    let delta = canvas.diff(shown.as_ref());
+                    shown = Some(canvas);
+                    delta
+                };
+                if frame > 0 {
+                    queued = (queued + delta.len() as u64).saturating_sub(12_500);
+                    worst = worst.max(queued * 1000 / 250_000);
+                }
+            }
+            // Deferred stars catch up once the sweep passes.
+            let latest = field.paint(12_000);
+            let mut rotation = 0;
+            let mut shown = shown.unwrap();
+            for _ in 0..4 {
+                shown = latest
+                    .paced_diff(Some(&shown), AMBIENT_CELLS_PER_FRAME, &mut rotation)
+                    .1;
+            }
+            assert!(shown.cells == latest.cells || !paced);
+            worst
+        }
+        assert!(
+            worst_backlog_ms(false) >= 200,
+            "model must reproduce the stall"
+        );
+        let paced = worst_backlog_ms(true);
+        assert!(
+            paced < 50,
+            "key change queued {paced} ms behind star output"
+        );
+    }
+    #[test]
+    fn paced_diff_never_defers_text_or_cells_leaving_the_star_field() {
+        let mut old = Canvas::new(4, 1);
+        for i in 0..4 {
+            old.cells[i].glyph = "*".into();
+            old.ambient[i] = true;
+        }
+        let mut new = old.clone();
+        for cell in &mut new.cells {
+            cell.fg = [1, 2, 3];
+        }
+        new.text(3, 0, "x", Cell::default(), false);
+        let mut rotation = 0;
+        let (delta, shown) = new.paced_diff(Some(&old), 1, &mut rotation);
+        assert_eq!(shown.cells[3].glyph, "x");
+        assert_eq!(shown.cells.iter().filter(|c| c.fg == [1, 2, 3]).count(), 1);
+        assert_eq!(delta.matches('*').count(), 1);
+        // Round-robin: the next frame continues after the star written last.
+        let (_, shown) = new.paced_diff(Some(&shown), 1, &mut rotation);
+        assert_eq!(shown.cells.iter().filter(|c| c.fg == [1, 2, 3]).count(), 2);
+        let (_, shown) = new.paced_diff(Some(&shown), 1, &mut rotation);
+        assert_eq!(shown.cells, new.cells);
+    }
     #[test]
     fn native_cursor_follows_frames_without_overriding_terminal_style_or_blink() {
         let mut frame = Canvas::new(20, 4);

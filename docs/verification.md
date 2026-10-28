@@ -28,6 +28,15 @@ credentials. Native provider acceptance belongs to the backend's
 [verification guidance](https://github.com/anastaci1a/sessionsation/blob/main/docs/operations.md).
 A GIF/PTY pass is not native account-transfer or model compatibility evidence.
 
+## Input-latency trace
+
+Set `SESSIONSATION_UI_TRACE=<file>` for a popup run to append monotonic
+microsecond records of input events, loop wake-ups and handling time, paints,
+terminal writes (bytes and duration), effects and child-process spawns. It is
+off by default and holds no credentials. The writer paces star-field updates to
+`AMBIENT_CELLS_PER_FRAME` so the periodic sweep cannot back up a slow (SSH)
+terminal link behind HERDR's client, which would otherwise hold keys back.
+
 ## Animated demo
 
 The demo records a real HERDR TUI containing the real Rust popup. The backend

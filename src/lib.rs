@@ -29,3 +29,5 @@ pub mod host_config;
 pub mod host_keys;
 
 pub mod launch_intent;
+
+pub mod trace;

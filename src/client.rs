@@ -24,7 +24,20 @@ impl std::error::Error for ApiRejected {}
 // synchronously. A cold executable or slow filesystem must not freeze the
 // single-threaded input/render runtime during each inventory poll.
 async fn spawn_child(mut command: tokio::process::Command) -> Result<tokio::process::Child> {
-    Ok(tokio::task::spawn_blocking(move || command.spawn()).await??)
+    Ok(tokio::task::spawn_blocking(move || {
+        let started = std::time::Instant::now();
+        let child = command.spawn();
+        crate::trace::event(
+            "spawn",
+            format_args!(
+                "{:?} us={}",
+                command.as_std().get_args().last().unwrap_or_default(),
+                started.elapsed().as_micros()
+            ),
+        );
+        child
+    })
+    .await??)
 }
 #[derive(Clone, Debug)]
 pub struct Client {
@@ -337,6 +350,10 @@ impl Client {
         let out = tokio::time::timeout(Duration::from_secs(20), child.wait_with_output())
             .await
             .context("BACKEND_TIMEOUT: reconcile Start using its request ID")??;
+        crate::trace::event(
+            "api_done",
+            format_args!("{args:?} bytes={}", out.stdout.len()),
+        );
         let body: Value = serde_json::from_slice(if out.status.success() {
             &out.stdout
         } else {
@@ -374,6 +391,10 @@ impl Client {
         })
         .await
         .context("HERDR timed out")??;
+        crate::trace::event(
+            "host_done",
+            format_args!("{args:?} bytes={}", out.stdout.len()),
+        );
         ensure!(
             out.status.success(),
             "HERDR: {}",

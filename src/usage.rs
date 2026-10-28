@@ -191,6 +191,42 @@ impl Usage {
     }
     /// Left edge of the status text: one column right of the bar's first cell (a
     /// half-cell cap), never centred; longer text keeps this start and grows right.
+    /// Age suffix colour: the dimmest secondary grey, one level up while the row
+    /// is selected (the plain unselected menu-item grey); never bold.
+    fn age_color(selected: bool) -> [u8; 3] {
+        if selected {
+            crate::widgets::SECONDARY
+        } else {
+            crate::widgets::MUTED
+        }
+    }
+    /// Recolour an already painted age suffix for a selected account row.
+    pub fn recolor_age(
+        &self,
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        bar: usize,
+        digits: usize,
+        selected: bool,
+    ) {
+        let Some(age) = &self.age else { return };
+        if self.status_only() {
+            return;
+        }
+        for (row, window) in self.windows.iter().enumerate() {
+            let main =
+                UnicodeWidthStr::width(format!("{:>digits$}% {}", "0", window.label).as_str());
+            let start = x + bar + 1 + main;
+            for col in start..start + age.len() + 3 {
+                if y + row < canvas.height && col < canvas.width {
+                    let cell = &mut canvas.cells[(y + row) * canvas.width + col];
+                    cell.fg = Self::age_color(selected);
+                    cell.bold = false;
+                }
+            }
+        }
+    }
     pub fn status_x(&self, x: usize, _bar: usize) -> usize {
         x + 1
     }
@@ -381,14 +417,7 @@ impl Usage {
                 .remaining
                 .map(|p| format!("{p:.0}"))
                 .unwrap_or_else(|| "?".into());
-            let label = format!(
-                "{:>digits$}% {}{}",
-                percent,
-                window.label,
-                self.age
-                    .as_ref()
-                    .map_or(String::new(), |a| format!(" ({a})"))
-            );
+            let label = format!("{:>digits$}% {}", percent, window.label);
             canvas.text(
                 x + bar + 1,
                 y + row,
@@ -404,6 +433,18 @@ impl Usage {
                 },
                 false,
             );
+            if let Some(age) = &self.age {
+                canvas.text(
+                    x + bar + 1 + UnicodeWidthStr::width(label.as_str()),
+                    y + row,
+                    &format!(" ({age})"),
+                    Cell {
+                        fg: Self::age_color(selected),
+                        ..Cell::default()
+                    },
+                    false,
+                );
+            }
         }
     }
 }
@@ -451,7 +492,7 @@ pub fn provider_symbol(provider: &str) -> &'static str {
     match provider {
         "claude" => "✻",
         "gemini" => "✦",
-        _ => "⬢",
+        _ => "⏣",
     }
 }
 /// Smallest bar the home list shrinks to on narrow screens.
@@ -554,7 +595,7 @@ impl AccountsLayout {
             }
             let active = selected == Some(index) && !back;
             if active && !usage_focus {
-                canvas.accent_text(self.left, y, "▶", Accent::default());
+                canvas.accent_text(self.left, y, "▷", Accent::default());
             }
             let name_style = Accent {
                 brightness: if depressed || name_focus && !active {
@@ -595,6 +636,9 @@ impl AccountsLayout {
                     self.digits,
                     active && usage.status == "Login required",
                 );
+            }
+            if active {
+                usage.recolor_age(canvas, self.bars, y, self.bar_width, self.digits, true);
             }
             if moving_row {
                 canvas.accent_text(
@@ -958,13 +1002,36 @@ mod tests {
         assert_eq!(Usage::account(&a).status, "Usage unavailable");
     }
     #[test]
+    fn account_cursor_is_an_outline_triangle_without_shifting_the_row() {
+        assert_eq!(
+            UnicodeWidthStr::width("▷"),
+            UnicodeWidthStr::width("▶"),
+            "outline cursor keeps the filled cursor's width"
+        );
+        let a: Account = serde_json::from_value(
+            json!({"id":"claude:z","provider":"claude","selectable":true,"enabled":true}),
+        )
+        .unwrap();
+        let accounts = vec![a];
+        let l = AccountsLayout::fit(&accounts, 60);
+        let mut idle = Canvas::new(60, 6);
+        let mut active = Canvas::new(60, 6);
+        l.paint(&mut idle, &accounts, 1, 6, 0, None, false, false, None);
+        l.paint(&mut active, &accounts, 1, 6, 0, Some(0), false, false, None);
+        assert_eq!(active.cells[60 + l.left].glyph, "▷");
+        assert!(active.cells.iter().all(|c| c.glyph != "▶"));
+        for i in (0..60 * 6).filter(|&i| i != 60 + l.left) {
+            assert_eq!(idle.cells[i].glyph, active.cells[i].glyph, "cell {i} moved");
+        }
+    }
+    #[test]
     fn provider_symbols_are_one_cell_wide_and_distinct() {
         let all = ["codex", "claude", "gemini"].map(provider_symbol);
-        assert_eq!(all, ["⬢", "✻", "✦"]);
+        assert_eq!(all, ["⏣", "✻", "✦"]);
         for symbol in all {
             assert_eq!(UnicodeWidthStr::width(symbol), 1, "{symbol}");
         }
-        assert_eq!(provider_symbol("unknown"), "⬢");
+        assert_eq!(provider_symbol("unknown"), "⏣");
     }
     #[test]
     fn mixed_providers_share_symbol_name_and_bar_columns_at_every_width() {
@@ -1184,6 +1251,36 @@ mod picker_tests {
         u.paint_focused(&mut c, 5, 0, 8, 2);
         let row: String = (0..60).map(|x| c.cells[x].glyph.as_str()).collect();
         assert_eq!(row.find("(disabled) ◀"), Some(6));
+    }
+    #[test]
+    fn age_suffix_is_muted_grey_unselected_and_menu_grey_unbold_when_selected() {
+        let a = claude_account(json!({"state":"fresh","observed_at":100,
+            "short":{"duration_minutes":300,"used_percent":40},"weekly":null}));
+        let u = Usage::account_at(&a, 100 + 42 * 60);
+        let age_at = |c: &Canvas| {
+            let row: String = (0..60).map(|x| c.cells[x].glyph.as_str()).collect();
+            let byte = row.find("(42m ago)").unwrap();
+            row[..byte].chars().count()
+        };
+        let mut c = Canvas::new(60, 2);
+        u.paint(&mut c, 0, 0, 12, 2);
+        let x = age_at(&c);
+        assert_eq!(c.cells[x].fg, crate::widgets::MUTED);
+        assert!(!c.cells[x].bold);
+        // The value text before it keeps its own colour.
+        assert_eq!(c.cells[x - 6].fg, crate::widgets::SECONDARY);
+        // Selected (focused row): the unselected menu-item grey, still not bold.
+        let mut c = Canvas::new(60, 2);
+        u.paint_selected(&mut c, 0, 0, 12, 2, true);
+        assert_eq!(c.cells[x].fg, crate::widgets::SECONDARY);
+        assert!(!c.cells[x].bold);
+        // A selected home row recolours an already painted suffix.
+        let mut c = Canvas::new(60, 2);
+        u.paint(&mut c, 0, 0, 12, 2);
+        u.recolor_age(&mut c, 0, 0, 12, 2, true);
+        assert_eq!(c.cells[x].fg, crate::widgets::SECONDARY);
+        assert!(!c.cells[x].bold);
+        assert_eq!(c.cells[x - 1].fg, crate::widgets::SECONDARY);
     }
     #[test]
     fn bars_show_compact_age_from_sixty_seconds_and_never_dim() {

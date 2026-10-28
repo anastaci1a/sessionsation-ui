@@ -1950,7 +1950,7 @@ mod tests {
         assert!(
             lines(&c)
                 .iter()
-                .any(|l| l.contains("⬢ b") && l.contains("Login required"))
+                .any(|l| l.contains("⏣ b") && l.contains("Login required"))
         );
         assert_eq!(
             (
@@ -2566,7 +2566,7 @@ mod tests {
                 assert_eq!(
                     canvas.cells[0].glyph,
                     if row.symbol.is_some() {
-                        "⬢"
+                        "⏣"
                     } else if index == 0 {
                         "●"
                     } else {
