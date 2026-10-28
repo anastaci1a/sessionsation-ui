@@ -40,7 +40,7 @@ pub fn describe(text: &str) -> String {
             "Another action is still changing this session. Check its progress in Operations first."
         }
         "SESSION_STALE" => {
-            "This Claude Code session's process is no longer verified. Refresh Manage Sessions; nothing was started or resumed."
+            "This session's process is no longer verified. Refresh Manage Sessions; nothing was started or resumed."
         }
         "UNSUPPORTED_PROVIDER_OPERATION" => {
             "This provider does not support that action. No change was made."

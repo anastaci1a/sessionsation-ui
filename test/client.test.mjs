@@ -95,6 +95,8 @@ test('usage summary never turns missing, partial or unusable data into 0%',()=>{
   assert.equal(usageSummary({usage:{state:'partial',observed_at:1,short:win(300,40),weekly:null}}),'5h 60% / wk unknown');
   assert.equal(usageSummary({usage:{state:'stale',observed_at:1,short:null,weekly:win(10080,10)}}),'5h unknown / wk 90% (stale)');
   for (const state of ['missing','no_windows','error']) assert.equal(usageSummary({usage:{state,observed_at:1,short:win(300,0),weekly:null}}),'usage unavailable');
+  assert.equal(usageSummary({usage:{state:'unsupported',observed_at:null,short:null,weekly:null}}),'usage unsupported');
+  assert.equal(providerLabel('gemini'),'Gemini CLI');
   assert.equal(usageSummary({usage:{observed_at:null,short:null,weekly:null}}),'usage unavailable');
   assert.equal(usageSummary({usage:{observed_at:1,short:win(300,Number.NaN),weekly:win(10080,150)}}),'5h unknown / wk unknown');
 });

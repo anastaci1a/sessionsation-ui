@@ -51,7 +51,7 @@ export function executePlan(plan, {exec=process.execve, chdir=process.chdir, env
 }
 export const targetArgs = s => ['--session',s.id,'--expected-generation',s.generation];
 export const display = value => String(value??'').replace(/[\x00-\x1f\x7f-\x9f]/g,'');
-export const PROVIDER_LABELS={codex:'Codex',claude:'Claude Code'};
+export const PROVIDER_LABELS={codex:'Codex',claude:'Claude Code',gemini:'Gemini CLI'};
 export const providerOf=a=>a?.provider??String(a?.id??'').split(':')[0]??'codex';
 export const providerLabel=p=>PROVIDER_LABELS[p]??display(p);
 /** Providers the backend implements and this client has a flow for. */
@@ -62,6 +62,7 @@ const windowText=(w,duration)=>w&&w.duration_minutes===duration&&Number.isFinite
 /** Remaining 5h/weekly usage; a missing window or unusable state is "unknown", never 0%. */
 export function usageSummary(a) {
   const u=a?.usage??{}; const state=u.state??a?.usage_state;
+  if (state==='unsupported') return 'usage unsupported';
   if (['missing','no_windows','error'].includes(state)||!u.observed_at) return 'usage unavailable';
   return `5h ${windowText(u.short,300)} / wk ${windowText(u.weekly,10080)}${state==='stale'||a.usage_fresh===false?' (stale)':''}`;
 }

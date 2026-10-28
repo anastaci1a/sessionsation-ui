@@ -70,6 +70,7 @@ fn add_reason(s: &Value) -> String {
         .unwrap_or("");
     match reason.split_once(": ") {
         Some((_, text)) if !text.trim().is_empty() => text.trim().to_owned(),
+        _ if reason == "NO_NATIVE_ATTACH" => "no native attach".into(),
         _ if reason.is_empty() || reason.bytes().all(|b| b.is_ascii_uppercase() || b == b'_') => {
             "unavailable".into()
         }
@@ -83,6 +84,16 @@ fn account_tag(s: &Value) -> String {
         .filter(|l| !l.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| short_name(s["account_id"].as_str().unwrap_or("?")))
+}
+pub fn is_gemini(s: &Value) -> bool {
+    s["provider"] == "gemini"
+        || s["account_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("gemini:"))
+}
+/// Claude Code and Gemini CLI sessions share one capability-gated action set.
+pub fn is_native_provider(s: &Value) -> bool {
+    is_claude(s) || is_gemini(s)
 }
 pub fn is_claude(s: &Value) -> bool {
     s["provider"] == "claude"
@@ -145,7 +156,7 @@ fn claude_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     ]
 }
 pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
-    if is_claude(s) {
+    if is_native_provider(s) {
         return claude_actions(s, resume);
     }
     let c = &s["capabilities"];
@@ -291,6 +302,10 @@ pub fn duration(seconds: i64) -> String {
 /// cli-main-menu/select.bash: ten Braille frames, one frame every 100 ms.
 pub fn spinner(now_ms: u64) -> &'static str {
     ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][(now_ms / 100 % 10) as usize]
+}
+/// Gemini CLI's ink-spinner `dots`: one Braille frame every 80 ms, never bold.
+pub fn gemini_spinner(now_ms: u64) -> &'static str {
+    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][(now_ms / 80 % 10) as usize]
 }
 /// Claude Code's own busy glyphs, captured from 2.1.312: a ping-pong cycle of
 /// single-cell frames, one frame every 120 ms, always at normal weight.
@@ -545,7 +560,9 @@ pub fn paint_with_archives(
                 if options.back {
                     style.fg = style.fg.map(|n| (u16::from(n) * 60 / 100) as u8);
                 }
-                let glyph = if is_claude(session) {
+                let glyph = if is_gemini(session) {
+                    gemini_spinner(now_ms)
+                } else if is_claude(session) {
                     claude_spinner(now_ms)
                 } else {
                     spinner(now_ms)
@@ -741,6 +758,20 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn gemini_spinner_is_ink_dots_at_80ms_and_distinct_from_codex() {
+        let frames: Vec<_> = (0..10).map(|i| gemini_spinner(i * 80)).collect();
+        assert_eq!(frames, ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]);
+        assert_eq!(gemini_spinner(79), "⠋");
+        assert_eq!(gemini_spinner(800), "⠋");
+        assert_eq!(spinner(80), "⠋");
+        assert_eq!(spinner(100), "⠙");
+        assert_eq!(gemini_spinner(100), "⠙");
+        assert!(
+            is_gemini(&json!({"account_id":"gemini:x"}))
+                && !is_claude(&json!({"provider":"gemini"}))
+        );
     }
     #[test]
     fn claude_spinner_ping_pongs_at_120ms_per_frame() {

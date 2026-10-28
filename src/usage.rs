@@ -72,6 +72,8 @@ impl Usage {
                     .is_some_and(|v| v == "AUTH_REQUIRED")
             {
                 "Login required"
+            } else if state == Some("unsupported") {
+                "Usage unsupported"
             } else if matches!(state, Some("missing" | "no_windows" | "error"))
                 || a.usage["observed_at"].as_i64().is_none()
             {
@@ -899,6 +901,15 @@ mod picker_tests {
     }
     fn claude_account(usage: serde_json::Value) -> Account {
         serde_json::from_value(json!({"id":"claude:claude-main","provider":"claude","selectable":true,"usage_fresh":true,"enabled":true,"usage":usage})).unwrap()
+    }
+    #[test]
+    fn unsupported_usage_is_a_status_never_zero_percent() {
+        let a: Account = serde_json::from_value(json!({"id":"gemini:g","provider":"gemini","selectable":true,"enabled":true,"usage_fresh":false,"usage_state":"unsupported","usage":{"state":"unsupported","observed_at":null,"short":null,"weekly":null}})).unwrap();
+        let u = Usage::account(&a);
+        assert_eq!(u.status, "Usage unsupported");
+        assert!(u.status_only());
+        assert_eq!(u.height(), 1);
+        assert_eq!(a.provider(), "gemini");
     }
     #[test]
     fn missing_error_and_empty_claude_usage_is_unavailable_never_zero_percent() {

@@ -254,7 +254,10 @@ fn usage_lines(a: &Account, now: i64) -> Vec<String> {
     if let Some(state) = crate::usage::usage_state(a) {
         body.push(format!("Usage state: {}", clean(state)));
     }
-    if let Some(source) = a.usage["source"].as_str() {
+    if let Some(source) = a.usage["source"]
+        .as_str()
+        .or_else(|| a.details.get("usage_source").and_then(Value::as_str))
+    {
         body.push(format!("Source: {}", clean(source)));
     }
     if let Some(semantics) = a.usage["semantics"].as_str() {
@@ -278,6 +281,9 @@ fn usage_lines(a: &Account, now: i64) -> Vec<String> {
                         crate::status::local_time(t)
                     ))
             ),
+            (_, None) if crate::usage::usage_state(a) == Some("unsupported") => {
+                format!("{label}: usage unsupported")
+            }
             (true, None) => format!("{label}: usage unknown"),
             (false, _) => format!("{label}: unavailable"),
         });
@@ -430,6 +436,20 @@ impl Manager {
             })
             .filter(|r| !r.trim().is_empty())
     }
+    fn limits_account_row(&self, key: &str, removed: bool) -> Row {
+        let provider = self.provider_of(key);
+        let supported = self.provider_cap(&provider, "account_limits");
+        let row = Row::gate("Limits", !removed && supported);
+        if supported {
+            row
+        } else {
+            let reason = self
+                .provider_reason(&provider, "account_limits")
+                .unwrap_or_else(|| "unsupported".into());
+            row.with_selected_preview(format!("({reason})"))
+                .preview_gap(1)
+        }
+    }
     fn rename_account_row(&self, key: &str) -> Row {
         let provider = self.provider_of(key);
         let row = Row::gate("Rename", self.provider_cap(&provider, "account_rename"));
@@ -464,7 +484,7 @@ impl Manager {
     }
     /// Providers the backend reports as implemented and that this UI has a flow for.
     fn add_providers(&self) -> Vec<&'static str> {
-        ["codex", "claude"]
+        ["codex", "claude", "gemini"]
             .into_iter()
             .filter(|id| {
                 self.capabilities["providers"].as_array().is_some_and(|ps| {
@@ -915,10 +935,7 @@ impl Manager {
                     a.is_some_and(|a| a.details.get("membership").is_some_and(|v| v == "removed"));
                 let mut rows = vec![
                     Row::yes("Details"),
-                    Row::gate(
-                        "Limits",
-                        !removed && self.provider_cap(&self.provider_of(key), "account_limits"),
-                    ),
+                    self.limits_account_row(key, removed),
                     self.rename_account_row(key),
                     Row::separator(),
                     Row::gate(
@@ -1203,7 +1220,9 @@ impl Manager {
                 .any(|p| matches!(p, Purpose::Observe(_)))
             && let Some(s) = self
                 .session(key)
-                .filter(|s| s["availability"] == "running" && !crate::session_list::is_claude(s))
+                .filter(|s| {
+                    s["availability"] == "running" && !crate::session_list::is_native_provider(s)
+                })
                 .cloned()
         {
             self.observe_after =
@@ -1265,7 +1284,7 @@ impl Manager {
             .map(|a| (a.id.clone(), account_title(a)))
             .collect();
         for s in self.sessions.iter_mut().chain(self.archives.iter_mut()) {
-            if crate::session_list::is_claude(s) && s["availability"] == "running" {
+            if crate::session_list::is_native_provider(s) && s["availability"] == "running" {
                 match s["native_status"].as_str() {
                     Some("busy") => s["activity"] = json!("busy"),
                     Some("idle") => s["activity"] = json!("idle"),
@@ -1394,6 +1413,11 @@ impl Manager {
     }
     fn claude_detail_lines(value: &Value) -> Vec<String> {
         let text = |v: &Value| v.as_str().map(clean).filter(|s| !s.is_empty());
+        let provider = if crate::session_list::is_gemini(value) {
+            "gemini"
+        } else {
+            "claude"
+        };
         let status = match value["availability"].as_str() {
             Some("running") => match value["native_status"].as_str() {
                 Some("idle") => "running (idle)",
@@ -1409,13 +1433,18 @@ impl Manager {
             .or_else(|| value["pid"].as_u64())
             .filter(|_| value["availability"] == "running");
         let mut lines = vec![
-            format!("Provider: {}", crate::client::provider_label("claude")),
+            format!("Provider: {}", crate::client::provider_label(provider)),
             format!(
                 "Managed account: {}",
                 text(&value["account_id"]).unwrap_or_else(|| "unknown".into())
             ),
             format!(
-                "Claude session ID (native): {}",
+                "{} session ID (native): {}",
+                if provider == "gemini" {
+                    "Gemini"
+                } else {
+                    "Claude"
+                },
                 text(&value["conversation_id"]).unwrap_or_else(|| "unknown".into())
             ),
             format!(
@@ -1440,7 +1469,7 @@ impl Manager {
         lines
     }
     fn session_detail_lines(value: &Value) -> Vec<String> {
-        if crate::session_list::is_claude(value) {
+        if crate::session_list::is_native_provider(value) {
             return Self::claude_detail_lines(value);
         }
         let mut lines = vec![
@@ -1698,8 +1727,10 @@ impl Manager {
         let mut body = vec![format!(
             "{label} account name: 1–{NAME_MAX_CHARS} letters, digits, hyphens or underscores."
         )];
-        if provider == "claude" {
-            body.push("Login runs Claude Code's own interactive sign-in in a terminal.".into());
+        if matches!(provider, "claude" | "gemini") {
+            body.push(format!(
+                "Login runs {label}'s own interactive sign-in in a terminal."
+            ));
         }
         self.show(
             "Add Account",
@@ -1914,7 +1945,7 @@ impl Manager {
                         .map(|(_, a)| *a);
                 let action = action.unwrap_or(crate::session_list::Action::Unavailable);
                 if s["availability"] == "running"
-                    && !crate::session_list::is_claude(&s)
+                    && !crate::session_list::is_native_provider(&s)
                     && !matches!(
                         action,
                         crate::session_list::Action::Focus
@@ -2065,7 +2096,7 @@ impl Manager {
     /// Stopped Claude sessions choose a Space and name when the backend can place them.
     fn start_route(&mut self, value: Value) -> Vec<Intent> {
         if self.capabilities["resume_placement"]["version"] == 1
-            && crate::session_list::is_claude(&value)
+            && crate::session_list::is_native_provider(&value)
         {
             return self.place_spaces(value, Place::Start);
         }
@@ -2197,11 +2228,15 @@ impl Manager {
                 return self.refresh_sessions();
             }
             crate::session_list::Action::Rename => {
-                let claude = crate::session_list::is_claude(&s);
+                let claude = crate::session_list::is_native_provider(&s);
                 self.show(
                     "Rename session",
                     vec![if claude {
-                        "Changes the Sessionsation name only. Claude's own title is applied the next time this session is launched or resumed."
+                        if crate::session_list::is_gemini(&s) {
+                            "Changes the Sessionsation name only. Gemini CLI has no native rename."
+                        } else {
+                            "Changes the Sessionsation name only. Claude's own title is applied the next time this session is launched or resumed."
+                        }
                     } else {
                         "Keep the same session and conversation identities."
                     }
@@ -2936,7 +2971,7 @@ impl Manager {
                 if !semantics.is_empty() {
                     body.extend(semantics);
                     body.push("The upstream provider account is unchanged.".into());
-                } else if self.provider_of(&key) == "claude" {
+                } else if matches!(self.provider_of(&key).as_str(), "claude" | "gemini") {
                     body.push("A managed account home is removed and its conversation history is preserved. An adopted external directory is left in place. The upstream provider account is unchanged.".into());
                 } else {
                     body.push("All saved and archived conversations will be preserved outside the account directory. The upstream provider account is unchanged.".into());
@@ -5121,11 +5156,159 @@ mod tests {
             );
         }
     }
+    fn triple_providers() -> Manager {
+        let mut m = dual_providers();
+        let mut all = m.accounts.clone();
+        all.push(gemini("gem-main"));
+        m.inventory(all);
+        m.capabilities["providers"].as_array_mut().unwrap().push(json!({"id":"gemini","implemented":true,"enrollment":true,"account_limits":false,"operations":{"account_limits":{"supported":false,"reason":"Gemini CLI exposes no usage limits"}}}));
+        m
+    }
+    fn gemini(name: &str) -> Account {
+        serde_json::from_value(json!({"id":format!("gemini:{name}"),"provider":"gemini","selectable":true,"enabled":true,"usage_fresh":false,"usage_source":"gemini-cli-unsupported","usage":{"state":"unsupported","source":"gemini-cli-unsupported","observed_at":null,"short":null,"weekly":null}})).unwrap()
+    }
+    fn gemini_session(native_status: Value) -> Value {
+        json!({"id":"g","generation":"g","name":"Work","provider":"gemini","account_id":"gemini:gem-main","conversation_id":"gem-native-1","directory":"/d","availability":"running","native_status":native_status,"attachment":{"host":"herdr","pid":7},"capabilities":{"focus":true,"rename":true,"resume":false,"add_to_herdr":false},"capability_reasons":{"add_to_herdr":"NO_NATIVE_ATTACH"}})
+    }
+    #[test]
+    fn gemini_is_a_third_provider_in_add_filters_tags_and_limits() {
+        let mut m = triple_providers();
+        m.add();
+        let d = m.dialog.as_ref().unwrap();
+        let buttons: Vec<_> = d.buttons.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(buttons, ["Codex", "Claude Code", "Gemini CLI", "Cancel"]);
+        m.submit(2, vec![]);
+        let d = m.dialog.as_ref().unwrap();
+        assert!(d.body[0].starts_with("Gemini CLI account name"));
+        assert!(d.body[1].contains("Gemini CLI's own interactive sign-in"));
+        let sent = m.submit(0, vec!["gem-two".into()]);
+        assert!(
+            matches!(&sent[..], [Intent::Api(_, args)] if args == &strings(&["account", "add", "gemini:gem-two"]))
+        );
+        m.go(Page::Accounts);
+        let rows = m.rows();
+        assert!(rows.iter().any(|r| {
+            r.preview
+                .as_deref()
+                .is_some_and(|p| p.starts_with("Gemini CLI"))
+        }));
+        let mut seen = vec![];
+        for _ in 0..4 {
+            m.options.selected = 1;
+            m.activate();
+            seen.push(m.rows()[1].label.clone());
+        }
+        assert_eq!(
+            seen,
+            [
+                "Provider: Claude Code",
+                "Provider: Codex",
+                "Provider: Gemini CLI",
+                "Provider: All"
+            ]
+        );
+        // Unsupported usage is stated, never 0%; Limits is disabled with the backend reason.
+        let u = Usage::account(&gemini("gem-main"));
+        assert_eq!(u.status, "Usage unsupported");
+        assert!(u.status_only());
+        m.go(Page::Account("gemini:gem-main".into()));
+        let rows = m.rows();
+        let limits = rows.iter().find(|r| r.label == "Limits").unwrap();
+        assert!(!limits.enabled);
+        assert_eq!(
+            limits.preview.as_deref(),
+            Some("(Gemini CLI exposes no usage limits)")
+        );
+        let text = usage_lines(&m.accounts[3], 0).join("\n");
+        assert!(text.contains("Provider: Gemini CLI"));
+        assert!(text.contains("Status: Usage unsupported"));
+        assert!(text.contains("Source: gemini-cli-unsupported"));
+        assert!(text.contains("Short window: usage unsupported"));
+        assert!(!text.contains('%'));
+    }
+    #[test]
+    fn gemini_login_plan_uses_the_pane_flow_and_wording() {
+        let mut m = triple_providers();
+        m.add_for("gemini");
+        let sent = m.submit(0, vec!["new".into()]);
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        let out = m.response(token, Ok(json!({"login":{"action":"exec","argv":["sessionsation","account","login","gemini:new"],"credentials_in_client":false},"auth":{"logged_in":false}})));
+        assert!(
+            matches!(&out[..], [Intent::LaunchLogin(argv)] if argv == &strings(&["sessionsation","account","login","gemini:new"]))
+        );
+        assert_eq!(
+            m.dialog.as_ref().unwrap().body[0],
+            "Complete the Gemini CLI login in the opened pane…"
+        );
+    }
+    #[test]
+    fn gemini_sessions_use_claude_actions_native_label_and_status_gating() {
+        let s = gemini_session(json!("idle"));
+        let lines = Manager::session_detail_lines(&s).join("\n");
+        assert!(lines.contains("Provider: Gemini CLI"));
+        assert!(lines.contains("Gemini session ID (native): gem-native-1"));
+        assert!(lines.contains("Status: running (idle)"));
+        let labels: Vec<_> = crate::session_list::actions(&s, true)
+            .into_iter()
+            .map(|(r, _)| r.label)
+            .collect();
+        assert_eq!(
+            labels,
+            ["Focus Session", "Session Details", "Rename Session"]
+        );
+        // Detached running Gemini session: Add to HERDR is disabled with the reason.
+        let mut d = gemini_session(json!("idle"));
+        d["attachment"] = json!({"host":"tmux"});
+        let rows = crate::session_list::actions(&d, true);
+        assert_eq!(rows[0].0.label, "Add to HERDR");
+        assert!(!rows[0].0.enabled);
+        assert_eq!(rows[0].0.preview.as_deref(), Some("(no native attach)"));
+        let mut st = gemini_session(json!(null));
+        st["availability"] = json!("stopped");
+        st["capabilities"]["resume"] = json!(true);
+        let rows = crate::session_list::actions(&st, true);
+        assert_eq!(rows[0].0.label, "Start Session");
+        assert!(rows[0].0.enabled);
+    }
+    #[test]
+    fn gemini_busy_only_when_the_backend_reports_it() {
+        let mut m = triple_providers();
+        let sent = m.read_sessions();
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        let mk = |id: &str, extra: Value| {
+            let mut v = json!({"id":id,"name":id,"provider":"gemini","account_id":"gemini:gem-main","availability":"running","last_accessed":1});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            v
+        };
+        m.response(
+            token,
+            Ok(json!({"sessions":[
+                mk("busy", json!({"native_status":"busy"})),
+                mk("none", json!({})),
+            ]})),
+        );
+        let act = |n: &str| m.sessions.iter().find(|s| id(s) == n).unwrap()["activity"].clone();
+        assert_eq!(act("busy"), "busy");
+        assert!(act("none").is_null());
+        // No observe round trip for Gemini details.
+        m.go(Page::Session("none".into()));
+        assert!(
+            m.refresh_live()
+                .iter()
+                .all(|i| !matches!(i, Intent::Api(_, a) if a.contains(&"observe".to_owned())))
+        );
+    }
     #[test]
     fn stale_resume_error_is_explained_without_marking_live() {
         assert_eq!(
             crate::messages::describe("SESSION_STALE: gone"),
-            "This Claude Code session's process is no longer verified. Refresh Manage Sessions; nothing was started or resumed."
+            "This session's process is no longer verified. Refresh Manage Sessions; nothing was started or resumed."
         );
         assert!(crate::messages::describe("SESSION_ALREADY_RUNNING").contains("now running"));
     }
