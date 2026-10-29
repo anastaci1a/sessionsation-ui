@@ -221,7 +221,8 @@ fit inline, every account shows it under its name. It stays dark grey unless the
 usage itself is focused. Account Details show both meanings (`61% left · 39% used`)
 and the backend-published account home as Directory when present. Session details
 share one layout: Account, Status, Directory, Last active and Created, then a dim
-Identifiers group. Thresholds at the extreme ends use `├`/`┝` or `┤`/`┥`,
+Identifiers group. In account, session and operation details a long value wraps with
+a hanging indent: continuation lines start under the value, not at the left edge. Thresholds at the extreme ends use `├`/`┝` or `┤`/`┥`,
 matching the adjacent stroke weight. Percentages span the actual center-to-center
 line length (one cell less than the rendered width). Percentages precede period labels in aligned columns. Missing
 observations show Disabled, Login required or Usage unavailable as appropriate;

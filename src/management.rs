@@ -1069,7 +1069,7 @@ impl Manager {
             Form::None,
         );
         if let Some(d) = &mut self.dialog {
-            Self::dim_identifiers(d);
+            Self::details_layout(d);
         }
     }
     fn show_login(&mut self, key: &str) {
@@ -2255,8 +2255,10 @@ impl Manager {
         );
         lines
     }
-    /// Dim everything from the Identifiers group on.
-    fn dim_identifiers(dialog: &mut Dialog) {
+    /// Details layout: wrapped values hang under their column, and everything from
+    /// the Identifiers group on is dim.
+    fn details_layout(dialog: &mut Dialog) {
+        dialog.hanging = true;
         dialog.dim_from = dialog
             .body
             .iter()
@@ -2704,6 +2706,7 @@ impl Manager {
         );
         if let Some(d) = &mut self.dialog {
             d.dim_from = Some(d.body.len().saturating_sub(2));
+            d.hanging = true;
             if finished {
                 finish_operation(d, dismissed);
             } else {
@@ -3093,6 +3096,7 @@ impl Manager {
                         );
                         if let Some(d) = &mut self.dialog {
                             d.dim_from = Some(d.body.len().saturating_sub(2));
+                            d.hanging = true;
                             if terminal(o["phase"].as_str().unwrap_or("")) {
                                 finish_operation(d, dismissed);
                             }
@@ -3303,7 +3307,7 @@ impl Manager {
                     Form::SessionDetails(key),
                 );
                 if let Some(d) = &mut self.dialog {
-                    Self::dim_identifiers(d);
+                    Self::details_layout(d);
                 }
                 return self.refresh_sessions();
             }
@@ -3888,7 +3892,7 @@ impl Manager {
                     let body = Self::session_detail_lines(session);
                     if let Some(d) = &mut self.dialog {
                         d.body = body;
-                        Self::dim_identifiers(d);
+                        Self::details_layout(d);
                     }
                 }
             }
@@ -3980,6 +3984,7 @@ impl Manager {
                 {
                     d.body = Self::operation_body(o, key);
                     d.dim_from = Some(d.body.len().saturating_sub(2));
+                    d.hanging = true;
                     d.title = kind_label(o["kind"].as_str().unwrap_or("operation"));
                     if terminal(o["phase"].as_str().unwrap_or("")) {
                         finish_operation(d, self.dismissed.contains(key));
@@ -7406,6 +7411,59 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
         plain.details.remove("switch_thresholds");
         let lines = usage_lines(&plain, 400);
         assert!(!lines.iter().any(|l| l.starts_with("┿")));
+    }
+    #[test]
+    fn details_popups_hang_wrapped_values_under_the_value_column() {
+        // (value column of the `label` row, first text column of the next row).
+        fn hang(m: &mut Manager, label: &str) -> (usize, usize) {
+            let mut c = Canvas::new(48, 30);
+            let palette = m.palette.clone();
+            let d = m.dialog.as_mut().unwrap();
+            assert!(d.hanging, "{label}");
+            d.paint(&mut c, &palette);
+            let rows: Vec<Vec<char>> = c
+                .cells
+                .chunks(48)
+                .map(|r| {
+                    r.iter()
+                        .map(|c| c.glyph.chars().next().unwrap_or(' '))
+                        .collect()
+                })
+                .collect();
+            let y = rows
+                .iter()
+                .position(|r| r.iter().collect::<String>().contains(label))
+                .unwrap();
+            let line: String = rows[y].iter().collect();
+            let at = line[..line.find(label).unwrap()].chars().count() + label.chars().count();
+            let value = (at..48).find(|&x| rows[y][x] != ' ').unwrap();
+            let border = rows[y + 1].iter().position(|&c| c == '│');
+            let next = border.and_then(|b| (b + 1..48).find(|&x| rows[y + 1][x] != ' '));
+            (value, next.unwrap_or(0))
+        }
+        let long = "/data/accounts/claude-main/with/a/rather/long/home/directory";
+        let mut a = claude("main");
+        a.details.insert("config_home".into(), json!(long));
+        let mut m = setup();
+        m.show_usage(&a);
+        let (value, next) = hang(&mut m, "Directory:");
+        assert_eq!(next, value, "account details");
+        // Values above share the column the continuation hangs at.
+        let (status, _) = hang(&mut m, "Status:");
+        assert_eq!(status, value);
+        let mut m = setup();
+        m.sessions = vec![json!({"id":"one","name":"Long","generation":"g","directory":long})];
+        m.go(Page::Session("one".into()));
+        m.options.selected = 1;
+        m.activate();
+        let (value, next) = hang(&mut m, "Directory:");
+        assert_eq!(next, value, "session details");
+        let mut m = setup();
+        let key = "11111111-1111-4111-8111-111111111111";
+        m.operations = vec![json!({"id":key,"kind":"move_space","phase":"failed","created_at":5})];
+        m.open_operation(key.into());
+        let (value, next) = hang(&mut m, "Operation ID");
+        assert_eq!(next, value, "operation details");
     }
     fn fact(lines: &[String], label: &str) -> Option<String> {
         lines

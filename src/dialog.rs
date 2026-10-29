@@ -169,6 +169,8 @@ pub struct Dialog {
     pub minimum_width: usize,
     /// Body lines from this index on are a dim secondary group (identifiers, legends).
     pub dim_from: Option<usize>,
+    /// Details layout: a wrapped `label  value` line continues under its value.
+    pub hanging: bool,
     navigation: crate::widgets::SelectionNavigation,
 }
 pub enum Event {
@@ -194,6 +196,7 @@ impl Dialog {
             minimum_height: 0,
             minimum_width: 0,
             dim_from: None,
+            hanging: false,
             navigation: crate::widgets::SelectionNavigation::default(),
         }
     }
@@ -364,14 +367,21 @@ impl Dialog {
             .map_or(desired_width, |s| s.width);
         let max_height = canvas.height.saturating_sub(4);
         let dim_from = self.dim_from.unwrap_or(usize::MAX);
+        let hanging = self.hanging;
         let mut lines: Vec<(String, bool)> = self
             .body
             .iter()
             .enumerate()
             .flat_map(|(i, l)| {
-                wrap(&crate::messages::describe(l), width.saturating_sub(4))
-                    .into_iter()
-                    .map(move |w| (w, i >= dim_from))
+                let l = crate::messages::describe(l);
+                let width = width.saturating_sub(4);
+                if hanging {
+                    wrap_value(&l, width)
+                } else {
+                    wrap(&l, width)
+                }
+                .into_iter()
+                .map(move |w| (w, i >= dim_from))
             })
             .collect();
         if let Some(status) = &self.status {
@@ -528,6 +538,37 @@ impl Dialog {
             }
         }
         canvas.popup_palette = previous_palette;
+    }
+}
+/// Wrap a `label  value` line (label, then two or more spaces) with a hanging
+/// indent: continuation lines start under the value. Other lines, and values
+/// left with too little room, wrap normally.
+fn wrap_value(text: &str, width: usize) -> Vec<String> {
+    let indent = text.len() - text.trim_start().len();
+    let column = text[indent..]
+        .find("  ")
+        .map(|label| indent + label)
+        .and_then(|gap| text[gap..].find(|c| c != ' ').map(|value| gap + value));
+    match column {
+        Some(column)
+            if column > indent
+                && UnicodeWidthStr::width(&text[..column]) == column
+                && column + 8 <= width =>
+        {
+            let (label, value) = text.split_at(column);
+            wrap(value, width - column)
+                .into_iter()
+                .enumerate()
+                .map(|(i, line)| {
+                    if i == 0 {
+                        format!("{label}{line}")
+                    } else {
+                        format!("{}{line}", " ".repeat(column))
+                    }
+                })
+                .collect()
+        }
+        _ => wrap(text, width),
     }
 }
 /// Prefer a space or dash; split a token only when the token exceeds the viewport.
@@ -776,6 +817,61 @@ mod tests {
             d.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
         }
         assert!(matches!(d.key(enter()), Event::Choose(0, _)));
+    }
+    #[test]
+    fn details_values_wrap_with_a_hanging_indent_under_the_value_column() {
+        assert_eq!(
+            wrap_value(
+                "Semantics:  remaining allowance in each provider window",
+                30
+            ),
+            [
+                "Semantics:  remaining",
+                "            allowance in each",
+                "            provider window"
+            ]
+        );
+        // Indented identifiers hang at their own value column too.
+        assert_eq!(
+            wrap_value("  Account ID  claude:a-long-account-name", 30),
+            ["  Account ID  claude:a-long-", "              account-name"]
+        );
+        // Prose, and values left with too little room, wrap from the left as before.
+        for (text, width) in [("One two three", 8), ("Directory:  /a/b c/d e", 16)] {
+            assert_eq!(wrap_value(text, width), wrap(text, width));
+        }
+        let body = vec![
+            "Account:    ✻ work".to_owned(),
+            "Semantics:  remaining allowance in each provider window, reported by the backend"
+                .into(),
+            String::new(),
+            "Identifiers".into(),
+            "  Account ID  claude:work".into(),
+        ];
+        for hanging in [false, true] {
+            let mut d = Dialog::new("Account details", body.clone(), &["Close"]);
+            d.hanging = hanging;
+            let mut c = Canvas::new(44, 24);
+            d.paint(&mut c, &Palette::default());
+            let glyph = |x: usize, y: usize| c.cells[y * 44 + x].glyph.as_str();
+            let left = (44 - d.size.unwrap().width) / 2 + 2;
+            let y = (0..24).find(|&y| glyph(left, y) == "S").unwrap();
+            let value = left + 12;
+            assert_eq!(glyph(value, y), "r");
+            assert_eq!(glyph(value, y - 1), "✻", "values share one column");
+            let continuation = (left..44).find(|&x| glyph(x, y + 1) != " ").unwrap();
+            assert_eq!(continuation, if hanging { value } else { left });
+            if hanging {
+                let last = (y + 1..24).take_while(|&y| glyph(value, y) != " ").last();
+                assert!(
+                    last.is_some_and(|last| last > y + 1),
+                    "several continuations"
+                );
+                for row in y + 1..=last.unwrap() {
+                    assert!((left..value).all(|x| glyph(x, row) == " "), "row {row}");
+                }
+            }
+        }
     }
     #[test]
     fn invalid_field_stays_red_with_cancel_selected_and_short_body_has_no_scroll_hint() {
