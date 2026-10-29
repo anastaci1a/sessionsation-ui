@@ -89,6 +89,8 @@ fn session_gate(s: &Value, label: &str, capability: &str) -> Row {
     }
     let reason = if pending(s) {
         "operation running"
+    } else if let Some(reason) = backend_reason(s, capability) {
+        return row.with_reason(reason);
     } else if capability == "archive" && s["availability"] == "archived" {
         "already archived"
     } else if s["availability"] == "running" {
@@ -99,6 +101,50 @@ fn session_gate(s: &Value, label: &str, capability: &str) -> Row {
         "unavailable"
     };
     row.with_reason(reason)
+}
+/// A per-session refusal from `capability_reasons` ("CODE: text"), as a short
+/// row reason. Provider-wide explanations (no code) are not per-session reasons.
+fn backend_reason(s: &Value, capability: &str) -> Option<String> {
+    let reason = s["capability_reasons"][capability].as_str()?;
+    let (code, text) = reason.split_once(": ").unwrap_or((reason, ""));
+    if code.is_empty() || !code.bytes().all(|b| b.is_ascii_uppercase() || b == b'_') {
+        return None;
+    }
+    let short = match code {
+        "SESSION_RUNNING" => "exit the agent first",
+        "SESSION_HOSTED" => "hosted worker running",
+        "ACCOUNT_DELETED" => "account deleted",
+        "SESSION_STATE_UNKNOWN" => "state unknown",
+        "HISTORY_UNAVAILABLE" => "history unavailable",
+        "SESSION_ALREADY_ARCHIVED" => "already archived",
+        "SESSION_NOT_ARCHIVED" => "not archived",
+        "SESSION_ARCHIVED" => "restore it first",
+        _ => {
+            let text = text.trim().trim_end_matches('.');
+            let mut chars = text.chars();
+            return Some(match chars.next() {
+                Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+                None => "unavailable".into(),
+            });
+        }
+    };
+    Some(short.into())
+}
+/// A Claude Code or Gemini CLI lifecycle row, driven by the backend capability:
+/// enabled when supported for this session, queued behind a running operation,
+/// else the session's own reason, or "not supported for <provider>" when the
+/// provider has no such control at all.
+fn native_gate(s: &Value, label: &str, capability: &str, action: Action) -> (Row, Action) {
+    let row = Row::gate(label, s["capabilities"][capability] == true);
+    if row.enabled {
+        return (row, action);
+    }
+    if pending(s) && QUEUEABLE.contains(&capability) {
+        return (queue_gate(label), action);
+    }
+    let reason = backend_reason(s, capability)
+        .unwrap_or_else(|| format!("not supported for {}", provider_label_of(s)));
+    (row.with_reason(reason), Action::Unavailable)
 }
 /// Lifecycle capabilities whose actions queue behind a running operation.
 const QUEUEABLE: [&str; 8] = [
@@ -191,11 +237,15 @@ pub fn is_claude(s: &Value) -> bool {
             .is_some_and(|id| id.starts_with("claude:"))
 }
 /// Claude Code and Gemini CLI sessions enable only what the backend capabilities
-/// allow: focus (verified HERDR attachment), details, rename (Sessionsation label)
-/// and, when stopped, start. Codex-only lifecycle rows stay visible but greyed with
-/// a short reason, so every provider shares one menu shape.
+/// allow: focus (verified HERDR attachment), details, rename (Sessionsation label),
+/// start when stopped, and archive, restore and delete of stopped conversations
+/// (contract revision 17). Lifecycle rows the provider lacks stay visible but
+/// greyed with the backend's reason, so every provider shares one menu shape.
 fn claude_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     let c = &s["capabilities"];
+    if s["availability"] == "archived" {
+        return archived_actions(s);
+    }
     let first = if let Some(row) = add_to_herdr_row(s) {
         (row, Action::AddToHerdr)
     } else if s["availability"] == "running" {
@@ -232,13 +282,6 @@ fn claude_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
         };
         (row, Action::Resume)
     };
-    let unsupported = format!("not supported for {}", provider_label_of(s));
-    let no = |label: &str| {
-        (
-            Row::gate(label, false).with_reason(unsupported.clone()),
-            Action::Unavailable,
-        )
-    };
     vec![
         first,
         (Row::yes("Session details"), Action::Details),
@@ -247,14 +290,27 @@ fn claude_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
             Action::Rename,
         ),
         (Row::separator(), Action::Unavailable),
-        no("Switch account"),
-        no("Move to Space"),
+        native_gate(s, "Switch account", "switch_account", Action::Switch),
+        native_gate(s, "Move to Space", "move_space", Action::MoveSpace),
         (Row::separator(), Action::Unavailable),
-        no("Restart session"),
-        no("End session"),
+        native_gate(s, "Restart session", "restart", Action::Restart),
+        native_gate(s, "End session", "stop", Action::Stop),
         (Row::separator(), Action::Unavailable),
-        no("Archive session"),
-        no("Delete session"),
+        native_gate(s, "Archive session", "archive", Action::Archive),
+        native_gate(s, "Delete session", "delete", Action::Delete),
+    ]
+}
+/// An archived conversation (any provider): restore, details and delete.
+fn archived_actions(s: &Value) -> Vec<(Row, Action)> {
+    let c = &s["capabilities"];
+    vec![
+        (
+            Row::gate("Restore session", c["restore"] == true),
+            Action::Restore,
+        ),
+        (Row::yes("Session details"), Action::Details),
+        (Row::separator(), Action::Unavailable),
+        (session_gate(s, "Delete session", "delete"), Action::Delete),
     ]
 }
 pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
@@ -273,15 +329,7 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
 fn codex_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     let c = &s["capabilities"];
     if s["availability"] == "archived" {
-        return vec![
-            (
-                Row::gate("Restore session", c["restore"] == true),
-                Action::Restore,
-            ),
-            (Row::yes("Session details"), Action::Details),
-            (Row::separator(), Action::Unavailable),
-            (session_gate(s, "Delete session", "delete"), Action::Delete),
-        ];
+        return archived_actions(s);
     }
     let inactive = s["availability"] != "running";
     let focus = Row::gate(
@@ -941,6 +989,12 @@ pub fn paint_with(
         if let Some(badge) = badge {
             let focused = selected && extras.badge_focus;
             if room >= 1 {
+                // The gaps before and after the badge icon belong to the row: they
+                // cover stars like its text does.
+                canvas.widget_text(x, y, "  ", Cell::default(), false);
+                if room >= 2 {
+                    canvas.widget_text(x + 3, y, " ", Cell::default(), false);
+                }
                 let icon = badge.icon(now_ms);
                 if badge.active {
                     canvas.accent_text(
@@ -1177,12 +1231,22 @@ mod tests {
                 .any(|(r, _)| r.label == "Pause work" && !r.enabled)
         );
     }
+    /// A revision 17 Claude session: provider-wide reasons for the lifecycle
+    /// controls it lacks, per-session reasons for archive and delete.
     fn claude(availability: &str, attached: bool) -> Value {
+        let stopped = availability == "stopped";
+        let running = "SESSION_RUNNING: the provider process runs this conversation; end it first";
         json!({"provider":"claude","account_id":"claude:main","availability":availability,
             "attachment":if attached{json!({"host":"herdr","target":"herdr/default/w:p","pid":9})}else{Value::Null},
-            "capabilities":{"focus":attached,"rename":true,"resume":availability=="stopped",
-                "switch_account":true,"restart":true,"stop":true,"archive":false,"delete":false,
-                "move_space":false,"move_project":false,"change_directory":false,"steer":false}})
+            "capabilities":{"focus":attached,"rename":true,"resume":stopped,
+                "switch_account":false,"restart":false,"stop":false,"archive":stopped,"delete":stopped,
+                "move_space":false,"move_project":false,"change_directory":false,"steer":false},
+            "capability_reasons":{"switch_account":"native session is bound to its account config home",
+                "restart":"no verified Claude process lifecycle control; stop it in its terminal",
+                "stop":"no verified Claude process lifecycle control; stop it in its terminal",
+                "move_space":"HERDR space moves are verified only for Codex",
+                "archive":if stopped{Value::Null}else{json!(running)},
+                "delete":if stopped{Value::Null}else{json!(running)}}})
     }
     #[test]
     fn claude_sessions_share_the_menu_shape_with_unsupported_rows_greyed() {
@@ -1190,7 +1254,7 @@ mod tests {
         assert_eq!(rows[0], ("Focus session".into(), true));
         assert_eq!(rows[1], ("Session details".into(), true));
         assert_eq!(rows[2], ("Rename session".into(), true));
-        // Codex-only lifecycle rows never enable, even if a payload claims them.
+        // Lifecycle rows the provider lacks stay greyed.
         assert!(rows[3..].iter().all(|(_, enabled)| !enabled));
         let all = actions(&claude("running", true), true);
         let stop = all.iter().find(|(r, _)| r.label == "End session").unwrap();
@@ -1199,6 +1263,12 @@ mod tests {
             stop.0.preview.as_deref(),
             Some("· not supported for Claude Code")
         );
+        // Archive and delete follow the session's own backend reason.
+        let archive = all
+            .iter()
+            .find(|(r, _)| r.label == "Archive session")
+            .unwrap();
+        assert_eq!(archive.0.preview.as_deref(), Some("· exit the agent first"));
         let gemini =
             json!({"provider":"gemini","availability":"stopped","capabilities":{"resume":true}});
         assert!(
@@ -1209,6 +1279,64 @@ mod tests {
         assert_eq!(
             labels(&claude("stopped", false), true)[0],
             ("Start session".into(), true)
+        );
+    }
+    #[test]
+    fn native_archive_and_delete_follow_backend_capabilities() {
+        // Stopped: both enabled with their real actions.
+        let stopped = actions(&claude("stopped", false), true);
+        let find = |rows: &[(Row, Action)], l: &str| {
+            rows.iter().find(|(r, _)| r.label == l).cloned().unwrap()
+        };
+        let archive = find(&stopped, "Archive session");
+        assert!(archive.0.enabled);
+        assert_eq!(archive.1, Action::Archive);
+        let delete = find(&stopped, "Delete session");
+        assert!(delete.0.enabled);
+        assert_eq!(delete.1, Action::Delete);
+        assert!(!find(&stopped, "End session").0.enabled);
+        // Hosted, deleted account and other refusals show the session's reason.
+        for (code, reason) in [
+            (
+                "SESSION_HOSTED: a Sessionsation-hosted worker runs this conversation; stop it first",
+                "· hosted worker running",
+            ),
+            (
+                "ACCOUNT_DELETED: the account home is gone; its history is not managed here",
+                "· account deleted",
+            ),
+            (
+                "HISTORY_BUSY: Another operation holds this history.",
+                "· another operation holds this history",
+            ),
+        ] {
+            let mut s = claude("stopped", false);
+            s["capabilities"]["archive"] = json!(false);
+            s["capability_reasons"]["archive"] = json!(code);
+            let row = find(&actions(&s, true), "Archive session");
+            assert!(!row.0.enabled);
+            assert_eq!(row.1, Action::Unavailable);
+            assert_eq!(row.0.preview.as_deref(), Some(reason), "{code}");
+        }
+        // A backend without the revision 17 keys keeps the provider wording.
+        let old =
+            json!({"provider":"gemini","availability":"stopped","capabilities":{"resume":true}});
+        let row = find(&actions(&old, true), "Archive session");
+        assert_eq!(
+            row.0.preview.as_deref(),
+            Some("· not supported for Gemini CLI")
+        );
+        // Archived native sessions offer Restore and Delete like Codex.
+        let mut archived = claude("archived", false);
+        archived["capabilities"] = json!({"restore":true,"delete":true});
+        let rows = labels(&archived, true);
+        assert_eq!(
+            rows,
+            [
+                ("Restore session".into(), true),
+                ("Session details".into(), true),
+                ("Delete session".into(), true)
+            ]
         );
     }
     #[test]

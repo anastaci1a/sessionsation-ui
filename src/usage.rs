@@ -660,10 +660,16 @@ impl AccountsLayout {
                 },
                 name_style,
             );
+            // The gap after the icon and the name's padding are part of the label:
+            // they cover stars like its letters do.
+            canvas.accent_text(self.name_x.saturating_sub(1), y, " ", name_style);
             canvas.accent_text(
                 self.name_x,
                 y,
-                &crate::widgets::ellipsize(&account_title(account), self.name_width),
+                &pad(
+                    &crate::widgets::ellipsize(&account_title(account), self.name_width),
+                    self.name_width,
+                ),
                 name_style,
             );
             if active && usage_focus {
@@ -691,7 +697,10 @@ impl AccountsLayout {
                 canvas.text(
                     self.name_x,
                     y + 1,
-                    &crate::widgets::ellipsize(&format!("({age})"), self.name_width),
+                    &pad(
+                        &crate::widgets::ellipsize(&format!("({age})"), self.name_width),
+                        self.name_width,
+                    ),
                     Cell {
                         fg: Usage::age_color(active && usage_focus),
                         ..Cell::default()
@@ -717,6 +726,11 @@ impl AccountsLayout {
             y += height + 1;
         }
     }
+}
+/// `text` padded with spaces to `width` cells.
+fn pad(text: &str, width: usize) -> String {
+    let used = unicode_width::UnicodeWidthStr::width(text);
+    format!("{text}{}", " ".repeat(width.saturating_sub(used)))
 }
 
 /// The moving account's hue-shifted cells (bullet or icon, name, bars, statuses)
