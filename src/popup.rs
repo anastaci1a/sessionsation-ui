@@ -77,6 +77,50 @@ impl Size {
         }
     }
 }
+/// Title and description of every destination-Space popup (new session, Start, Add, Move).
+pub const SPACE_TITLE: &str = "Choose Space";
+pub const SPACE_DESCRIPTION: &str = "Choose a destination Space.";
+/// One destination-Space row: the name, with the id as the selected inline preview.
+/// The Space a session already sits in stays visible but unselectable, marked "(current)".
+pub fn space_row(label: &str, id: &str, current: bool) -> crate::widgets::Row {
+    let preview = if current {
+        "(current)".to_owned()
+    } else {
+        format!("({id})")
+    };
+    crate::widgets::Row::gate(label, !current)
+        .with_selected_preview(preview)
+        .preview_gap(1)
+}
+/// Whether `[create new space]` can be chosen for the action behind a Space popup.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NewSpace {
+    Enabled,
+    /// Shown but unselectable; the reason is the inline preview, e.g. "(not available for moving yet)".
+    Disabled(String),
+}
+/// The `[create new space]` row every destination-Space popup starts with.
+pub fn new_space_row(state: &NewSpace) -> crate::widgets::Row {
+    match state {
+        NewSpace::Enabled => crate::widgets::Row::yes("[create new space]"),
+        NewSpace::Disabled(reason) => crate::widgets::Row::gate("[create new space]", false)
+            .with_selected_preview(format!("({reason})"))
+            .preview_gap(1),
+    }
+}
+/// The single destination-Space popup list: `[create new space]`, one row per Space,
+/// then one spacer and Cancel. Callers pass `(label, id, current)`.
+pub fn space_rows<'a>(
+    spaces: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
+    new_space: &NewSpace,
+) -> Vec<crate::widgets::Row> {
+    let rows = std::iter::once(new_space_row(new_space))
+        .chain(spaces.into_iter().map(|(l, i, c)| space_row(l, i, c)));
+    with_cancel(rows)
+        .into_iter()
+        .map(crate::widgets::Row::popup_option)
+        .collect()
+}
 /// Finish a choice list with one bullet spacer and Cancel, without mounting rows.
 pub fn with_cancel(
     rows: impl IntoIterator<Item = crate::widgets::Row>,
@@ -380,6 +424,31 @@ mod tests {
                 assert_eq!(rows.len(), 1);
             }
         }
+    }
+    #[test]
+    fn space_rows_share_one_presentation_and_gate_the_current_space() {
+        let rows = space_rows(
+            [("Work", "w1", false), ("Here", "w2", true)],
+            &NewSpace::Enabled,
+        );
+        let labels: Vec<_> = rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels[..3], ["[create new space]", "Work", "Here"]);
+        assert!(rows[0].enabled);
+        assert_eq!(rows[1].preview.as_deref(), Some("(w1)"));
+        assert_eq!(rows[1].preview_gap, 1);
+        assert!(rows[1].enabled && !rows[2].enabled);
+        assert_eq!(rows[2].preview.as_deref(), Some("(current)"));
+        assert!(rows[3].separator && rows[4].label == "Cancel");
+        let off = space_rows(
+            [("Work", "w1", false)],
+            &NewSpace::Disabled("not available for moving yet".into()),
+        );
+        assert_eq!(off[0].label, "[create new space]");
+        assert!(!off[0].enabled);
+        assert_eq!(
+            off[0].preview.as_deref(),
+            Some("(not available for moving yet)")
+        );
     }
     #[test]
     fn description_width_fits_a_sentence_with_one_space_before_the_border() {

@@ -657,13 +657,15 @@ impl App {
                     }))
                     .collect()
             }
-            Page::Spaces => std::iter::once(Row::yes("[create new space]"))
-                .chain(self.spaces.iter().map(|s| {
-                    Row::yes(&s.label)
-                        .with_selected_preview(format!("({})", s.workspace_id))
-                        .preview_gap(1)
-                }))
-                .collect(),
+            Page::Spaces => std::iter::once(crate::popup::new_space_row(
+                &crate::popup::NewSpace::Enabled,
+            ))
+            .chain(
+                self.spaces
+                    .iter()
+                    .map(|s| crate::popup::space_row(&s.label, &s.workspace_id, false)),
+            )
+            .collect(),
             Page::Name => vec![Row::gate("Continue", self.name_valid(&self.input.value))],
             Page::SpaceName => vec![Row::gate(
                 "Use new space",
@@ -2078,7 +2080,7 @@ impl App {
         match self.page {
             Page::Roots => "Space roots",
             Page::Accounts => "Choose account",
-            Page::Spaces => "Choose Space",
+            Page::Spaces => crate::popup::SPACE_TITLE,
             Page::Name => "Session name",
             Page::SpaceName => "New Space name",
             Page::Directory(_) => "Start directory",
@@ -2108,7 +2110,7 @@ impl App {
     fn popup_description(&self) -> &'static str {
         match self.page {
             Page::Accounts => "Choose an account for this session.",
-            Page::Spaces => "Choose a destination Space.",
+            Page::Spaces => crate::popup::SPACE_DESCRIPTION,
             Page::Roots => "Choose a Space to set its default directory.",
             Page::Name => "Choose a name for this session.",
             Page::SpaceName => "Choose a name for the new Space.",
@@ -2346,7 +2348,7 @@ New directories are created only when the session starts."
             Page::Directories => "Default directories",
             Page::Roots => "Space roots",
             Page::Accounts => "Choose account",
-            Page::Spaces => "Choose Space",
+            Page::Spaces => crate::popup::SPACE_TITLE,
             Page::Name => "Session name",
             Page::SpaceName => "New Space name",
             Page::Directory(_) => "Start directory",

@@ -37,6 +37,12 @@ pub enum Intent {
     LaunchLogin(Vec<String>),
     Exit,
 }
+/// Where a session is placed: an existing Space by id, or a Space to create by label.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SpaceTarget {
+    Existing(String),
+    New(String),
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Place {
     Add,
@@ -87,7 +93,9 @@ enum Form {
     Relocation(Value, bool),
     SessionMutation(Value, &'static str),
     SessionDetails(String),
-    Placement(Value, String, Place),
+    Placement(Value, SpaceTarget, Place),
+    /// Naming the Space to create; `None` is a move between Spaces.
+    NewSpace(Value, Option<Place>),
     Added(Value),
     Confirm(Vec<String>),
     Progress,
@@ -1424,29 +1432,20 @@ impl Manager {
                 .iter()
                 .map(|s| Row::yes(self.archive_label(s, usize::MAX)))
                 .collect(),
-            Page::Spaces(_) => self.space_choices["spaces"]
-                .as_array()
-                .map(|spaces| {
-                    let rows = spaces
-                        .iter()
-                        .map(|space| {
-                            let row = Row::gate(
-                                space["name"].as_str().unwrap_or("Unnamed Space"),
-                                space["current"] != true,
-                            );
-                            if space["current"] == true {
-                                row.with_selected_preview("(current)").preview_gap(1)
-                            } else {
-                                row
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    crate::popup::with_cancel(rows)
-                        .into_iter()
-                        .map(Row::popup_option)
-                        .collect()
-                })
-                .unwrap_or_else(|| vec![Row::yes("Cancel").popup_option()]),
+            Page::Spaces(_) => crate::popup::space_rows(
+                self.space_choices["spaces"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|space| {
+                        (
+                            space["name"].as_str().unwrap_or("Unnamed Space"),
+                            space["id"].as_str().unwrap_or(""),
+                            space["current"] == true,
+                        )
+                    }),
+                &self.new_space_state(self.place),
+            ),
             Page::Session(key) => crate::session_list::actions(
                 self.session(key).unwrap_or(&Value::Null),
                 self.capabilities["resume"]["version"] == 1,
@@ -2826,6 +2825,113 @@ impl Manager {
             .push(Field::new("Name", "").validated(Rule::AccountName));
         self.validate_dialog_names();
     }
+    /// The one place that decides whether `[create new space]` works for an action
+    /// (`None` is a move between Spaces). Only the backend's per-operation capability
+    /// enables it; until it is advertised the row stays visible but unselectable.
+    /// Source: `capabilities.new_space.{resume,add_to_herdr,move_space}` from `api state`
+    /// (backend contract revision 20).
+    fn new_space_state(&self, place: Option<Place>) -> crate::popup::NewSpace {
+        let (operation, action) = match place {
+            Some(Place::Add) => ("add_to_herdr", "adding"),
+            Some(Place::Start) => ("resume", "starting"),
+            None => ("move_space", "moving"),
+        };
+        if self.capabilities["new_space"][operation] == true {
+            crate::popup::NewSpace::Enabled
+        } else {
+            crate::popup::NewSpace::Disabled(format!("not available for {action} yet"))
+        }
+    }
+    /// Open on the preferred Space, else the first selectable row (never a disabled
+    /// `[create new space]`). Index 0 is `[create new space]`, Spaces follow it.
+    fn preselect_space(&mut self, preferred: Option<String>) {
+        let index = preferred
+            .and_then(|want| {
+                self.space_choices["spaces"]
+                    .as_array()?
+                    .iter()
+                    .position(|space| space["id"] == want.as_str())
+            })
+            .map(|i| i + 1);
+        self.options.selected = index
+            .filter(|&i| self.rows().get(i).is_some_and(|r| r.enabled))
+            .unwrap_or_else(|| {
+                self.rows()
+                    .iter()
+                    .position(|r| r.enabled)
+                    .unwrap_or_default()
+            });
+    }
+    fn new_space_dialog(&mut self) -> Vec<Intent> {
+        let session = self.space_session.clone();
+        self.show(
+            "New Space name",
+            vec!["Name the Space to create for this session.".into()],
+            &["Continue", "Cancel"],
+            Form::NewSpace(session, self.place),
+        );
+        let taken: Vec<String> = self.space_choices["spaces"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["name"].as_str().map(str::to_owned))
+            .collect();
+        let mut field = Field::new("Space name", "").validated(Rule::SpaceName);
+        field.excluded = taken;
+        self.dialog.as_mut().unwrap().fields.push(field);
+        vec![]
+    }
+    /// Confirm placing the session in an existing or a new Space (Start, Add, Move).
+    fn choose_space(&mut self, target: SpaceTarget, label: &str) -> Vec<Intent> {
+        let session = self.space_session.clone();
+        let where_ = match &target {
+            SpaceTarget::Existing(_) => format!("a new tab in {label}"),
+            SpaceTarget::New(_) => format!("a new tab in a new Space named {label}"),
+        };
+        let Some(place) = self.place else {
+            let mut args = Self::target(&session, "move-space");
+            args.extend(match &target {
+                SpaceTarget::Existing(id) => strings(&["--space", id]),
+                SpaceTarget::New(label) => strings(&["--new-space", label]),
+            });
+            args.extend(strings(&[
+                "--request-id",
+                &uuid::Uuid::new_v4().to_string(),
+            ]));
+            self.confirm("Move to Space", vec![format!("Move this terminal to {where_}? Its running process, account, directory and history stay unchanged. Split siblings stay in place; an empty source tab or Space may close.")], args);
+            return vec![];
+        };
+        let name = session["name"].as_str().unwrap_or("").to_owned();
+        let (title, body, button) = match place {
+            Place::Add => (
+                "Add to HERDR",
+                format!(
+                    "Open this running session in {where_}. HERDR only views the existing session: no agent is started and no input is sent."
+                ),
+                "Add to HERDR",
+            ),
+            Place::Start => (
+                "Start session",
+                format!(
+                    "Start this saved session in {where_}. The conversation is resumed; no message is sent."
+                ),
+                "Start session",
+            ),
+        };
+        self.show(
+            title,
+            vec![body],
+            &[button, "Cancel"],
+            Form::Placement(session, target, place),
+        );
+        self.dialog
+            .as_mut()
+            .unwrap()
+            .fields
+            .push(Field::new("Name", name.clone()).validated(Rule::Rename(name)));
+        self.validate_dialog_names();
+        vec![]
+    }
     fn activate(&mut self) -> Vec<Intent> {
         if matches!(self.page, Page::Spaces(_)) && self.options.selected + 1 == self.rows().len() {
             return self.back();
@@ -2961,56 +3067,23 @@ impl Manager {
                 }
             }
             Page::Spaces(_) => {
+                if index == 0 {
+                    return self.new_space_dialog();
+                }
                 if let Some(space) = self.space_choices["spaces"]
                     .as_array()
-                    .and_then(|spaces| spaces.get(index))
+                    .and_then(|spaces| spaces.get(index - 1))
                 {
                     if space["current"] == true {
                         return vec![];
                     }
-                    if let Some(place) = self.place {
-                        let space_id = space["id"].as_str().unwrap_or("").to_owned();
-                        let space_name = space["name"].as_str().unwrap_or("the selected Space");
-                        let session = self.space_session.clone();
-                        let name = session["name"].as_str().unwrap_or("").to_owned();
-                        let (title, body, button) = match place {
-                            Place::Add => (
-                                "Add to HERDR",
-                                format!(
-                                    "Open this running session in a new tab in {space_name}. HERDR only views the existing session: no agent is started and no input is sent."
-                                ),
-                                "Add to HERDR",
-                            ),
-                            Place::Start => (
-                                "Start session",
-                                format!(
-                                    "Start this saved session in a new tab in {space_name}. The conversation is resumed; no message is sent."
-                                ),
-                                "Start session",
-                            ),
-                        };
-                        self.show(
-                            title,
-                            vec![body],
-                            &[button, "Cancel"],
-                            Form::Placement(session, space_id, place),
-                        );
-                        self.dialog
-                            .as_mut()
-                            .unwrap()
-                            .fields
-                            .push(Field::new("Name", name.clone()).validated(Rule::Rename(name)));
-                        self.validate_dialog_names();
-                        return vec![];
-                    }
-                    let mut args = Self::target(&self.space_session, "move-space");
-                    args.extend(strings(&[
-                        "--space",
-                        space["id"].as_str().unwrap_or(""),
-                        "--request-id",
-                        &uuid::Uuid::new_v4().to_string(),
-                    ]));
-                    self.confirm("Move to Space", vec![format!("Move this terminal to a new tab in {}? Its running process, account, directory and history stay unchanged. Split siblings stay in place; an empty source tab or Space may close.",space["name"].as_str().unwrap_or("the selected Space"))], args);
+                    let target =
+                        SpaceTarget::Existing(space["id"].as_str().unwrap_or("").to_owned());
+                    let label = space["name"]
+                        .as_str()
+                        .unwrap_or("the selected Space")
+                        .to_owned();
+                    return self.choose_space(target, &label);
                 }
             }
             Page::Session(key) => {
@@ -3526,6 +3599,21 @@ impl Manager {
                 }
                 return self.session_action(s, action);
             }
+            Form::NewSpace(s, place) => {
+                let label = value(0).to_owned();
+                let taken = |s: &Value| s["name"] == label.as_str();
+                if !crate::draft::valid_name(&label)
+                    || self.space_choices["spaces"]
+                        .as_array()
+                        .is_some_and(|a| a.iter().any(taken))
+                {
+                    return vec![];
+                }
+                // Same session and generation as when the Spaces were loaded.
+                self.space_session = s;
+                self.place = place;
+                return self.choose_space(SpaceTarget::New(label.clone()), &format!("“{label}”"));
+            }
             Form::Placement(s, space, place) => {
                 let mut args = match place {
                     Place::Add => strings(&["session", "add-to-herdr"]),
@@ -3543,7 +3631,11 @@ impl Manager {
                     return vec![];
                 };
                 args.extend(host);
-                args.extend(strings(&["--space", &space, "--name", value(0)]));
+                args.extend(match &space {
+                    SpaceTarget::Existing(id) => strings(&["--space", id]),
+                    SpaceTarget::New(label) => strings(&["--new-space", label]),
+                });
+                args.extend(strings(&["--name", value(0)]));
                 let purpose = match place {
                     Place::Add => Purpose::AddToHerdr(s),
                     Place::Start => Purpose::Start(s),
@@ -4043,6 +4135,7 @@ impl Manager {
                     self.space_session = session.clone();
                     self.enter(Page::Spaces(id(&session).into()));
                     self.place = None;
+                    self.preselect_space(None);
                 }
             }
             Purpose::Placement(session, place) => {
@@ -4067,14 +4160,7 @@ impl Manager {
                     self.space_session = session.clone();
                     self.enter(Page::Spaces(id(&session).into()));
                     self.place = Some(place);
-                    if let Some(index) = preferred.and_then(|want| {
-                        self.space_choices["spaces"]
-                            .as_array()?
-                            .iter()
-                            .position(|space| space["id"] == want.as_str())
-                    }) {
-                        self.options.selected = index;
-                    }
+                    self.preselect_space(preferred);
                 }
             }
             Purpose::AddToHerdr(session) => {
@@ -4406,8 +4492,8 @@ impl Manager {
             let rows = self.rows();
             let palette = self.palette.clone();
             let mut view = crate::popup::Choices {
-                title: "Choose Space",
-                description: "Choose a destination Space for this session.",
+                title: crate::popup::SPACE_TITLE,
+                description: crate::popup::SPACE_DESCRIPTION,
                 rows: &rows,
                 editor: None,
                 note: &self.note,
@@ -4977,10 +5063,12 @@ mod tests {
         );
         m.response(*token, Ok(json!({"session_id":"stable","generation":"g1","current_space_id":"w1","spaces":[{"id":"w1","name":"Origin","current":true},{"id":"w2","name":"Work","current":false}]})));
         assert_eq!(m.page, Page::Spaces("stable".into()));
-        assert_eq!(m.options.selected, 0);
-        assert!(!m.rows()[0].enabled);
-        assert!(m.activate().is_empty());
+        assert_eq!(m.options.selected, 2, "opens on the first selectable Space");
+        assert!(!m.rows()[0].enabled, "no new Space for a move yet");
+        assert!(!m.rows()[1].enabled, "current Space");
         m.options.selected = 1;
+        assert!(m.activate().is_empty());
+        m.options.selected = 2;
         // A later state refresh must not silently rebind the confirmed move.
         m.sessions[0]["generation"] = json!("g2");
         assert!(m.activate().is_empty());
@@ -8206,7 +8294,19 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
         );
         m.response(token, Ok(space_choices()));
         assert_eq!(m.page, Page::Spaces("c".into()));
-        assert_eq!(m.options.selected, 1, "defaults to the focused Space");
+        assert_eq!(m.options.selected, 2, "defaults to the focused Space");
+        let rows = m.rows();
+        assert_eq!(rows[1].label, "Origin");
+        assert_eq!(rows[1].preview.as_deref(), Some("(w1)"));
+        assert_eq!(rows[1].preview_gap, 1);
+        assert_eq!(rows.last().unwrap().label, "Cancel");
+        assert!(rows[rows.len() - 2].separator);
+        assert_eq!(rows[0].label, "[create new space]");
+        assert!(!rows[0].enabled, "disabled until the backend advertises it");
+        assert_eq!(
+            rows[0].preview.as_deref(),
+            Some("(not available for adding yet)")
+        );
         assert!(m.activate().is_empty());
         let dialog = m.dialog.as_ref().unwrap();
         assert_eq!(dialog.title, "Add to HERDR");
@@ -8302,7 +8402,7 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
             assert!(args.contains(&"named".to_string()));
             m.response(token, Ok(space_choices()));
             assert_eq!(
-                m.options.selected, 0,
+                m.options.selected, 1,
                 "remembered Space beats the focused one"
             );
             m.activate();
@@ -8329,6 +8429,53 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
             assert!(refreshes(&sent));
             assert_eq!(m.dialog.as_ref().unwrap().title, "Session start requested");
         }
+    }
+    #[test]
+    fn create_new_space_names_then_confirms_for_start_and_move_when_advertised() {
+        let mut stopped = claude_session("stopped");
+        stopped["capabilities"]["resume"] = json!(true);
+        let mut m = placed(vec![stopped.clone()]);
+        m.capabilities["new_space"] = json!({"resume": true, "move_space": true});
+        let (token, _) = api(&m.activate());
+        let sent = m.response(token, Ok(stopped.clone()));
+        let (token, _) = api(&sent);
+        m.response(token, Ok(space_choices()));
+        assert!(m.rows()[0].enabled);
+        m.options.selected = 0;
+        assert!(m.activate().is_empty());
+        assert_eq!(m.dialog.as_ref().unwrap().title, "New Space name");
+        // A label that exists already is refused, as in the new-session flow.
+        assert!(m.submit(0, vec!["Work".into()]).is_empty());
+        assert_eq!(m.dialog.as_ref().unwrap().title, "New Space name");
+        assert!(m.submit(0, vec!["Fresh Space".into()]).is_empty());
+        assert_eq!(m.dialog.as_ref().unwrap().title, "Start session");
+        let (_, args) = api(&m.submit(0, vec!["Fresh".into()]));
+        assert_eq!(
+            args[args.len() - 4..],
+            strings(&["--new-space", "Fresh Space", "--name", "Fresh"])
+        );
+        assert!(!args.contains(&"--space".to_string()));
+
+        let running = json!({"id":"stable","name":"Example","generation":"g1","availability":"running","attachment":{"host":"herdr"},"capabilities":{"move_space":true}});
+        let mut m = Manager {
+            page: Page::Spaces("stable".into()),
+            sessions: vec![running.clone()],
+            space_session: running,
+            space_choices: space_choices(),
+            ..Default::default()
+        };
+        m.capabilities = json!({"new_space":{"move_space":true}});
+        m.options.selected = 0;
+        assert!(m.activate().is_empty());
+        assert!(m.submit(0, vec!["Fresh Space".into()]).is_empty());
+        assert_eq!(m.dialog.as_ref().unwrap().title, "Move to Space");
+        let sent = m.submit(0, vec![]);
+        let Intent::Api(_, args) = &sent[0] else {
+            panic!()
+        };
+        assert_eq!(args[0], "move-space");
+        assert_eq!(args[5..7], strings(&["--new-space", "Fresh Space"]));
+        assert_eq!(args[7], "--request-id");
     }
     #[test]
     fn session_details_list_earlier_ids_forks_and_jobs_only_when_known() {

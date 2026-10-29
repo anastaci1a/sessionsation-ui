@@ -463,7 +463,7 @@ themes report an approximation because HERDR exposes no resolved-palette API.
 
 ## New session and directory flow
 
-The Space chooser starts with `[create new space]`.
+The Space chooser starts with `[create new space]`. Starting a saved session, adding a running session to HERDR and moving it between Spaces open this same chooser (same title, description, inline `(id)` previews, Cancel placement and preselection). `[create new space]` asks for a Space name (existing labels refused), then confirms with `--new-space LABEL`. For those three actions it is enabled only when the backend advertises `capabilities.new_space.<resume|add_to_herdr|move_space>` (provisional path); otherwise it stays listed but unselectable with a "(not available for … yet)" reason. A session's current Space stays listed but unselectable, previewing `(current)`.
 Only the highlighted Space's `(id)` appears, one space after its name, unbolded
 gray; Back focus hides it. If any ID
 cannot fit inline, the whole list uses the standard centered preview below the

@@ -35,6 +35,8 @@ pub enum Rule {
     AccountName,
     Percentage,
     Name,
+    /// A HERDR Space label: the same rules as a new session's Space name.
+    SpaceName,
     Rename(String),
     Exact(String),
 }
@@ -55,7 +57,10 @@ impl Field {
         }
     }
     pub fn validated(mut self, rule: Rule) -> Self {
-        if matches!(rule, Rule::AccountName | Rule::Name | Rule::Rename(_)) {
+        if matches!(
+            rule,
+            Rule::AccountName | Rule::Name | Rule::SpaceName | Rule::Rename(_)
+        ) {
             self.input = self.input.limited(NAME_MAX_CHARS);
         }
         self.rule = rule;
@@ -141,6 +146,7 @@ impl Field {
                     && v.bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
             }
+            Rule::SpaceName => crate::draft::valid_name(v),
             Rule::Name | Rule::Rename(_) => {
                 !v.is_empty()
                     && v.trim() == v
