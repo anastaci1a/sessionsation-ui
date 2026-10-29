@@ -99,7 +99,11 @@ there is no matching selection; refreshed lists retain the hovered account by ID
 - The popup uses public backend API v1 only: accounts/usage/limits, new/resume,
   session details/rename, supported switch/restart/stop, HERDR Space moves, archive/restore/delete,
   and operation progress. Final checks and destructive confirmations belong to CLI.
-- Codex is implemented; Claude enrollment, usage, messaging and lifecycle are not.
+- Claude Code and Gemini CLI sessions offer what each session's backend capabilities
+  allow: focus, rename, start, and (contract revision 17) archive, restore and delete of
+  stopped conversations. Rows they cannot use stay greyed with the session's backend
+  reason (`exit the agent first`, `hosted worker running`) or `not supported for
+  Claude Code`/`Gemini CLI` when the provider has no such control.
   Cross-provider conversion is outside this version.
 - Active Codex sessions support Change working directory and Move project folder
   when the backend advertises those capabilities. Enter a destination, review the
@@ -181,8 +185,11 @@ order and shows the error.
 Entering a page from its parent always starts at the first selectable row; Back/Esc
 restores the parent's previous selection and scroll. Refreshed lists retain focus by
 stable identity. Close on Home detaches the viewer without stopping agents; Esc
-on Home needs a second press within one second (the footer says "Esc again to
-close"). Footers follow the top layer: "Esc: Back" in menus, "Esc: Cancel" in
+on Home needs a second press: the first fades in a band over the controls ("Press
+Esc again to close", 112 ms fade-in, held 1 s, 1 s fade-out), and a second Esc closes
+until three quarters of the fade-out have passed (about 1.9 s after the first);
+later it counts as a first press again. The timings are the `close_band` constants.
+Footers follow the top layer: "Esc: Back" in menus, "Esc: Cancel" in
 dialogs and pickers, "Enter/Esc: Close" in information dialogs.
 
 On Home, the name selector uses the outline `▷` (same width as `▶`; the right-side `◀` stays filled). While a name is selected, other account names
@@ -326,7 +333,8 @@ Long detached text is ellipsized to one line. Space roots use this same rule.
 Manage Sessions → Operations (or `o` while the status lane shows operations) opens
 the Operations popup over the current page: Running (operation spinner, kind,
 subject, live elapsed counter), Queued (in order, `queued #n`) and Recent (the last
-five finished or failed, newest first), then All operations (the full list below)
+five finished or failed, newest first; a failure shows its reason, shortened to
+the popup), then All operations (the full list below)
 and Close. It updates live and keeps the selected item. A queued item offers Cancel
 and Close; a recent one Dismiss and Close; a running one its progress dialog.
 Esc/Left return to the opener at its remembered row.
@@ -358,13 +366,16 @@ neither path launches or submits input to an agent.
 
 Manage sessions sorts busy, idle, then inactive sessions, newest access first
 within each group, with a bullet separator between active and inactive groups.
-Every row has the name, a state marker (the provider's spinner while busy, `●`
-while running idle, nothing for saved history) and a dim provider symbol and
-account (`liq-glass-lead  ⠙  ⏣ gate1`). Name width scales with the popup (about
+Every row has the name, then a state marker in place of the provider symbol and the
+account (`liq-glass-lead  ⏣ gate1`): the provider's chosen spinner while busy (or a
+pulsing symbol for Glow), the provider symbol and account name in the position-based
+accent while running idle, and both dim for saved history. Name width scales with the popup (about
 30% of its width, 12–40 cells); unselected long names end in `…`, and the selected
 one scrolls left (pause, scroll, pause, loop) to reveal the rest. A session with a
 pending or recently failed operation shows a badge after the account (`◜ moving to
-work` animates while active, `✗ move failed`), and a queued one `◌ restart queued`; Right moves focus onto the badge,
+work` animates while active, `✗ move failed`), and a queued one `◌ restart queued`.
+A failure badge shows only the session's most recent outcome: a later success hides
+it, and failures older than a day are not shown; Right moves focus onto the badge,
 Enter opens that operation's progress or details over the list, and Left returns.
 A finished operation's dialog offers `Dismiss` before `Close`: it hides that badge
 for good (kept in `dismissed-operations.json` beside the preferences, pruned when
@@ -397,8 +408,13 @@ current`. The queue is kept in `operation-queue.json` beside the preferences, sc
 to the backend root, and a detached `queue-worker` started by the popup dispatches
 it, so closing the popup neither drops nor repeats work. Each entry is marked
 running before its single attempt; an unconfirmed outcome becomes a failed entry and
-is never retried. Generation checks stay in force: a queued action whose session
-changed meanwhile fails with "choose the action again". Menus reserve the status lane before calculating scroll capacity.
+is never retried. An uncertain or failed Start settles as a failed entry ("Outcome
+uncertain — not retried" or the receipt's reason), so work queued behind it proceeds.
+Restart, move and switch change a session's generation, so when a queued session
+action starts it re-reads the session and uses its current generation, but only while
+it is the same session ID (or the entry that now carries its conversation lineage
+after a merge) holding the same conversation lineage; otherwise it fails with "choose
+the action again". Menus reserve the status lane before calculating scroll capacity.
 A failed preview/mutation closes its waiting dialog and shows the error there,
 without an automatic retry.
 
@@ -494,8 +510,10 @@ a `›` one space after the longest name, in the bullet hue (bold when hovered, 
 while Back or another selector is focused); Right or Enter enters one, which shows
 the remaining directions (`↕ ↑ ↓`) pulsing between the two hue levels; Up/Down
 choose, Enter sets, Esc reverts. **Appearance** sets the star field
-(Off/Calm/Normal/Lively) and brightness (Dim/Normal/Bright), saved in
-`preferences.json`. **Default directories** chooses global or per-Space defaults and
+(Dense/Normal/Sparse/Off) and brightness (Bright/Normal/Dim), saved in
+`preferences.json` as soon as Enter sets a value. Keys a newer build added to the
+file are kept on save and unknown values read as the default, so an older build
+still opens it. **Default directories** chooses global or per-Space defaults and
 holds the roots; its values share one column. Leave
 unset clears that default and its pending creation plan.
 The session-directory picker retains its two top actions. Configuration uses short

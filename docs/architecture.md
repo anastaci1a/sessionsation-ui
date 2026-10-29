@@ -57,8 +57,12 @@ Its reusable components are:
   resource, at most `MAX_CONCURRENT` (3) running including backend operations it did
   not start. A detached single-instance `queue-worker` settles running entries
   against `api operations`/launch receipts and dispatches ready ones, marking each
-  running before its one attempt; uncertain outcomes become failed entries, never
-  retries. The popup registers work it starts directly so the cap and order hold.
+  running before its one attempt; uncertain, failed or unknown launch receipts
+  become failed entries (never retries), so the worker moves on and exits once only
+  failures remain. Before dispatching a queued session action it re-reads `state` and
+  takes the session's current generation only while the session ID (or merge
+  survivor) still holds the queued conversation lineage. The popup registers work it
+  starts directly so the cap and order hold.
 - `launch_intent`: private UI submission evidence beside preferences in
   `launch-intents/`, scoped to the configured backend root. A click persists its
   original UUID/request before spawning a detached one-shot public-CLI submitter.
@@ -129,7 +133,16 @@ Its reusable components are:
   Backend effects stay asynchronous and mutations are never automatically replayed.
 - `directory`: read-only completion, canonical child resolution and staged paths.
   One picker serves session directories and Global/Per-Space configuration roots.
-- `draft` / `preferences`: creation intent and atomic UI-only preferences.
+- `draft` / `preferences`: creation intent and atomic UI-only preferences. Unknown
+  keys are kept and written back and unknown choices read as defaults, so builds can
+  roll back without breaking the file. Star field: Dense/Normal/Sparse/Off (stored as
+  `lively`/`normal`/`calm`/`off` for older builds).
+- `navigation`: per-gesture edge wrapping. Legacy input (no release or repeat events,
+  e.g. Termux) treats a press within `FIRST_REPEAT_GAP` of a hold's first press as its
+  delayed first repeat; once the terminal reports event types, every press is a new
+  gesture, so quick deliberate taps at an edge wrap.
+- `close_band`: the "Press Esc again to close" band and the second-Esc window
+  (`FADE_IN_MS` + `HOLD_MS` + 75% of `FADE_OUT_MS`).
 - `app`: page navigation, validation revisions and explicit effects. Pages supply
   choices and policy; they do not implement their own editor or list renderer.
 - `client` / runtime: asynchronous public API calls, bounded input/output channels,
