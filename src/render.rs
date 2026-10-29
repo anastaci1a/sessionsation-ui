@@ -153,6 +153,32 @@ impl Canvas {
             x += UnicodeWidthStr::width(glyph);
         }
     }
+    /// Recolours the already painted cells `x..x+len` of row `y` with the idle
+    /// sweep, keeping glyphs, weight and spaces. `origin` is the row's sweep
+    /// start and `span` its length; `brightness` dims the result (permille).
+    pub fn sweep_recolor(
+        &mut self,
+        x: usize,
+        y: usize,
+        len: usize,
+        origin: usize,
+        span: usize,
+        brightness: i64,
+    ) {
+        if self.popup_palette.is_some() || y >= self.height {
+            return;
+        }
+        let Some(theme) = &self.theme else { return };
+        for cx in x..(x + len).min(self.width) {
+            let cell = &mut self.cells[y * self.width + cx];
+            if !cell.glyph.is_empty() && cell.glyph != " " {
+                cell.fg = dim(
+                    theme.idle_sweep(cx.saturating_sub(origin), span),
+                    brightness,
+                );
+            }
+        }
+    }
     pub fn diff(&self, old: Option<&Self>) -> String {
         self.encode(old, |_| true)
     }
@@ -314,6 +340,27 @@ impl Theme {
             strike: style.strike,
             ..Cell::default()
         }
+    }
+    /// Idle-session sweep: a gentle wave travels left to right over `span`
+    /// cells on the star sweep's 4 s cycle, fading a soft primary tint toward
+    /// the soft secondary tint (the two bar hues) and back. RGB interpolation.
+    pub fn idle_sweep(&self, offset: usize, span: usize) -> [u8; 3] {
+        const WAVE: i64 = 8;
+        let front = (self.now % 4000) as i64 * (span as i64 + 2 * WAVE) * 1000 / 4000;
+        let dist = (offset as i64 * 1000 - (front - WAVE * 1000)).abs();
+        let p = if dist < WAVE * 1000 {
+            smooth(1000 - dist / WAVE)
+        } else {
+            0
+        };
+        dim(
+            mix(
+                hsv(80 + self.next, 350, 255),
+                hsv(260 + self.next, 350, 255),
+                p,
+            ),
+            850,
+        )
     }
     pub fn bar(&self, secondary: bool) -> [u8; 3] {
         let p = if self.now < 4000 {

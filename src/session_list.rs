@@ -389,9 +389,12 @@ pub fn claude_spinner(now_ms: u64) -> &'static str {
 fn busy(session: &Value) -> bool {
     session["availability"] == "running" && session["activity"] == "busy"
 }
-/// Compact state marker: the provider's spinner while busy, a dot while running
-/// idle, nothing for saved history.
-pub fn state_marker(session: &Value, now_ms: u64) -> &'static str {
+fn idle(session: &Value) -> bool {
+    session["availability"] == "running" && !busy(session)
+}
+/// The row's provider icon: the provider's own spinner frame replaces it while
+/// a turn runs, otherwise it is the static provider symbol.
+pub fn row_icon(session: &Value, now_ms: u64) -> &'static str {
     if busy(session) {
         if is_gemini(session) {
             gemini_spinner(now_ms)
@@ -400,10 +403,8 @@ pub fn state_marker(session: &Value, now_ms: u64) -> &'static str {
         } else {
             spinner(now_ms)
         }
-    } else if session["availability"] == "running" {
-        "●"
     } else {
-        ""
+        crate::usage::provider_symbol(provider(session))
     }
 }
 pub fn rows(sessions: &[Value], known: bool) -> Vec<Row> {
@@ -587,8 +588,8 @@ pub fn paint_with(
         .map(|s| UnicodeWidthStr::width(account_tag(s).as_str()))
         .max()
         .unwrap_or(0);
-    // Marker column (two spaces, one cell) and the account column (two spaces).
-    let columns = 3 + 2 + account_width;
+    // The account column sits one space after the longest name.
+    let columns = 1 + account_width;
     let longest = sessions
         .iter()
         .map(|s| UnicodeWidthStr::width(full_name(s).as_str()))
@@ -644,6 +645,7 @@ pub fn paint_with(
             crate::widgets::paint_hint(canvas, canvas.width.saturating_sub(8) / 2, y, "Loading…");
         }
     }
+    let level = |back: bool| if back { 600 } else { 1000 };
     let dim = |c: [u8; 3], back: bool| {
         if back {
             c.map(|n| (u16::from(n) * 60 / 100) as u8)
@@ -662,37 +664,59 @@ pub fn paint_with(
         let y = 3 + index - options.scroll;
         let selected = options.selected == index && !options.back;
         let mut x = left + 2 + name_width;
+        if idle(session) {
+            let origin = left + 2;
+            canvas.sweep_recolor(
+                origin,
+                y,
+                name_width,
+                origin,
+                name_width + 2,
+                level(options.back),
+            );
+        }
         if show_accounts {
-            let marker = state_marker(session, now_ms);
-            if !marker.is_empty() {
+            let icon = row_icon(session, now_ms);
+            let tag = account_tag(session);
+            let rest = tag.split_once(' ').map_or("", |(_, r)| r);
+            let tint = dim(if selected { SECONDARY } else { MUTED }, options.back);
+            if busy(session) {
                 canvas.accent_text(
-                    x + 2,
+                    x + 1,
                     y,
-                    marker,
+                    icon,
                     Accent {
-                        brightness: if options.back {
-                            600
-                        } else if busy(session) || selected {
-                            1000
-                        } else {
-                            700
-                        },
+                        brightness: level(options.back),
                         bold: false,
                         flash: false,
                         ..Accent::default()
                     },
                 );
+            } else {
+                canvas.widget_text(
+                    x + 1,
+                    y,
+                    icon,
+                    Cell {
+                        fg: tint,
+                        ..Cell::default()
+                    },
+                    false,
+                );
             }
             canvas.widget_text(
-                x + 5,
+                x + 3,
                 y,
-                &account_tag(session),
+                rest,
                 Cell {
-                    fg: dim(if selected { SECONDARY } else { MUTED }, options.back),
+                    fg: tint,
                     ..Cell::default()
                 },
                 false,
             );
+            if idle(session) {
+                canvas.sweep_recolor(x + 1, y, 1, left + 2, name_width + 2, level(options.back));
+            }
             x += columns;
         }
         // Anything after the table hangs right of the centred block and is shown
@@ -1017,7 +1041,7 @@ mod tests {
         ]
     }
     #[test]
-    fn every_row_has_a_state_marker_and_dim_provider_account_column() {
+    fn every_row_has_a_busy_icon_and_dim_provider_account_column() {
         let sessions = sessions();
         let mut field = crate::render::Field::new(100, 20, 1967);
         let mut c = field.paint(4100);
@@ -1025,25 +1049,19 @@ mod tests {
         let busy = text(&c, 3);
         let idle = text(&c, 4);
         let saved = text(&c, 6);
-        assert!(busy.contains("⠙") && busy.contains("⏣ gate1"), "{busy}");
-        assert!(idle.contains("●") && idle.contains("✻ main"), "{idle}");
+        // Busy replaces the provider icon itself; no second glyph, no dot.
+        assert!(busy.contains("⠙ gate1") && !busy.contains('⏣'), "{busy}");
+        assert!(idle.contains("✻ main") && !idle.contains('●'), "{idle}");
         assert!(saved.contains("⏣ work") && !saved.contains('●'), "{saved}");
         assert!(!saved.contains("inactive"));
         // Account columns start at one x on every row.
         let x = |line: &str, glyph: char| line.chars().position(|g| g == glyph).unwrap();
-        assert_eq!(x(&busy, '⏣'), x(&saved, '⏣'));
-        assert_eq!(x(&busy, '⏣'), x(&idle, '✻'));
-        assert_eq!(x(&busy, '⠙'), x(&idle, '●'));
-        assert_eq!(
-            c.cells[3 * 100 + x(&busy, '⏣')].fg,
-            SECONDARY,
-            "selected row"
-        );
-        let tag = &c.cells[4 * 100 + x(&idle, '✻')];
+        assert_eq!(x(&busy, '⠙'), x(&saved, '⏣'));
+        assert_eq!(x(&busy, '⠙'), x(&idle, '✻'));
+        let tag = &c.cells[4 * 100 + x(&idle, '✻') + 2];
         assert_eq!(tag.fg, MUTED);
         assert!(!tag.bold);
-        let marker = &c.cells[3 * 100 + x(&busy, '⠙')];
-        assert!(!marker.bold);
+        assert!(!c.cells[3 * 100 + x(&busy, '⠙')].bold);
         // Hover brightens the account and shows the timer; no "(inactive)".
         let mut c = field.paint(4100);
         paint(
@@ -1056,7 +1074,7 @@ mod tests {
             19,
         );
         assert!(text(&c, 3).contains("1:01:01:01"));
-        assert_eq!(c.cells[3 * 100 + x(&busy, '⏣')].fg, SECONDARY);
+        assert_eq!(c.cells[3 * 100 + x(&busy, '⠙') + 2].fg, SECONDARY);
         let mut c = field.paint(4100);
         paint(
             &mut c,
@@ -1085,6 +1103,68 @@ mod tests {
             assert!(!c.cells.iter().any(|c| {
                 ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"].contains(&c.glyph.as_str())
             }));
+        }
+    }
+    fn tint_of(c: &Canvas, y: usize, x: usize) -> [u8; 3] {
+        c.cells[y * c.width + x].fg
+    }
+    #[test]
+    fn idle_rows_sweep_name_and_icon_while_busy_and_saved_rows_do_not() {
+        let sessions = sessions();
+        let mut field = crate::render::Field::new(100, 20, 1967);
+        let paint_at = |field: &mut crate::render::Field, now: u64| {
+            let mut c = field.paint(now);
+            paint(&mut c, &mut Options::default(), &sessions, true, 18, 62, 19);
+            c
+        };
+        let c = paint_at(&mut field, 5000);
+        let idle = text(&c, 4);
+        let name = idle.chars().position(|g| g == 'd').unwrap();
+        let icon = idle.chars().position(|g| g == '✻').unwrap();
+        let colors: Vec<_> = (name..name + 4).map(|x| tint_of(&c, 4, x)).collect();
+        // Not the static grey, and not all one colour at a moment inside the sweep.
+        assert!(colors.iter().all(|c| *c != MUTED && *c != SECONDARY));
+        let later = paint_at(&mut field, 7000);
+        let later_colors: Vec<_> = (name..name + 4).map(|x| tint_of(&later, 4, x)).collect();
+        assert_ne!(colors, later_colors, "wave moves with the tick");
+        assert_ne!(tint_of(&c, 4, icon), MUTED);
+        // Busy and saved rows keep their own styling (saved name is not swept).
+        let saved_name = text(&c, 6).chars().position(|g| g == 'o').unwrap();
+        let saved_a = tint_of(&c, 6, saved_name);
+        assert_eq!(saved_a, tint_of(&later, 6, saved_name));
+        // Wave fades from one end colour to the other within the palette.
+        let theme = c.theme.clone().unwrap();
+        let ends: Vec<_> = (0..60).map(|o| theme.idle_sweep(o, 20)).collect();
+        assert!(ends.iter().any(|c| *c != ends[0]));
+    }
+    #[test]
+    fn row_icon_frames_follow_the_provider_while_busy() {
+        let busy = |p: &str| json!({"account_id":format!("{p}:a"),"availability":"running","activity":"busy"});
+        let idle = |p: &str| json!({"account_id":format!("{p}:a"),"availability":"running","activity":"idle"});
+        assert_eq!(row_icon(&busy("claude"), 0), "·");
+        assert_eq!(row_icon(&busy("claude"), 1000), "✽");
+        assert_eq!(row_icon(&busy("gemini"), 80), "⠙");
+        assert_eq!(row_icon(&busy("codex"), 100), "⠙");
+        assert_eq!(row_icon(&idle("claude"), 1000), "✻");
+        assert_eq!(row_icon(&idle("gemini"), 80), "✦");
+        assert_eq!(row_icon(&idle("codex"), 100), "⏣");
+    }
+    #[test]
+    fn account_column_sits_one_space_after_the_longest_name() {
+        let sessions = vec![
+            json!({"id":"a","name":"abcdefgh","account_id":"codex:p","availability":"saved"}),
+            json!({"id":"b","name":"abc","account_id":"codex:p","availability":"saved"}),
+        ];
+        for width in [60usize, 100, 140] {
+            let mut field = crate::render::Field::new(width, 20, 1967);
+            let mut c = field.paint(100);
+            paint(&mut c, &mut Options::default(), &sessions, true, 18, 0, 19);
+            let long = text(&c, 3);
+            let short = text(&c, 4);
+            let name_end = long.chars().position(|g| g == 'a').unwrap() + 8;
+            let col = long.chars().position(|g| g == '⏣').unwrap();
+            assert_eq!(col, name_end + 1, "{long}");
+            assert_eq!(short.chars().position(|g| g == '⏣').unwrap(), col);
         }
     }
     #[test]
@@ -1199,12 +1279,9 @@ mod tests {
             c
         };
         let c = draw(0, false);
-        assert!(text(&c, 3).contains("◜ moving to work"));
+        assert!(text(&c, 3).contains("◜") && text(&c, 3).contains("moving to work"));
         assert!(text(&c, 6).contains("✗ move failed"));
-        assert!(
-            text(&draw(150, false), 3).contains("◝ moving to work"),
-            "icon animates"
-        );
+        assert!(text(&draw(150, false), 3).contains("◝"), "icon animates");
         let x = text(&c, 6).chars().position(|g| g == '✗').unwrap();
         assert_eq!(c.cells[6 * 100 + x].fg, FAILURE);
         let focused = draw(0, true);
