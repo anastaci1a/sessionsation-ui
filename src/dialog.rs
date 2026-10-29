@@ -7,6 +7,20 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 const INVALID: [u8; 3] = [215, 0, 0];
+/// Option every dialog that shows a URL offers: its links alone, full screen.
+pub const VIEW_LINK: &str = "View link fullscreen";
+/// Shown under links the dialog no longer displays (replaced or withdrawn).
+pub const STALE_LINK: &str = "Out of date: the popup no longer shows this link.";
+/// The fullscreen link view, open over its dialog; the dialog keeps its selection.
+#[derive(Clone, Debug, Default)]
+struct LinkView {
+    /// Links last drawn; kept, marked out of date, once the dialog stops showing them.
+    shown: Vec<String>,
+    offset: usize,
+    /// Link rows that fit, and all link rows, as last painted.
+    room: usize,
+    total: usize,
+}
 #[derive(Clone, Debug)]
 pub struct Palette {
     pub accent: [u8; 3],
@@ -186,6 +200,7 @@ pub struct Dialog {
     /// Details layout: a wrapped `label  value` line continues under its value.
     pub hanging: bool,
     navigation: crate::widgets::SelectionNavigation,
+    link_view: Option<LinkView>,
 }
 pub enum Event {
     None,
@@ -212,7 +227,69 @@ impl Dialog {
             dim_from: None,
             hanging: false,
             navigation: crate::widgets::SelectionNavigation::default(),
+            link_view: None,
         }
+        .with_link_option()
+    }
+    fn with_link_option(mut self) -> Self {
+        self.sync_link_option();
+        self
+    }
+    /// URLs on screen in this dialog (body and status), in order, without repeats.
+    pub fn links(&self) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        for link in self
+            .body
+            .iter()
+            .chain(self.status.iter())
+            .flat_map(|l| links_in(l))
+        {
+            if !out.contains(&link) {
+                out.push(link);
+            }
+        }
+        out
+    }
+    /// Whether the fullscreen link view is open over this dialog.
+    pub fn link_open(&self) -> bool {
+        self.link_view.is_some()
+    }
+    pub fn has_link_option(&self) -> bool {
+        self.buttons.iter().any(|b| b.label == VIEW_LINK)
+    }
+    /// Offer [`VIEW_LINK`] exactly while the dialog shows a link (or its view is open),
+    /// before the dismissing options; the cursor stays on the option it was on.
+    fn sync_link_option(&mut self) {
+        let slots = self.field_slots();
+        let present = self.buttons.iter().position(|b| b.label == VIEW_LINK);
+        let wanted = self.link_view.is_some() || !self.links().is_empty();
+        match (present, wanted) {
+            (None, true) => {
+                let mut at = self
+                    .buttons
+                    .iter()
+                    .position(|b| dismisses(&b.label))
+                    .unwrap_or(self.buttons.len());
+                if at > 0 && self.buttons[at - 1].separator {
+                    at -= 1;
+                }
+                self.buttons.insert(at, Row::yes(VIEW_LINK));
+                if self.selected >= slots + at && self.buttons.len() > 1 {
+                    self.selected += 1;
+                }
+            }
+            (Some(at), false) => {
+                self.buttons.remove(at);
+                if self.selected > slots + at {
+                    self.selected -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    /// A caller's own button index: [`VIEW_LINK`] belongs to the dialog, not to them.
+    fn caller_button(&self, button: usize) -> usize {
+        button - usize::from(self.buttons[..button].iter().any(|b| b.label == VIEW_LINK))
     }
     pub fn progress(title: &str) -> Self {
         let mut d = Self::new(title, vec!["Loading…".into()], &["Continue in background"]);
@@ -270,12 +347,7 @@ impl Dialog {
         }
     }
     fn dismiss_button(&self, index: usize) -> bool {
-        self.buttons.get(index).is_some_and(|b| {
-            matches!(
-                b.label.as_str(),
-                "Cancel" | "Close" | "Continue in background"
-            )
-        })
+        self.buttons.get(index).is_some_and(|b| dismisses(&b.label))
     }
     pub fn paste(&mut self, text: &str) {
         if let Some(i) = self.editor() {
@@ -288,6 +360,11 @@ impl Dialog {
     }
     pub fn key_with_wrap(&mut self, key: KeyEvent, wrap: bool) -> Event {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return Event::None;
+        }
+        self.sync_link_option();
+        if self.link_view.is_some() {
+            self.link_key(key.code);
             return Event::None;
         }
         let slots = self.field_slots();
@@ -328,6 +405,14 @@ impl Dialog {
                     self.selected = (self.selected + 1) % count;
                 }
             }
+            KeyCode::Enter
+                if self
+                    .buttons
+                    .get(self.selected.wrapping_sub(slots))
+                    .is_some_and(|b| b.label == VIEW_LINK) =>
+            {
+                self.link_view = Some(LinkView::default());
+            }
             KeyCode::Enter if self.selected >= slots => {
                 let button = self.selected - slots;
                 let cancel = self.dismiss_button(button);
@@ -335,7 +420,7 @@ impl Dialog {
                     && (cancel || self.fields.iter().all(Field::valid))
                     && (cancel || self.busy || self.visible > 0)
                 {
-                    return Event::Choose(button, self.values());
+                    return Event::Choose(self.caller_button(button), self.values());
                 }
             }
             KeyCode::Enter => self.selected = (self.selected + 1).min(count.saturating_sub(1)),
@@ -349,11 +434,122 @@ impl Dialog {
         }
         Event::None
     }
+    /// Back (Esc, Left, or Enter or Space on Back) returns to the dialog as it was
+    /// left; arrows and PgUp/PgDn scroll links taller than the terminal.
+    fn link_key(&mut self, code: KeyCode) {
+        let Some(view) = &mut self.link_view else {
+            return;
+        };
+        let last = view.total.saturating_sub(view.room);
+        match code {
+            KeyCode::Esc | KeyCode::Left | KeyCode::Enter | KeyCode::Char(' ') => {
+                self.link_view = None;
+                self.sync_link_option();
+            }
+            KeyCode::Up => view.offset = view.offset.saturating_sub(1),
+            KeyCode::Down => view.offset = (view.offset + 1).min(last),
+            KeyCode::PageUp => view.offset = view.offset.saturating_sub(view.room.max(1)),
+            KeyCode::PageDown => view.offset = (view.offset + view.room.max(1)).min(last),
+            _ => {}
+        }
+    }
     pub fn paint(&mut self, canvas: &mut Canvas, palette: &Palette) {
-        canvas.overlay(|canvas| self.paint_panel(canvas, palette));
+        self.sync_link_option();
+        if self.link_view.is_some() {
+            canvas.overlay(|canvas| self.paint_links(canvas, palette));
+        } else {
+            canvas.overlay(|canvas| self.paint_panel(canvas, palette));
+        }
+    }
+    /// The links alone on the whole terminal, without frame or side padding: each
+    /// wraps hard from column 0 to the last column so it copies as one block.
+    fn paint_links(&mut self, canvas: &mut Canvas, palette: &Palette) {
+        let current = self.links();
+        let title = self.title.clone();
+        let Some(view) = &mut self.link_view else {
+            return;
+        };
+        let stale = current.is_empty();
+        if !stale {
+            view.shown = current;
+        }
+        let (width, height) = (canvas.width, canvas.height);
+        if width == 0 || height == 0 {
+            return;
+        }
+        canvas.open_popup(0, 0, width, height);
+        let previous_palette = canvas.popup_palette.replace(palette.clone());
+        let style = Cell {
+            fg: palette.text,
+            bg: Some(palette.panel),
+            ..Cell::default()
+        };
+        for row in 0..height {
+            canvas.text(0, row, &" ".repeat(width), style.clone(), false);
+        }
+        let full = height >= 6;
+        let top = usize::from(full) * 2;
+        if full {
+            // The popup title, in the border style a framed popup draws it in.
+            let border = Cell {
+                fg: palette.accent,
+                ..style.clone()
+            };
+            canvas.text(0, 0, &clip(&title, width), border, false);
+        }
+        let mut lines: Vec<(String, bool)> = vec![];
+        for (i, link) in view.shown.iter().enumerate() {
+            if i > 0 {
+                lines.push((String::new(), false));
+            }
+            lines.extend(hard_wrap(link, width).into_iter().map(|l| (l, false)));
+        }
+        if stale {
+            lines.push((String::new(), false));
+            lines.extend(wrap(STALE_LINK, width).into_iter().map(|l| (l, true)));
+        }
+        let room = height.saturating_sub(top + if full { 3 } else { 1 }).max(1);
+        view.room = room;
+        view.total = lines.len();
+        view.offset = view.offset.min(lines.len().saturating_sub(room));
+        let shown = lines.len().saturating_sub(view.offset).min(room);
+        for (i, (line, dim)) in lines.iter().skip(view.offset).take(shown).enumerate() {
+            let fg = if *dim { palette.muted } else { palette.text };
+            canvas.text(
+                0,
+                top + i,
+                line,
+                Cell {
+                    fg,
+                    ..style.clone()
+                },
+                false,
+            );
+        }
+        let back = (top + shown + usize::from(full)).min(height - 1);
+        Row::yes("Back").paint(canvas, 0, back, true, false);
+        if full && back < height - 1 {
+            let hint = if lines.len() > room {
+                "PgUp/PgDn: Scroll"
+            } else {
+                "Esc: Back"
+            };
+            crate::widgets::paint_centered_hint(canvas, 0, height - 1, width, hint);
+        }
+        for cell in &mut canvas.cells {
+            if cell.bg.is_none() {
+                cell.bg = Some(palette.panel);
+            }
+            if matches!(cell.glyph.as_str(), "○" | "●") {
+                cell.fg = palette.accent;
+            } else if cell.fg == [238; 3] {
+                cell.fg = palette.text;
+            }
+        }
+        canvas.popup_palette = previous_palette;
     }
     fn paint_panel(&mut self, canvas: &mut Canvas, palette: &Palette) {
-        let compact = self.compact
+        let compact = !self.has_link_option() && self.compact
             || !self.busy
                 && self.fields.is_empty()
                 && self.buttons.len() == 1
@@ -587,6 +783,55 @@ impl Dialog {
         }
         canvas.popup_palette = previous_palette;
     }
+}
+/// Options that close a dialog without acting.
+fn dismisses(label: &str) -> bool {
+    matches!(label, "Cancel" | "Close" | "Continue in background")
+}
+/// `http://` and `https://` links in `text`, without trailing sentence punctuation
+/// or unbalanced closing brackets.
+pub fn links_in(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .filter_map(|word| {
+            let start = ["https://", "http://"]
+                .iter()
+                .filter_map(|scheme| word.find(scheme))
+                .min()?;
+            let mut link = &word[start..];
+            loop {
+                let trimmed = link.trim_end_matches(['.', ',', ';', ':', '!', '?', '"', '\'']);
+                let trimmed = [('(', ')'), ('[', ']'), ('<', '>')]
+                    .iter()
+                    .find(|(open, close)| {
+                        trimmed.ends_with(*close)
+                            && trimmed.matches(*close).count() > trimmed.matches(*open).count()
+                    })
+                    .map_or(trimmed, |_| &trimmed[..trimmed.len() - 1]);
+                if trimmed == link {
+                    break;
+                }
+                link = trimmed;
+            }
+            let rest = &link[link.find("://")? + 3..];
+            (!rest.is_empty()).then(|| link.to_owned())
+        })
+        .collect()
+}
+/// Split `text` into rows of `width` columns (the last may be shorter), never at
+/// a word: every character stays, in order, with nothing inserted.
+pub fn hard_wrap(text: &str, width: usize) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut used = 0;
+    for g in text.graphemes(true) {
+        let w = UnicodeWidthStr::width(g);
+        if used + w > width.max(1) && used > 0 {
+            out.push(String::new());
+            used = 0;
+        }
+        out.last_mut().unwrap().push_str(g);
+        used += w;
+    }
+    out
 }
 /// Wrap a `label  value` line (label, then two or more spaces) with a hanging
 /// indent: continuation lines start under the value. Other lines, and values
@@ -940,5 +1185,199 @@ mod tests {
         assert!(!text.contains("Esc:"));
         d.paste("codex-personal");
         assert!(d.fields[0].valid());
+    }
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+    fn rows(c: &Canvas) -> Vec<String> {
+        c.cells
+            .chunks(c.width)
+            .map(|r| r.iter().map(|c| c.glyph.as_str()).collect())
+            .collect()
+    }
+    /// A long OAuth link with every URL punctuation class.
+    fn long_link() -> String {
+        format!(
+            "https://auth.example.invalid/oauth/authorize?client_id={}&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fcb&scope=openid+profile&state=a-b_c.d~e!$'()*,;=:@/?#frag",
+            "x".repeat(200)
+        )
+    }
+    #[test]
+    fn links_keep_url_characters_and_drop_sentence_punctuation() {
+        let link = long_link();
+        assert_eq!(links_in(&link), vec![link.clone()]);
+        assert_eq!(
+            links_in("Open https://example.invalid/device. Then (see https://a.invalid/x_(y))."),
+            ["https://example.invalid/device", "https://a.invalid/x_(y)"]
+        );
+        assert_eq!(
+            links_in("<http://example.invalid/a>,"),
+            ["http://example.invalid/a"]
+        );
+        assert!(links_in("No link: https:// or example.invalid").is_empty());
+        for width in [1, 7, 40] {
+            let rows = hard_wrap(&link, width);
+            assert_eq!(rows.concat(), link);
+            assert!(rows[..rows.len() - 1].iter().all(|r| r.len() == width));
+        }
+    }
+    #[test]
+    fn dialogs_offer_the_link_view_only_while_they_show_a_link() {
+        let mut d = Dialog::new("Information", vec!["Plain text".into()], &["Close"]);
+        assert!(!d.has_link_option());
+        d.status = Some("Visit https://example.invalid/help".into());
+        d.paint(&mut Canvas::new(80, 24), &Palette::default());
+        let labels: Vec<_> = d.buttons.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(labels, [VIEW_LINK, "Close"]);
+        assert_eq!(d.selected, 1, "the cursor stays on the option it was on");
+        // A lone Close no longer hides the options: the link option is visible.
+        let mut c = Canvas::new(80, 24);
+        d.paint(&mut c, &Palette::default());
+        assert!(rows(&c).iter().any(|r| r.contains(VIEW_LINK)));
+        d.status = None;
+        d.paint(&mut Canvas::new(80, 24), &Palette::default());
+        assert!(!d.has_link_option());
+        assert_eq!(d.selected, 0);
+        // Callers keep their own button indices; the option sits before Cancel's group.
+        let mut d = Dialog::new(
+            "Confirm",
+            vec!["https://example.invalid/device".into()],
+            &["Confirm", "Cancel"],
+        );
+        d.separate_cancel();
+        d.sync_link_option();
+        let labels: Vec<_> = d.buttons.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(labels, ["Confirm", VIEW_LINK, "", "Cancel"]);
+        d.paint(&mut Canvas::new(80, 24), &Palette::default());
+        assert!(matches!(d.key(enter()), Event::Choose(0, _)));
+        d.selected = 3;
+        assert!(matches!(d.key(enter()), Event::Choose(2, _)));
+    }
+    #[test]
+    fn link_view_fills_every_column_at_any_width_and_reads_back_intact() {
+        let link = long_link();
+        let palette = Palette {
+            accent: [1, 2, 3],
+            panel: [4, 5, 6],
+            text: [7, 8, 9],
+            secondary: [10, 11, 12],
+            muted: [13, 14, 15],
+            error: [16, 17, 18],
+        };
+        for width in [40, 80, 160] {
+            let mut d = Dialog::new(
+                "Complete provider login",
+                vec![link.clone(), "Code: ABCD-EFGH".into()],
+                &["Continue in background"],
+            );
+            d.paint(&mut Canvas::new(width, 24), &palette);
+            d.key(key(KeyCode::Up));
+            assert_eq!(d.buttons[d.selected].label, VIEW_LINK);
+            assert!(matches!(d.key(enter()), Event::None));
+            assert!(d.link_open());
+            let mut field = crate::render::Field::new(width, 24, 1967);
+            let mut c = field.paint(4060);
+            d.paint(&mut c, &palette);
+            let text = rows(&c);
+            // No frame anywhere, the title at column 0, the link from row 2.
+            assert!(
+                c.cells
+                    .iter()
+                    .all(|c| !"┌┐└┘│─".contains(c.glyph.as_str()) || c.glyph.is_empty())
+            );
+            assert!(text[0].starts_with("Complete provider login"));
+            let link_rows: Vec<&String> = text[2..]
+                .iter()
+                .take_while(|r| !r.trim().is_empty())
+                .collect();
+            assert_eq!(link_rows.len(), link.len().div_ceil(width));
+            for row in &link_rows[..link_rows.len() - 1] {
+                assert_eq!(row.len(), width, "column 0 to the last column");
+                assert!(!row.starts_with(' ') && !row.ends_with(' '));
+            }
+            let read: String = link_rows.iter().map(|r| r.trim_end()).collect();
+            assert_eq!(read, link, "read back from the canvas at width {width}");
+            // Theming: popup background everywhere, link in the text colour,
+            // title in the border accent, Back as a selected popup option.
+            assert!(c.cells.iter().all(|c| c.bg == Some(palette.panel)));
+            for y in 2..2 + link_rows.len() {
+                for cell in &c.cells[y * width..(y + 1) * width] {
+                    if !cell.glyph.trim().is_empty() {
+                        assert_eq!(
+                            (cell.fg, cell.bold, cell.strike),
+                            (palette.text, false, false)
+                        );
+                    }
+                }
+            }
+            assert_eq!(c.cells[0].fg, palette.accent);
+            let back = 2 + link_rows.len() + 1;
+            assert!(text[back].starts_with("● Back"));
+            assert_eq!(c.cells[back * width].fg, palette.accent);
+            assert_eq!(c.cells[back * width + 2].fg, palette.text);
+            assert!(text[23].contains("Esc: Back"));
+            // Back, Esc and Left all return to the dialog, cursor where it was.
+            for code in [KeyCode::Enter, KeyCode::Esc, KeyCode::Left] {
+                assert!(matches!(d.key(key(code)), Event::None));
+                assert!(!d.link_open());
+                assert_eq!(d.buttons[d.selected].label, VIEW_LINK);
+                let mut c = Canvas::new(width, 24);
+                d.paint(&mut c, &palette);
+                assert!(rows(&c).iter().any(|r| r.contains('┌')));
+                assert!(matches!(d.key(enter()), Event::None));
+                assert!(d.link_open());
+            }
+        }
+    }
+    #[test]
+    fn link_view_rewraps_on_resize_and_follows_or_marks_a_changed_link() {
+        let mut d = Dialog::new(
+            "Login",
+            vec!["https://example.invalid/first".into()],
+            &["Cancel"],
+        );
+        d.selected = 0;
+        d.key(enter());
+        assert!(d.link_open());
+        let link = long_link();
+        d.body = vec![link.clone()];
+        for width in [50, 30] {
+            let mut c = Canvas::new(width, 40);
+            d.paint(&mut c, &Palette::default());
+            let text = rows(&c);
+            assert_eq!(text[2].len(), width);
+            let read: String = text[2..]
+                .iter()
+                .take_while(|r| !r.trim().is_empty())
+                .map(|r| r.trim_end())
+                .collect();
+            assert_eq!(read, link, "the view shows the current link");
+        }
+        // The dialog stops showing it: the last link stays, marked out of date.
+        d.body = vec!["Login complete".into()];
+        let mut c = Canvas::new(60, 40);
+        d.paint(&mut c, &Palette::default());
+        let text = rows(&c);
+        assert!(text[2].starts_with("https://auth.example.invalid/"));
+        let y = text
+            .iter()
+            .position(|r| r.starts_with("Out of date"))
+            .unwrap();
+        assert_eq!(c.cells[y * 60].fg, Palette::default().muted);
+        d.key(key(KeyCode::Esc));
+        assert!(!d.link_open() && !d.has_link_option());
+        // Taller than the terminal: PgDn scrolls and the hint says so.
+        d.body = vec![link.clone()];
+        d.sync_link_option();
+        d.selected = 0;
+        d.key(key(KeyCode::Enter));
+        assert!(d.link_open());
+        let mut c = Canvas::new(24, 12);
+        d.paint(&mut c, &Palette::default());
+        assert!(rows(&c)[11].contains("PgUp/PgDn"));
+        d.key(key(KeyCode::PageDown));
+        let mut c = Canvas::new(24, 12);
+        d.paint(&mut c, &Palette::default());
+        assert_eq!(rows(&c)[2], link[24 * 7..24 * 8]);
     }
 }

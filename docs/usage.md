@@ -81,7 +81,15 @@ Fixed-choice heights fit their description, choices and Cancel button exactly.
 Forms share the boxed account-name editor; all popup choices are left aligned,
 with descriptive text followed by one blank line before fields or choices.
 Information-only dialogs, including a dialog whose only action is Close, hide
-that action and all bottom controls; Enter/Esc dismisses them. A popup opened over
+that action and all bottom controls; Enter/Esc dismisses them. A dialog that shows a
+URL (for example the Codex verification URL) adds "View link fullscreen" before its
+closing option, and keeps it visible even when that option is a lone Close. It shows
+only the link on the whole terminal in the popup colours, with no frame or side
+padding: the link wraps hard from the first to the last column so terminals without
+wrapped-link detection can select it as one block, and rewraps on resize. A link
+the dialog replaces is followed; one it withdraws stays, marked out of date. Back,
+Esc or Left returns to the same dialog with its cursor on that option; that Esc
+never counts toward Esc-again-to-close. A popup opened over
 another fades every popup beneath it 30% toward the terminal background; only the
 top popup keeps its colours. Progress and loading dialogs
 reserve a fixed body viewport and scroll updates within it. Long lists scroll

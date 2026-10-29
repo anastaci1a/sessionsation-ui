@@ -2630,6 +2630,10 @@ impl Manager {
     pub fn key_with_wrap(&mut self, key: KeyEvent, wrap: bool) -> Vec<Intent> {
         self.validate_dialog_names();
         if let Some(d) = &mut self.dialog {
+            if d.link_open() {
+                // Esc in the link view only goes back; it never arms closing.
+                self.close_armed = None;
+            }
             match d.key_with_wrap(key, wrap) {
                 dialog::Event::None => return vec![],
                 dialog::Event::Dismiss => {
@@ -4908,9 +4912,10 @@ impl Manager {
             hint_lines(&["▲/▼: Choose", "Enter: Set", "Esc: Cancel"], canvas.width)
         } else if let Some(d) = &self.dialog {
             // The footer follows the top dialog.
-            let info = d.compact
-                || d.buttons.is_empty() && d.fields.is_empty()
-                || d.buttons.len() == 1 && d.buttons[0].label == "Close";
+            let info = !d.has_link_option()
+                && (d.compact
+                    || d.buttons.is_empty() && d.fields.is_empty()
+                    || d.buttons.len() == 1 && d.buttons[0].label == "Close");
             let tokens: &[&str] = if info {
                 &["Enter/Esc: Close"]
             } else if d
@@ -8725,7 +8730,8 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         let out = m.response(token, Ok(json!({"login":{"verificationUri":"https://example.invalid/device","userCode":"ABCD-EFGH"}})));
         assert!(out.is_empty());
         let d = m.dialog.as_mut().unwrap();
-        assert_eq!(d.buttons[0].label, "Continue in background");
+        assert_eq!(d.buttons[0].label, dialog::VIEW_LINK);
+        assert_eq!(d.buttons[1].label, "Continue in background");
         let mut c = Canvas::new(100, 40);
         d.paint(&mut c, &Palette::default());
         let rows: Vec<String> = c
@@ -8743,6 +8749,52 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             option + 1,
             "the frame ends right after the last option"
         );
+    }
+    #[test]
+    fn codex_login_link_opens_fullscreen_and_every_back_key_returns_to_the_dialog() {
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let mut m = dual_providers();
+        let sent = m.mutate(strings(&["account", "login", "codex:account1"]));
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        let link = "https://example.invalid/device?user_code=ABCD-EFGH&x=%2F";
+        m.response(
+            token,
+            Ok(json!({"login":{"verificationUri":link,"userCode":"ABCD-EFGH"}})),
+        );
+        let d = m.dialog.as_mut().unwrap();
+        assert!(
+            d.has_link_option(),
+            "the login link offers the fullscreen view"
+        );
+        assert_eq!(d.buttons[d.selected].label, "Continue in background");
+        m.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        for code in [KeyCode::Esc, KeyCode::Left, KeyCode::Enter] {
+            assert!(
+                m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                    .is_empty()
+            );
+            let d = m.dialog.as_mut().unwrap();
+            assert!(d.link_open());
+            let mut c = Canvas::new(80, 24);
+            m.paint(&mut c, 22);
+            let text: String = c.cells[2 * 80..3 * 80]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect();
+            assert_eq!(text.trim_end(), link);
+            // An armed close never survives into, or is armed by, the link view.
+            m.close_armed = Some(std::time::Instant::now());
+            assert!(m.key(KeyEvent::new(code, KeyModifiers::NONE)).is_empty());
+            assert!(m.close_armed.is_none());
+            let d = m.dialog.as_ref().expect("back on the login dialog");
+            assert!(!d.link_open() && matches!(m.form, Form::None));
+            assert_eq!(d.title, "Complete provider login");
+            assert_eq!(d.buttons[d.selected].label, dialog::VIEW_LINK);
+        }
+        assert!(m.key(esc).is_empty());
+        assert!(m.dialog.is_none());
     }
     #[test]
     fn deregister_restore_and_delete_work_for_claude_when_supported() {

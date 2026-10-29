@@ -94,6 +94,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("add-to-herdr", 80, 24),
         ("modal", 60, 24),
         ("login-codex", 70, 20),
+        ("login-codex-link", 40, 16),
         ("login-claude-wait", 70, 20),
         ("login-gemini-wait", 70, 20),
         ("operations-wide", 120, 24),
@@ -294,6 +295,20 @@ fn management_geometry_usage_markers_and_picker_columns() {
                 m.sessions = vec![
                     serde_json::json!({"id":"c","name":"Claude work","provider":"claude","account_id":"claude:claude-main","availability":"running","attachment":null,"capabilities":{"focus":false,"rename":true,"resume":false}}),
                 ];
+            }
+            "login-codex-link" => {
+                let mut d = Dialog::new(
+                    "Complete provider login",
+                    vec![
+                        "https://example.invalid/oauth/authorize?client_id=app&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fcb&state=a-b_c.d~e#frag".into(),
+                        "Code: ABCD-EFGH".into(),
+                    ],
+                    &["Continue in background"],
+                );
+                use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+                d.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+                d.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                m.dialog = Some(d);
             }
             "login-codex" => {
                 m.dialog = Some(Dialog::new(
