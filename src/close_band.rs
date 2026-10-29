@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 // ---- Tunables (not user settings): edit here to adjust the animation. ----
 /// Quick fade-in of the band background.
-pub const FADE_IN_MS: u64 = 150;
+pub const FADE_IN_MS: u64 = 75;
 /// How long the band stays fully opaque.
 pub const HOLD_MS: u64 = 1000;
 /// Slow fade-out of the band background.
