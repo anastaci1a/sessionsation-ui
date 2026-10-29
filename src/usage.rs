@@ -264,7 +264,7 @@ impl Usage {
                 y,
                 &label,
                 Accent {
-                    bold: true,
+                    bold: false,
                     flash: false,
                     ..Accent::default()
                 },
@@ -367,7 +367,7 @@ impl Usage {
         selected: bool,
     ) {
         if self.status_only() {
-            self.paint_status(canvas, x, y, bar, 1000);
+            self.paint_status(canvas, x, y, bar, if selected { 1000 } else { 600 });
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
@@ -669,7 +669,7 @@ impl AccountsLayout {
             );
             if active && usage_focus {
                 usage.paint_focused(canvas, self.bars, y, self.bar_width, self.digits);
-            } else if depressed || usage_focus {
+            } else if depressed || usage_focus || usage.status_only() {
                 usage.paint_deemphasized(canvas, self.bars, y, self.bar_width, self.digits);
             } else {
                 usage.paint_selected(
@@ -705,7 +705,11 @@ impl AccountsLayout {
                     self.bars + usage.width(self.bar_width, self.digits) + 1,
                     y,
                     "(moving)",
-                    Accent::default(),
+                    Accent {
+                        brightness: if active && usage_focus { 1000 } else { 600 },
+                        bold: false,
+                        ..Accent::default()
+                    },
                 );
             }
             y += height + 1;
@@ -772,11 +776,7 @@ mod tests {
                     assert_eq!(c.cells[cell], expected.cells[cell]);
                     let usage = Usage::account(a);
                     if usage.status_only() {
-                        let brightness = if back || selected.is_none() || usage_focus && !active {
-                            600
-                        } else {
-                            1000
-                        };
+                        let brightness = if active && usage_focus { 1000 } else { 600 };
                         usage.paint_status(
                             &mut expected,
                             layout.bars,
@@ -786,7 +786,7 @@ mod tests {
                         );
                         let sx = usage.status_x(layout.bars, layout.bar_width);
                         for x in sx..sx + UnicodeWidthStr::width(usage.status_label().as_str()) {
-                            expected.cells[y * 100 + x].bold = active && usage_focus;
+                            expected.cells[y * 100 + x].bold = false;
                             assert_eq!(c.cells[y * 100 + x], expected.cells[y * 100 + x]);
                         }
                     }
@@ -813,6 +813,39 @@ mod tests {
                     }
                     y += usage.height() + 1;
                 }
+            }
+        }
+    }
+    #[test]
+    fn parenthetical_status_is_dim_until_cursor_is_on_the_option_and_never_bold() {
+        let mut a = account();
+        a.id = "codex:personal".into();
+        a.details.insert("enabled".into(), json!(false));
+        let usage = Usage::account(&a);
+        assert!(usage.status_only());
+        let layout = AccountsLayout::fit(&[a.clone()], 100);
+        let base = crate::render::Field::new(100, 10, 1967).paint(4200);
+        let sx = usage.status_x(layout.bars, layout.bar_width);
+        let len = UnicodeWidthStr::width(usage.status_label().as_str());
+        let colour = |brightness| {
+            let mut c = base.clone();
+            usage.paint_status(&mut c, layout.bars, 3, layout.bar_width, brightness);
+            c.cells[3 * 100 + sx].fg
+        };
+        assert_ne!(colour(600), colour(1000));
+        // (selected, back, usage_focus, expect selected colour)
+        for (selected, back, focus, bright) in [
+            (Some(0), false, false, false),
+            (Some(0), false, true, true),
+            (None, false, false, false),
+            (Some(0), true, true, false),
+        ] {
+            let mut c = base.clone();
+            layout.paint(&mut c, &[a.clone()], 3, 10, 0, selected, back, focus, None);
+            for x in sx..sx + len {
+                let cell = &c.cells[3 * 100 + x];
+                assert!(!cell.bold, "{selected:?} {back} {focus}");
+                assert_eq!(cell.fg, colour(if bright { 1000 } else { 600 }));
             }
         }
     }
@@ -887,7 +920,7 @@ mod tests {
                 },
             );
             assert_eq!(expected.cells[120 + end + 1], c.cells[120 + end + 1]);
-            assert!(c.cells[120 + sx].bold);
+            assert!(!c.cells[120 + sx].bold);
         }
     }
     #[test]
