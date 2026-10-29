@@ -11,14 +11,33 @@
 //! Their first auto-repeat arrives only after the keyboard's repeat delay, so a
 //! press within `FIRST_REPEAT_GAP` of the press that began a hold still belongs
 //! to that hold; only later slow presses start a new gesture.
+//! Both windows apply only to such legacy input. Once the terminal has reported a
+//! release or repeat event, a hold arrives as repeats and every press follows a
+//! release, so each press begins a fresh gesture and two quick taps at an edge
+//! both wrap.
 use crossterm::event::{KeyEvent, KeyEventKind};
-use std::time::{Duration, Instant};
+use std::{
+    cell::Cell,
+    time::{Duration, Instant},
+};
 
 /// Presses of one direction closer together than this continue one hold.
 pub const HOLD_GAP: Duration = Duration::from_millis(150);
 /// Upper bound of a keyboard's initial auto-repeat delay: the first repeat of a
-/// hold may lag the press that began it by up to this much.
+/// legacy hold may lag the press that began it by up to this much.
 pub const FIRST_REPEAT_GAP: Duration = Duration::from_millis(1200);
+
+thread_local! {
+    /// Set once the terminal reports release or repeat events (input thread).
+    static EVENT_TYPES: Cell<bool> = const { Cell::new(false) };
+}
+/// Whether key event types are reported, so every press begins a gesture.
+pub fn event_types_reported() -> bool {
+    EVENT_TYPES.with(Cell::get)
+}
+pub fn set_event_types_reported(reported: bool) {
+    EVENT_TYPES.with(|c| c.set(reported));
+}
 
 #[derive(Default)]
 pub struct Navigation;
@@ -26,6 +45,9 @@ impl Navigation {
     /// Each event with its wrap permission (`true` for presses, `false` for
     /// native repeats and releases). No event is held back.
     pub fn events(&mut self, key: KeyEvent) -> Vec<(KeyEvent, bool)> {
+        if key.kind != KeyEventKind::Press {
+            set_event_types_reported(true);
+        }
         vec![(key, self.key_at(key, Instant::now()))]
     }
     /// Retained for the event loop's frame tick; nothing is ever pending.
@@ -87,7 +109,7 @@ impl SelectionNavigation {
             return selected;
         }
         let continuing = self.direction == Some(previous)
-            && !(press && self.repeated)
+            && !(press && (self.repeated || event_types_reported()))
             && self.last.is_some_and(|at| {
                 let gap = now.saturating_duration_since(at);
                 gap < HOLD_GAP || self.started && gap < FIRST_REPEAT_GAP
@@ -324,6 +346,46 @@ mod tests {
         let path = timed(5, 0, &steps);
         assert_eq!(path[19], 4, "{path:?}");
         assert_eq!(path[20], 0, "a fresh tap wraps: {path:?}");
+    }
+    #[test]
+    fn two_quick_deliberate_taps_at_an_edge_both_wrap_once_releases_are_reported() {
+        // A Down tap reaches the bottom row, a second one 500 ms later wraps:
+        // with release events each tap is its own gesture.
+        set_event_types_reported(true);
+        let path = timed(4, 2, &[(false, 0), (false, 500)]);
+        assert_eq!(path, [3, 0], "the second deliberate tap wraps");
+        let path = timed(4, 1, &[(true, 0), (true, 500), (true, 1000)]);
+        assert_eq!(path, [0, 3, 2]);
+        let mut nav = SelectionNavigation::default();
+        let now = Instant::now();
+        let s = nav.step_at(3, 4, false, true, now, |_| true);
+        assert_eq!(s, 0);
+        let s = nav.step_at(3, 4, false, true, now + Duration::from_millis(500), |_| {
+            true
+        });
+        assert_eq!(s, 0, "the second deliberate tap at the edge wraps too");
+        // Holds still stop: repeats never wrap.
+        let s = nav.step_at(3, 4, false, false, now + Duration::from_millis(530), |_| {
+            true
+        });
+        assert_eq!(s, 3);
+        // Legacy input keeps the long first-repeat window.
+        set_event_types_reported(false);
+        let path = timed(4, 2, &[(false, 0), (false, 500)]);
+        assert_eq!(
+            path,
+            [3, 3],
+            "a legacy press 500 ms later may be the first repeat"
+        );
+        let mut input = Navigation;
+        let mut release = KeyEvent::new(
+            crossterm::event::KeyCode::Down,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        release.kind = KeyEventKind::Release;
+        input.events(release);
+        assert!(event_types_reported(), "a release event switches modes");
+        set_event_types_reported(false);
     }
     #[test]
     fn a_press_after_native_repeats_is_a_fresh_gesture() {
