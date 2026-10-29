@@ -405,6 +405,38 @@ impl Client {
         ensure!(body.get("error").is_none(), "HERDR rejected request");
         Ok(body.get("result").unwrap_or(&body).clone())
     }
+    /// The visible text of the open provider-login pane, or `None` when no such
+    /// pane exists. Reads the pane's screen only; the login plan is never read.
+    pub async fn login_screen(&self) -> Result<Option<String>> {
+        let list = self.host(&["pane", "list"]).await?;
+        let pane = list["panes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .rev()
+            .find(|p| p["label"] == crate::login_link::LOGIN_PANE_LABEL)
+            .and_then(|p| p["pane_id"].as_str().map(str::to_owned));
+        let Some(pane) = pane else { return Ok(None) };
+        let mut command = tokio::process::Command::new(&self.herdr);
+        command
+            .args(["pane", "read", &pane, "--source", "visible"])
+            .env("HERDR_SOCKET_PATH", &self.socket)
+            .env("HERDR_SESSION", &self.session)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let out = tokio::time::timeout(Duration::from_secs(10), async {
+            Ok::<_, anyhow::Error>(spawn_child(command).await?.wait_with_output().await?)
+        })
+        .await
+        .context("HERDR timed out")??;
+        // A pane that closed between the listing and the read is simply gone.
+        if !out.status.success() {
+            return Ok(None);
+        }
+        Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+    }
     pub fn instance(&self) -> String {
         std::fs::canonicalize(&self.socket)
             .unwrap_or(self.socket.clone())

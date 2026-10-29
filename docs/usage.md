@@ -309,6 +309,15 @@ percentages through the existing owner. Deregister preserves credentials/history
 Restore reverses deregistration. Delete removes local account files and credentials
 while preserving saved/archived conversations. The upstream provider account is
 unchanged. Both confirmations require the displayed friendly provider-name label.
+While a Claude, Gemini or Antigravity login runs, choosing Log in (or the account's
+"Login required" status) again finds the open `Provider login` pane through HERDR,
+reads only its visible text (`herdr pane read --source visible`; never credential
+files) and shows "Login in progress". The provider CLI prints its OAuth link in that
+pane; the newest `http(s)` link is rebuilt across terminal line wraps (rows as wide
+as the screen's widest row continue on the next row, joined exactly) and offered as
+"View link fullscreen". Until a link is printed the dialog says it is waiting and
+offers no option. The pane is re-read every 2 s and the dialog follows a changed
+screen; with no login pane the usual Login confirmation opens.
 
 Gemini accounts choose a sign-in mode from the backend's ordered `auth_modes`
 (`api capabilities`, contract revision 21). Add (after `account add`) and Log in open

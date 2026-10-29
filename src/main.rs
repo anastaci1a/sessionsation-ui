@@ -115,6 +115,7 @@ enum Message {
     Managed(u64, Result<Value, String>),
     SessionFocused(Result<(), String>),
     LoginLaunched(Result<(), String>),
+    LoginScreen(String, Result<Option<String>, String>),
     Theme(Result<(sessionsation_ui::dialog::Palette, Option<String>), String>),
     Directory(u64, Result<Listing, String>),
     Validation(u64, Result<(), String>),
@@ -135,6 +136,7 @@ impl Message {
             Message::Managed(..) => "managed",
             Message::SessionFocused(_) => "session_focused",
             Message::LoginLaunched(_) => "login_launched",
+            Message::LoginScreen(..) => "login_screen",
             Message::Theme(_) => "theme",
             Message::Directory(..) => "directory",
             Message::Validation(..) => "validation",
@@ -224,6 +226,12 @@ impl Effects {
                         .map_err(|e| e.to_string())
                         .and_then(|r| r);
                         let _ = tx.send(Message::Created(target, path, result)).await;
+                    });
+                }
+                Effect::ReadLoginPane(key) => {
+                    tokio::spawn(async move {
+                        let result = client.login_screen().await.map_err(|e| e.to_string());
+                        let _ = tx.send(Message::LoginScreen(key, result)).await;
                     });
                 }
                 Effect::LaunchLogin(argv) => {
@@ -473,6 +481,7 @@ fn effect_kind(effect: &Effect) -> String {
         Effect::ApiInput(token, args, _) => format!("api#{token} {}", args.join(" ")),
         Effect::FocusSession(..) => "focus_session".into(),
         Effect::LaunchLogin(_) => "launch_login".into(),
+        Effect::ReadLoginPane(_) => "read_login_pane".into(),
         Effect::CreateDirectories(..) => "create_directories".into(),
         Effect::Inspect(..) => "inspect".into(),
         Effect::Validate(..) => "validate".into(),
@@ -824,6 +833,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           if !app.launch_supported{app.error="Backend launch API is not installed; creation disabled".into();}},Err(e)=>{app.manager.note=e.clone();app.error=e;app.draft.name_valid=false;}}app.dirty=true;},
           Message::Managed(token,result)=>{let intents=app.manager.response(token,result);next=app.management(intents);if let Some(sessions)=app.manager.cache_out.take(){let (path,root)=(cache_path.clone(),cache_root.clone());tokio::task::spawn_blocking(move||{let _=sessionsation_ui::state_cache::save(&path,&root,&sessions);});}},
           Message::LoginLaunched(result)=>{let intents=app.manager.login_launched(result);next=app.management(intents);app.dirty=true;},
+          Message::LoginScreen(key,result)=>{let intents=app.manager.login_screen(key,result);next=app.management(intents);app.dirty=true;},
           Message::SessionFocused(result)=>{match result{Ok(())=>app.exit=true,Err(e)=>{let intents=app.manager.failure(e);next=app.management(intents);}}app.dirty=true;},
           Message::Theme(result)=>{match result{Ok((palette,note))=>{app.manager.palette=palette;if let Some(note)=note{app.manager.note=note;}},Err(e)=>app.manager.note=e}app.dirty=true;},
           Message::Created(target,path,result)=>{next=app.directories_created(target,path,result);},

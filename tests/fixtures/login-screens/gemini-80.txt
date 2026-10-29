@@ -1,0 +1,13 @@
+Sessionsation provider login. Complete the sign-in below.
+
+Code Assist login required.
+Attempting to open authentication page in your browser.
+Otherwise navigate to:
+
+https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=https%3A%2F%2Fcodeassi
+st.example.invalid%2Fauthcode&access_type=offline&scope=https%3A%2F%2Fwww.exampl
+e.invalid%2Fauth%2Fcloud-platform%20https%3A%2F%2Fwww.example.invalid%2Fauth%2Fu
+serinfo.email&response_type=code&state=cccccccccccccccccccccccccccccccc&client_i
+d=0000000000-fixture.apps.example.invalid
+
+Waiting for authentication...

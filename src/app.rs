@@ -158,6 +158,8 @@ pub enum Effect {
     ApiInput(u64, Vec<String>, crate::management::Secret),
     FocusSession(Value, bool),
     LaunchLogin(Vec<String>),
+    /// Read the open login pane's visible text for this account key.
+    ReadLoginPane(String),
     /// Create confirmed settings folders in order (parents first).
     CreateDirectories(Target, PathBuf, Vec<PathBuf>),
 }
@@ -293,6 +295,7 @@ impl App {
                     effects.push(Effect::ApiInput(id, args, secret))
                 }
                 Intent::LaunchLogin(argv) => effects.push(Effect::LaunchLogin(argv)),
+                Intent::ReadLoginPane(key) => effects.push(Effect::ReadLoginPane(key)),
                 Intent::New => {
                     // A launch still in progress keeps running; another Start queues
                     // behind it when its account is busy.

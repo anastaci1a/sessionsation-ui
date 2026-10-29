@@ -30,6 +30,7 @@ pub mod host_config;
 pub mod host_keys;
 
 pub mod launch_intent;
+pub mod login_link;
 
 pub mod trace;
 

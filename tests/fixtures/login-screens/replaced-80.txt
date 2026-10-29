@@ -1,0 +1,19 @@
+Sessionsation provider login. Complete the sign-in below.
+
+Opening browser to sign in...
+If the browser did not open, visit: https://claude.ai/oauth/authorize?code=true&
+client_id=00000000-0000-4000-8000-000000000000&response_type=code&redirect_uri=h
+ttps%3A%2F%2Fconsole.example.invalid%2Foauth%2Fcode%2Fcallback&scope=org%3Acreat
+e_api_key+user%3Aprofile+user%3Ainference&code_challenge=AAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAA&code_challenge_method=S256&state=BBBBBBBBBBBBBBBBBBBBBBBBBB
+BBBBBBBBBBBBBBBBB
+
+Paste code here if prompted >
+
+Login code expired. Starting over.
+Visit: https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=https%3A%2F%2Fc
+odeassist.example.invalid%2Fauthcode&access_type=offline&scope=https%3A%2F%2Fwww
+.example.invalid%2Fauth%2Fcloud-platform%20https%3A%2F%2Fwww.example.invalid%2Fa
+uth%2Fuserinfo.email&response_type=code&state=cccccccccccccccccccccccccccccccc&c
+lient_id=0000000000-fixture.apps.example.invalid
+

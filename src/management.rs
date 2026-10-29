@@ -37,6 +37,8 @@ pub enum Intent {
     Focus(Value),
     /// Run a backend login plan in a HERDR pane; the plan is never logged.
     LaunchLogin(Vec<String>),
+    /// Read the visible text of the open login pane for this account key.
+    ReadLoginPane(String),
     Exit,
 }
 /// Stdin JSON for a backend request that carries a secret. It never appears in
@@ -108,6 +110,8 @@ enum Form {
     /// Masked API-key entry for a Gemini account.
     GeminiKey(String),
     LoginWait(String),
+    /// A login already running in its pane: its sign-in link, read from the screen.
+    LoginLink(String),
     AccountRename(String),
     Limits(String),
     Remove(Value),
@@ -212,6 +216,7 @@ pub struct Manager {
     history: Vec<Location>,
     popup_size: Option<crate::popup::Size>,
     login_wait: Option<LoginWait>,
+    login_link: Option<LoginLink>,
     mutation: Vec<String>,
     /// The UI's own HERDR server: {"session", "socket"}.
     pub host: Value,
@@ -276,6 +281,15 @@ pub struct LoginWait {
     started: std::time::Instant,
     last_poll: Option<std::time::Instant>,
 }
+/// A login already running in its HERDR pane, whose screen is read for a sign-in link.
+struct LoginLink {
+    key: String,
+    /// A login pane has been found at least once.
+    seen: bool,
+    in_flight: bool,
+    last: Option<std::time::Instant>,
+    screen: Option<String>,
+}
 const LOGIN_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 const LOGIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
 const CLOSE_WINDOW: std::time::Duration = crate::close_band::CLOSE_WINDOW;
@@ -334,6 +348,7 @@ impl Default for Manager {
             history: vec![],
             popup_size: None,
             login_wait: None,
+            login_link: None,
             mutation: vec![],
             host: Value::Null,
             focused_space: None,
@@ -1315,6 +1330,117 @@ impl Manager {
             Form::Login(key.into()),
         );
     }
+    /// Log in: Claude, Gemini and Antigravity first look for a login already
+    /// running in a HERDR pane, so its sign-in link can be shown full screen.
+    fn begin_login(&mut self, key: &str) -> Vec<Intent> {
+        if !crate::login_link::pane_provider(&self.provider_of(key)) {
+            self.show_login(key);
+            return vec![];
+        }
+        self.show(
+            "Login",
+            vec!["Checking for a login in progress…".into()],
+            &["Cancel"],
+            Form::LoginLink(key.into()),
+        );
+        self.login_link = Some(LoginLink {
+            key: key.into(),
+            seen: false,
+            in_flight: true,
+            last: Some(std::time::Instant::now()),
+            screen: None,
+        });
+        vec![Intent::ReadLoginPane(key.into())]
+    }
+    fn login_link_body(&self, key: &str, screen: Option<&str>) -> Vec<String> {
+        let provider = self.provider_of(key);
+        let label = crate::client::provider_label(&provider);
+        match screen {
+            None => vec!["The login pane has closed.".into()],
+            Some(screen) => match crate::login_link::extract(screen) {
+                Some(link) => vec![
+                    format!("Sign-in link from the {label} login pane:"),
+                    link,
+                    "Finish signing in in the login pane.".into(),
+                ],
+                None => vec![
+                    format!("Waiting for {label} to print its sign-in link…"),
+                    "Finish signing in in the login pane.".into(),
+                ],
+            },
+        }
+    }
+    /// The login pane's current screen. Shown again whenever it changes; the
+    /// link option appears once a link is on it and follows a replaced link.
+    pub fn login_screen(
+        &mut self,
+        key: String,
+        result: Result<Option<String>, String>,
+    ) -> Vec<Intent> {
+        let Some(state) = self.login_link.as_mut() else {
+            return vec![];
+        };
+        if state.key != key || !matches!(&self.form, Form::LoginLink(k) if *k == key) {
+            return vec![];
+        }
+        state.in_flight = false;
+        state.last = Some(std::time::Instant::now());
+        let screen = match result {
+            Ok(Some(screen)) => screen,
+            Ok(None) if !state.seen => {
+                self.login_link = None;
+                self.show_login(&key);
+                return vec![];
+            }
+            Ok(None) => {
+                let body = self.login_link_body(&key, None);
+                if let Some(d) = self.dialog.as_mut() {
+                    d.body = body;
+                }
+                return vec![];
+            }
+            Err(e) => {
+                if let Some(d) = self.dialog.as_mut()
+                    && !state.seen
+                {
+                    d.body = vec![format!("Could not read the login pane: {}", clean(&e))];
+                }
+                return vec![];
+            }
+        };
+        if state.screen.as_deref() == Some(screen.as_str()) {
+            return vec![];
+        }
+        let first = !state.seen;
+        state.seen = true;
+        state.screen = Some(screen.clone());
+        let body = self.login_link_body(&key, Some(&screen));
+        if first {
+            self.show(
+                "Login in progress",
+                body,
+                &["Start a new login", "Close"],
+                Form::LoginLink(key),
+            );
+        } else if let Some(d) = self.dialog.as_mut() {
+            d.body = body;
+        }
+        vec![]
+    }
+    fn login_link_poll(&mut self) -> Vec<Intent> {
+        let Some(state) = self.login_link.as_mut() else {
+            return vec![];
+        };
+        if !matches!(&self.form, Form::LoginLink(k) if *k == state.key) {
+            self.login_link = None;
+            return vec![];
+        }
+        if state.in_flight || state.last.is_some_and(|t| t.elapsed() < LOGIN_POLL) {
+            return vec![];
+        }
+        state.in_flight = true;
+        vec![Intent::ReadLoginPane(state.key.clone())]
+    }
     fn activate_usage(&mut self) -> Vec<Intent> {
         let key = self.selected_account().unwrap();
         let a = self.account(&key).unwrap().clone();
@@ -1330,7 +1456,7 @@ impl Manager {
                 Form::Confirm(strings(&["account", "enable", &key])),
             ),
             "Login required" if self.provider_cap(&self.provider_of(&key), "enrollment") => {
-                self.show_login(&key)
+                return self.begin_login(&key);
             }
             "Deregistered" => self.show(
                 "Restore account",
@@ -2383,6 +2509,10 @@ impl Manager {
     }
     pub fn refresh_live(&mut self) -> Vec<Intent> {
         let login = self.login_poll();
+        let link = self.login_link_poll();
+        if !link.is_empty() {
+            return link;
+        }
         if !login.is_empty() {
             return login;
         }
@@ -2590,6 +2720,7 @@ impl Manager {
         self.confirm("Switch account",vec![format!("Move {} to {} while retaining conversation history? The backend waits for safe idle; it never steers.",s["name"].as_str().unwrap_or("session"),account)],args);
     }
     fn dismiss(&mut self) {
+        self.login_link = None;
         if matches!(self.form, Form::Progress | Form::Operation(_))
             && !self.usage_focus
             && !self.details_open
@@ -3300,7 +3431,7 @@ impl Manager {
                             .fields
                             .push(Field::new("Display name", current));
                     }
-                    "Log in" => self.show_login(&key),
+                    "Log in" => return self.begin_login(&key),
                     "Log out" if self.provider_cap(&self.provider_of(&key), "account_logout") => {
                         self.confirm(
                             "Log out",
@@ -3822,6 +3953,16 @@ impl Manager {
                 &sequence.to_string(),
             ]));
         }
+        if let Form::LoginLink(key) = self.form.clone() {
+            let seen = self.login_link.as_ref().is_some_and(|s| s.seen);
+            self.login_link = None;
+            if seen && button == 0 {
+                self.show_login(&key);
+            } else {
+                self.dismiss();
+            }
+            return vec![];
+        }
         if let Form::Queued(key) = self.form.clone() {
             self.dismiss();
             if button == 0 {
@@ -3894,6 +4035,7 @@ impl Manager {
             | Form::Queued(_)
             | Form::QueuedFailed(_)
             | Form::LoginWait(_)
+            | Form::LoginLink(_)
             | Form::SessionDetails(_) => {
                 self.dismiss();
                 return vec![];
@@ -7923,6 +8065,7 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         assert!(m.rows()[login].enabled);
         m.options.selected = login;
         m.activate();
+        m.login_screen("claude:claude-main".into(), Ok(None));
         let sent = m.submit(0, vec![]);
         assert!(
             matches!(&sent[..], [Intent::Api(_, args)] if args == &strings(&["account", "login", "claude:claude-main"]))
@@ -8783,6 +8926,80 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         assert_eq!(d.title, "Login pane could not open");
         assert_eq!(d.body[2], "sessionsation account login claude:new");
         assert!(m.login_wait.is_none());
+    }
+    fn pane_screen(name: &str) -> String {
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/login-screens/{name}.txt",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+    }
+    #[test]
+    fn a_login_in_progress_offers_its_wrapped_link_fullscreen() {
+        for (width, provider, key) in [
+            (80, "claude", "claude:claude-main"),
+            (120, "claude", "claude:claude-main"),
+            (80, "gemini", "gemini:gem-main"),
+            (120, "gemini", "gemini:gem-main"),
+        ] {
+            let mut m = triple_providers();
+            let out = m.begin_login(key);
+            assert!(matches!(&out[..], [Intent::ReadLoginPane(k)] if k == key));
+            assert!(m.dialog.as_ref().unwrap().links().is_empty());
+            // No login pane at all: the ordinary Login confirmation, never a stuck wait.
+            let mut none = triple_providers();
+            none.begin_login(key);
+            none.login_screen(key.into(), Ok(None));
+            assert!(matches!(none.form, Form::Login(_) | Form::GeminiAuth(..)));
+            // Pane open, link not printed yet: waiting, no option.
+            m.login_screen(key.into(), Ok(Some(pane_screen("waiting-80"))));
+            let d = m.dialog.as_ref().unwrap();
+            assert!(d.links().is_empty() && !d.has_link_option());
+            assert!(d.body[0].starts_with("Waiting for"));
+            // The screen changes: the rebuilt link appears with the option.
+            m.login_screen(
+                key.into(),
+                Ok(Some(pane_screen(&format!("{provider}-{width}")))),
+            );
+            let expected = std::fs::read_to_string(format!(
+                "{}/tests/fixtures/login-screens/{provider}.url",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap();
+            let d = m.dialog.as_mut().unwrap();
+            assert_eq!(d.links(), vec![expected.trim_end().to_owned()]);
+            // Painting adds the View link fullscreen option.
+            let mut canvas = crate::render::Canvas::new(100, 30);
+            d.paint(&mut canvas, &Palette::default());
+            assert!(d.has_link_option());
+            // A replaced link is followed.
+            m.login_screen(key.into(), Ok(Some(pane_screen("replaced-80"))));
+            assert_eq!(m.dialog.as_ref().unwrap().links().len(), 1);
+            let newest = pane_screen("replaced-80");
+            assert_eq!(
+                m.dialog.as_ref().unwrap().links()[0],
+                crate::login_link::extract(&newest).unwrap()
+            );
+        }
+    }
+    #[test]
+    fn the_login_pane_is_reread_on_a_timer_and_stops_with_the_dialog() {
+        let mut m = triple_providers();
+        m.begin_login("claude:claude-main");
+        m.login_screen(
+            "claude:claude-main".into(),
+            Ok(Some(pane_screen("waiting-80"))),
+        );
+        assert!(m.login_link_poll().is_empty(), "not before the interval");
+        m.login_link.as_mut().unwrap().last =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+        assert!(matches!(
+            &m.login_link_poll()[..],
+            [Intent::ReadLoginPane(_)]
+        ));
+        assert!(m.login_link_poll().is_empty(), "one read at a time");
+        m.dismiss();
+        assert!(m.login_link.is_none() && m.login_link_poll().is_empty());
     }
     #[test]
     fn opened_login_pane_closes_the_popup_so_the_link_is_visible() {
