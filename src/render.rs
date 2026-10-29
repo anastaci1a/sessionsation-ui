@@ -38,7 +38,14 @@ pub struct Canvas {
     foreground: Vec<bool>,
     /// Star-field cells not covered by any text; only these may be paced.
     ambient: Vec<bool>,
+    /// Terminal background beneath every layer; covered popups fade toward it.
+    pub base: [u8; 3],
+    /// Cells inside a popup painted this frame, and those already faded under a newer one.
+    popup: Vec<bool>,
+    faded: Vec<bool>,
 }
+/// How far popups beneath the top one fade toward the terminal background (permille).
+pub const UNFOCUSED_FADE: i64 = 300;
 /// Period of the selected picker arrow's pulse, in milliseconds.
 pub const ARROW_PULSE_MS: u64 = 1000;
 /// Star-field cell updates written per frame. The periodic sweep changes most
@@ -61,6 +68,26 @@ impl Canvas {
             baseline_blocked: vec![false; w * h],
             foreground: vec![false; w * h],
             ambient: vec![false; w * h],
+            base: [0; 3],
+            popup: vec![false; w * h],
+            faded: vec![false; w * h],
+        }
+    }
+    /// A popup opens at this rectangle: every popup beneath it fades once toward
+    /// the terminal background, so only the top popup looks focused.
+    pub fn open_popup(&mut self, x: usize, y: usize, width: usize, height: usize) {
+        for (i, cell) in self.cells.iter_mut().enumerate() {
+            if self.popup[i] && !self.faded[i] {
+                cell.fg = mix(cell.fg, self.base, UNFOCUSED_FADE);
+                cell.bg = cell.bg.map(|bg| mix(bg, self.base, UNFOCUSED_FADE));
+                self.faded[i] = true;
+            }
+        }
+        for row in y..(y + height).min(self.height) {
+            for col in x..(x + width).min(self.width) {
+                self.popup[row * self.width + col] = true;
+                self.faded[row * self.width + col] = false;
+            }
         }
     }
     /// Composite a temporary panel without feeding its occlusion into star lifetimes.
@@ -668,6 +695,7 @@ impl Field {
         let next = self.rotate(cycle);
         let phase = (now % 4000) as i64;
         let mut canvas = Canvas::new(self.w, self.h);
+        canvas.base = self.background.unwrap_or([0; 3]);
 
         canvas.theme = Some(Theme {
             now,
@@ -908,6 +936,87 @@ mod tests {
         assert!(!update.contains("?25")); // Background frames must not toggle blinking.
         frame.cursor = None;
         assert!(frame.diff(Some(&moved)).starts_with("\x1b[?25l"));
+    }
+    #[test]
+    fn popups_beneath_the_top_one_fade_once_toward_the_background() {
+        use crate::{dialog::Palette, popup::Panel};
+        let palette = Palette::default();
+        let base_color = [30, 20, 40];
+        let mut field = Field::new(60, 24, 1967);
+        field.background = Some(base_color);
+        let base = field.paint(4200);
+        assert_eq!(base.base, base_color);
+        let fade = |cell: &Cell| Cell {
+            fg: mix(cell.fg, base_color, UNFOCUSED_FADE),
+            bg: cell.bg.map(|bg| mix(bg, base_color, UNFOCUSED_FADE)),
+            ..cell.clone()
+        };
+        let inside = |p: &Panel, i: usize| {
+            let (x, y) = (i % 60, i / 60);
+            (p.x..p.x + p.width).contains(&x) && (p.y..p.y + p.height).contains(&y)
+        };
+        let panels = [
+            Panel {
+                x: 4,
+                y: 3,
+                width: 30,
+                height: 12,
+            },
+            Panel {
+                x: 20,
+                y: 8,
+                width: 30,
+                height: 10,
+            },
+            Panel {
+                x: 10,
+                y: 2,
+                width: 20,
+                height: 4,
+            },
+        ];
+        // Each popup painted alone, exactly as it looks when it is on top.
+        let alone: Vec<Canvas> = panels
+            .iter()
+            .enumerate()
+            .map(|(n, p)| {
+                let mut c = base.clone();
+                p.frame(&mut c, &format!("Popup {n}"), &palette);
+                c
+            })
+            .collect();
+        let mut c = base.clone();
+        panels[0].frame(&mut c, "Popup 0", &palette);
+        assert_eq!(c.cells, alone[0].cells, "a lone popup is unaffected");
+        for top in 1..panels.len() {
+            panels[top].frame(&mut c, &format!("Popup {top}"), &palette);
+            for i in 0..c.cells.len() {
+                // The topmost popup that covers this cell, if any.
+                let owner = (0..=top).rev().find(|&n| inside(&panels[n], i));
+                let expected = match owner {
+                    None => base.cells[i].clone(),
+                    Some(n) if n == top => alone[n].cells[i].clone(),
+                    // Covered popups fade once, however many open above them.
+                    Some(n) => fade(&alone[n].cells[i]),
+                };
+                assert_eq!(c.cells[i], expected, "top {top}, cell {i}");
+            }
+        }
+        // Real dialogs stack the same way: the lower border dims, the top one does not.
+        let mut c = base.clone();
+        let mut lower = crate::dialog::Dialog::new("Lower", vec!["Below".into()], &["OK"]);
+        lower.paint(&mut c, &palette);
+        let corner = c.cells.iter().position(|cell| cell.glyph == "┌").unwrap();
+        assert_eq!(c.cells[corner].fg, palette.accent);
+        let mut upper = crate::dialog::Dialog::new("Upper", vec!["Top".into()], &["Close"]);
+        upper.size = Some(crate::popup::Size::fit((60, 24), 24, 4));
+        upper.paint(&mut c, &palette);
+        assert_eq!(
+            c.cells[corner].fg,
+            mix(palette.accent, base_color, UNFOCUSED_FADE)
+        );
+        let top = c.cells.iter().position(|cell| cell.glyph == "U").unwrap();
+        assert_eq!(c.cells[top].fg, palette.accent);
     }
     #[test]
     fn overlay_owns_native_cursor_instead_of_exposing_the_covered_editor() {

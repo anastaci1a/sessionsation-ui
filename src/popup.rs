@@ -19,6 +19,7 @@ impl Panel {
         if self.width < 2 || self.height < 2 {
             return;
         }
+        canvas.open_popup(self.x, self.y, self.width, self.height);
         let style = Cell {
             fg: palette.text,
             bg: Some(palette.panel),
