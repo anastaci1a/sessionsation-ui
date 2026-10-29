@@ -223,7 +223,7 @@ impl Usage {
                 break;
             }
             let main =
-                UnicodeWidthStr::width(format!("{:>digits$}% left {}", "0", window.label).as_str());
+                UnicodeWidthStr::width(format!("{:>digits$}% {}", "0", window.label).as_str());
             let start = x + bar + 1 + main;
             for col in start..start + age.len() + 3 {
                 if y + row < canvas.height && col < canvas.width {
@@ -241,7 +241,7 @@ impl Usage {
         if self.status_only() {
             (UnicodeWidthStr::width(self.status_label().as_str()) + 1).max(bar)
         } else {
-            bar + digits + 10
+            bar + digits + 5
         }
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, digits: usize) {
@@ -385,7 +385,7 @@ impl Usage {
                 canvas.text(
                     x + bar + 1,
                     y + row,
-                    &format!("{:>digits$}% left {}", "?", window.label),
+                    &format!("{:>digits$}% {}", "?", window.label),
                     muted,
                     false,
                 );
@@ -427,7 +427,7 @@ impl Usage {
                 .remaining
                 .map(|p| format!("{p:.0}"))
                 .unwrap_or_else(|| "?".into());
-            let label = format!("{:>digits$}% left {}", percent, window.label);
+            let label = format!("{:>digits$}% {}", percent, window.label);
             canvas.text(
                 x + bar + 1,
                 y + row,
@@ -941,7 +941,7 @@ mod tests {
                 .map(|x| c.cells[y * c.width + x].glyph.as_str())
                 .collect()
         };
-        assert!(row(&c, 1).contains("% left 5h (1m ago)"), "{}", row(&c, 1));
+        assert!(row(&c, 1).contains("% 5h (1m ago)"), "{}", row(&c, 1));
         assert!(!row(&c, 2).contains("ago"), "shown once per account");
         // Too narrow for any inline age: every account shows it under its name.
         let tight = AccountsLayout::fit(&accounts, 52);
@@ -1081,7 +1081,7 @@ mod tests {
             .iter()
             .map(|c| c.glyph.as_str())
             .collect::<String>();
-        assert!(text.contains(" 80% left 5h"));
+        assert!(text.contains(" 80% 5h"));
         let mut a = account();
         a.usage["short"]["used_percent"] = json!(75.);
         Usage::account(&a).paint(&mut c, 1, 1, 10, 3);
@@ -1480,7 +1480,7 @@ mod picker_tests {
         };
         assert!(row(0).contains("5h"));
         // A dashed track keeps the column; its value is unknown, never 0%.
-        assert!(row(1).starts_with("╌╌╌╌╌╌╌╌╌╌╌╌  ?% left wk"), "{}", row(1));
+        assert!(row(1).starts_with("╌╌╌╌╌╌╌╌╌╌╌╌  ?% wk"), "{}", row(1));
         assert_eq!(canvas.cells[40].fg, crate::widgets::MUTED);
     }
 }

@@ -199,10 +199,10 @@ text statuses use the darker bullet hue, like the other dimmed usage bars. Enter
 required, Restore for Deregistered, or usage details otherwise. These dialogs retain
 the account and right-side focus when closed; mutations require confirmation.
 
-Bars show remaining allowance (`61% left 5h`) for the periods the backend reports: 5h/weekly or
+Bars show remaining allowance (`61% 5h`) for the periods the backend reports: 5h/weekly or
 weekly only. Bold lines with half-cell endcaps deplete into visible gray; custom limits appear
 inside the bar as `┿`, explained by a dim legend in account Details. A missing
-window keeps its row as a dashed track with `?% left`. The observation age
+window keeps its row as a dashed track with `?% 5h`. The observation age
 (`(42m ago)`) hangs right of the centred block, once per account; if any cannot
 fit inline, every account shows it under its name. It stays dark grey unless the
 usage itself is focused. Account Details show both meanings (`61% left · 39% used`)
