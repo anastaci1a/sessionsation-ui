@@ -60,6 +60,13 @@ pub struct Entry {
     pub operation_id: Option<String>,
     #[serde(default)]
     pub detail: Option<String>,
+    /// When the entry failed; badges show only recent outcomes.
+    #[serde(default)]
+    pub finished_at: Option<i64>,
+    /// Conversation of the target session when queued. Dispatch takes the
+    /// session's current generation only while it is the same conversation lineage.
+    #[serde(default)]
+    pub conversation: Option<String>,
 }
 impl Entry {
     pub fn new(resource: String, kind: &str, subject: String, action: Action) -> Self {
@@ -74,6 +81,8 @@ impl Entry {
             started_at: None,
             operation_id: None,
             detail: None,
+            finished_at: None,
+            conversation: None,
         }
     }
 }
@@ -314,45 +323,161 @@ pub fn apply(entries: &mut Vec<Entry>, command: Command) -> bool {
         }
     }
 }
-/// Settle running entries against backend evidence. `launch_phase` gives the
-/// receipt phase of a launch request ID when it was read this round.
+/// Launch receipt phases that are still making progress.
+const LAUNCH_IN_PROGRESS: [&str; 13] = [
+    "admitted",
+    "queued",
+    "preparing",
+    "creating_terminal",
+    "dispatching",
+    "starting_provider",
+    "attached",
+    "transferring",
+    "checking_history",
+    "verifying_history",
+    "compressing_history",
+    "moving_history",
+    "waiting_for_idle",
+];
+/// An uncertain launch is shown as failed and never replayed.
+pub const UNCERTAIN_DETAIL: &str =
+    "Outcome uncertain — not retried. Check Operations before trying again.";
+const UNKNOWN_DETAIL: &str = "Outcome unknown — not retried. Check Operations before trying again.";
+fn fail(e: &mut Entry, detail: String, now: i64) {
+    e.state = State::Failed;
+    e.finished_at = Some(now);
+    e.detail = Some(detail);
+}
+/// Settle running entries against backend evidence. `launch_receipt` gives the
+/// receipt of a launch request ID when it was read this round. A running or
+/// finished launch is dropped (the journal keeps its receipt for Operations); an
+/// uncertain, failed or unknown one becomes a failed entry, so the work queued
+/// behind it proceeds and nothing is replayed.
 pub fn settle(
     entries: &mut Vec<Entry>,
     operations: &[Value],
-    launch_phase: &dyn Fn(&str) -> Option<String>,
+    launch_receipt: &dyn Fn(&str) -> Option<Value>,
     now: i64,
 ) {
     entries.retain_mut(|e| {
         if e.state != State::Running {
             return true;
         }
-        let started = e.started_at.unwrap_or(e.created_at);
+        let waited = now - e.started_at.unwrap_or(e.created_at) >= ADMISSION_GRACE_SECS;
         match (&e.action, &e.operation_id) {
-            (Action::Launch { .. }, Some(request)) => match launch_phase(request).as_deref() {
-                // The journal keeps the receipt; Operations lists it from there.
-                Some("running") => false,
-                Some(phase) if terminal(phase) => false,
-                _ => true,
-            },
+            (Action::Launch { .. }, Some(request)) => {
+                let receipt = launch_receipt(request).unwrap_or(Value::Null);
+                let phase = receipt["phase"].as_str().unwrap_or("");
+                match phase {
+                    "running" | "complete" | "completed" | "recovered" => false,
+                    "failed" | "cancelled" => {
+                        let detail = receipt["detail"]
+                            .as_str()
+                            .filter(|d| !d.trim().is_empty())
+                            .map_or_else(
+                                || crate::messages::phase(phase),
+                                crate::messages::describe,
+                            );
+                        fail(e, detail, now);
+                        true
+                    }
+                    "uncertain" => {
+                        fail(e, UNCERTAIN_DETAIL.into(), now);
+                        true
+                    }
+                    p if LAUNCH_IN_PROGRESS.contains(&p) => true,
+                    // Local admission, an unreadable receipt or an unrecognised
+                    // phase: allow the admission grace, then stop holding the queue.
+                    _ if !waited => true,
+                    "pending_local" => {
+                        fail(e, UNCERTAIN_DETAIL.into(), now);
+                        true
+                    }
+                    _ => {
+                        fail(e, UNKNOWN_DETAIL.into(), now);
+                        true
+                    }
+                }
+            }
             (Action::Api { .. }, Some(op)) => {
                 match operations.iter().find(|o| o["id"] == op.as_str()) {
                     Some(o) => !terminal(o["phase"].as_str().unwrap_or("")),
                     // Not listed (yet): keep it for the admission grace only.
-                    None => now - started < ADMISSION_GRACE_SECS,
+                    None => !waited,
                 }
             }
             (_, None) => {
-                if now - started >= ADMISSION_GRACE_SECS {
-                    e.state = State::Failed;
-                    e.detail = Some(
+                if waited {
+                    fail(
+                        e,
                         "Outcome unconfirmed; it was not retried. Check Operations before trying again."
                             .into(),
+                        now,
                     );
                 }
                 true
             }
         }
     });
+}
+/// Point a queued session mutation at the session's current generation.
+///
+/// Restart, move and switch change a session's generation, so an action queued
+/// behind them would always be stale. The target is re-resolved by its stable
+/// identity: the same session ID, or the entry that now carries the queued
+/// conversation's lineage (`previous_conversation_ids` or a merge). When the
+/// session's conversation is no longer that lineage, or it is gone, this fails.
+pub fn rebase(
+    args: &[String],
+    conversation: Option<&str>,
+    sessions: &[Value],
+) -> Result<Vec<String>, String> {
+    const GONE: &str = "The session is no longer available; choose the action again.";
+    let position = |flag: &str| args.iter().position(|a| a == flag);
+    let (Some(at_session), Some(at_generation)) =
+        (position("--session"), position("--expected-generation"))
+    else {
+        return Ok(args.to_vec());
+    };
+    let session = args.get(at_session + 1).ok_or(GONE)?;
+    let lineage = |s: &Value| {
+        let Some(c) = conversation else {
+            return true;
+        };
+        s["conversation_id"] == c
+            || s["previous_conversation_ids"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|i| i == c))
+    };
+    let current = match sessions.iter().find(|s| s["id"] == session.as_str()) {
+        Some(s) if lineage(s) => s,
+        Some(_) => {
+            return Err(
+                "The session now holds a different conversation; choose the action again.".into(),
+            );
+        }
+        // A merged entry continues under the survivor that records its lineage.
+        None => match conversation {
+            Some(_) => {
+                let mut survivors = sessions.iter().filter(|s| lineage(s));
+                match (survivors.next(), survivors.next()) {
+                    (Some(s), None) => s,
+                    _ => return Err(GONE.into()),
+                }
+            }
+            None => return Err(GONE.into()),
+        },
+    };
+    let (Some(id), Some(generation)) = (current["id"].as_str(), current["generation"].as_str())
+    else {
+        return Err(GONE.into());
+    };
+    let mut out = args.to_vec();
+    out[at_session + 1] = id.into();
+    if let Some(g) = out.get_mut(at_generation + 1) {
+        *g = generation.into();
+    }
+    Ok(out)
 }
 /// Plain-language failure for a queued dispatch.
 pub fn failure_detail(error: &str) -> String {
@@ -412,19 +537,16 @@ pub mod worker {
                     continue;
                 }
             };
-            let mut phases = std::collections::BTreeMap::new();
+            let mut receipts = std::collections::BTreeMap::new();
             for e in entries.iter().filter(|e| e.state == State::Running) {
                 if let (Action::Launch { kind, .. }, Some(request)) = (&e.action, &e.operation_id)
                     && let Ok(r) = journal.status(&client, kind, request).await
                 {
-                    phases.insert(
-                        request.clone(),
-                        r["phase"].as_str().unwrap_or("").to_owned(),
-                    );
+                    receipts.insert(request.clone(), r);
                 }
             }
             let (claimed, _) = store.update(|entries| {
-                settle(entries, &operations, &|r| phases.get(r).cloned(), now());
+                settle(entries, &operations, &|r| receipts.get(r).cloned(), now());
                 let picked = ready(entries, &operations);
                 for &i in &picked {
                     entries[i].state = State::Running;
@@ -448,13 +570,16 @@ pub mod worker {
         entry: Entry,
     ) {
         let result: Result<Option<String>> = match &entry.action {
-            Action::Api { args } => {
-                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-                client
-                    .api(&refs, None)
-                    .await
-                    .map(|v| v["id"].as_str().map(str::to_owned))
-            }
+            Action::Api { args } => match current_args(client, args, &entry).await {
+                Ok(args) => {
+                    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                    client
+                        .api(&refs, None)
+                        .await
+                        .map(|v| v["id"].as_str().map(str::to_owned))
+                }
+                Err(detail) => Err(anyhow::anyhow!(detail)),
+            },
             Action::Launch { request, .. } => {
                 let id = request["request_id"].as_str().unwrap_or("").to_owned();
                 match journal.accept(request) {
@@ -473,12 +598,28 @@ pub mod worker {
                 Ok(None) => {
                     entries.remove(i);
                 }
-                Err(e) => {
-                    entries[i].state = State::Failed;
-                    entries[i].detail = Some(failure_detail(&e.to_string()));
-                }
+                Err(e) => fail(&mut entries[i], failure_detail(&e.to_string()), now()),
             }
         });
+    }
+    /// The entry's arguments with the session's current generation (see `rebase`).
+    async fn current_args(
+        client: &crate::client::Client,
+        args: &[String],
+        entry: &Entry,
+    ) -> Result<Vec<String>, String> {
+        if !args.iter().any(|a| a == "--expected-generation") {
+            return Ok(args.to_vec());
+        }
+        let state = client
+            .api(&["state", "--archive-filter", "all"], None)
+            .await
+            .map_err(|_| {
+                "The session could not be checked before starting; choose the action again."
+                    .to_owned()
+            })?;
+        let sessions = state["sessions"].as_array().cloned().unwrap_or_default();
+        rebase(args, entry.conversation.as_deref(), &sessions)
     }
 }
 
@@ -567,6 +708,154 @@ mod tests {
         settle(&mut entries, &done, &|_| None, 200);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].state, State::Failed);
+    }
+    fn launch(state: State, started: i64) -> Entry {
+        let mut e = Entry::new(
+            "account:codex:x".into(),
+            "launch",
+            "⏣ new".into(),
+            Action::Launch {
+                kind: "launch".into(),
+                request: json!({"request_id":"r"}),
+            },
+        );
+        e.state = state;
+        e.started_at = Some(started);
+        e.operation_id = Some(uuid::Uuid::new_v4().to_string());
+        e
+    }
+    #[test]
+    fn uncertain_failed_and_unknown_launches_settle_failed_and_release_the_queue() {
+        let receipt = |phase: &str, detail: &str| json!({"phase":phase,"detail":detail});
+        for (phase, detail, after, expect) in [
+            (
+                "uncertain",
+                "Start outcome unconfirmed: broken pipe",
+                1,
+                Some(UNCERTAIN_DETAIL),
+            ),
+            ("failed", "ACCOUNT_UNAVAILABLE", 1, None),
+            ("cancelled", "", 1, None),
+            (
+                "pending_local",
+                "",
+                ADMISSION_GRACE_SECS,
+                Some(UNCERTAIN_DETAIL),
+            ),
+            ("", "", ADMISSION_GRACE_SECS, Some(UNKNOWN_DETAIL)),
+            (
+                "mystery_phase",
+                "",
+                ADMISSION_GRACE_SECS,
+                Some(UNKNOWN_DETAIL),
+            ),
+        ] {
+            let mut entries = vec![launch(State::Running, 100), {
+                let mut q = launch(State::Queued, 100);
+                q.operation_id = None;
+                q
+            }];
+            assert!(ready(&entries, &[]).is_empty(), "{phase}: held behind");
+            let r = receipt(phase, detail);
+            let read = |_: &str| (!phase.is_empty()).then(|| r.clone());
+            settle(&mut entries, &[], &read, 100 + after);
+            assert_eq!(entries[0].state, State::Failed, "{phase}");
+            assert_eq!(entries[0].finished_at, Some(100 + after));
+            let shown = entries[0].detail.clone().unwrap();
+            match expect {
+                Some(text) => assert_eq!(shown, text, "{phase}"),
+                None => assert!(
+                    !shown.is_empty() && !shown.contains('_'),
+                    "{phase}: {shown}"
+                ),
+            }
+            // Never replayed, and what waited behind it proceeds.
+            assert_eq!(ready(&entries, &[]), vec![1], "{phase}");
+            // With nothing left but failures, the worker's loop has nothing to do.
+            entries.remove(1);
+            assert!(!entries.iter().any(|e| e.state != State::Failed));
+        }
+        // Uncertain is shown as such, never as a plain failure.
+        assert!(UNCERTAIN_DETAIL.contains("uncertain") && UNCERTAIN_DETAIL.contains("not retried"));
+    }
+    #[test]
+    fn progressing_and_finished_launches_are_not_failed() {
+        for phase in ["admitted", "dispatching", "starting_provider", "attached"] {
+            let mut entries = vec![launch(State::Running, 100)];
+            let r = json!({"phase":phase});
+            settle(
+                &mut entries,
+                &[],
+                &|_| Some(r.clone()),
+                100 + 10 * ADMISSION_GRACE_SECS,
+            );
+            assert_eq!(entries[0].state, State::Running, "{phase} keeps running");
+        }
+        // Local admission inside the grace keeps waiting for the backend.
+        let mut entries = vec![launch(State::Running, 100)];
+        let local = json!({"phase":"pending_local"});
+        settle(&mut entries, &[], &|_| Some(local.clone()), 110);
+        assert_eq!(entries[0].state, State::Running);
+        for phase in ["running", "complete", "recovered"] {
+            let mut entries = vec![launch(State::Running, 100)];
+            let r = json!({"phase":phase});
+            settle(&mut entries, &[], &|_| Some(r.clone()), 101);
+            assert!(entries.is_empty(), "{phase}: the journal keeps the receipt");
+        }
+    }
+    #[test]
+    fn queued_session_actions_take_the_current_generation_of_the_same_lineage() {
+        let s = |v: &[&str]| v.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        let args = s(&["stop", "--session", "a", "--expected-generation", "g1"]);
+        // Restarted while queued: same session and conversation, new generation.
+        let sessions = [
+            json!({"id":"a","generation":"g2","conversation_id":"c1"}),
+            json!({"id":"b","generation":"x","conversation_id":"c9"}),
+        ];
+        assert_eq!(
+            rebase(&args, Some("c1"), &sessions).unwrap(),
+            s(&["stop", "--session", "a", "--expected-generation", "g2"])
+        );
+        // Switched with a continued conversation: the lineage still holds.
+        let continued = [
+            json!({"id":"a","generation":"g3","conversation_id":"c2","previous_conversation_ids":["c1"]}),
+        ];
+        assert_eq!(rebase(&args, Some("c1"), &continued).unwrap()[4], "g3");
+        // Merged into a survivor that records the lineage: follow the survivor.
+        let merged = [
+            json!({"id":"z","generation":"g4","conversation_id":"c5","previous_conversation_ids":["c1"]}),
+        ];
+        assert_eq!(
+            rebase(&args, Some("c1"), &merged).unwrap(),
+            s(&["stop", "--session", "z", "--expected-generation", "g4"])
+        );
+        // A different conversation under the same entry fails honestly.
+        let other = [json!({"id":"a","generation":"g5","conversation_id":"c7"})];
+        assert!(
+            rebase(&args, Some("c1"), &other)
+                .unwrap_err()
+                .contains("different conversation")
+        );
+        // Gone, or two candidates claiming the lineage: never guess.
+        assert!(rebase(&args, Some("c1"), &[]).is_err());
+        let ambiguous = [
+            json!({"id":"y","generation":"1","previous_conversation_ids":["c1"]}),
+            json!({"id":"z","generation":"2","previous_conversation_ids":["c1"]}),
+        ];
+        assert!(rebase(&args, Some("c1"), &ambiguous).is_err());
+        // An entry queued before conversations were recorded: same ID only.
+        assert_eq!(rebase(&args, None, &sessions).unwrap()[4], "g2");
+        assert!(rebase(&args, None, &merged).is_err());
+        // Arguments without a generation pass through unchanged.
+        let plain = s(&["account", "delete", "codex:x", "--confirm", "codex:x"]);
+        assert_eq!(rebase(&plain, None, &[]).unwrap(), plain);
+    }
+    #[test]
+    fn entries_written_by_older_builds_still_load() {
+        let old = json!({"id":"e","resource":"session:a","kind":"restart","subject":"⏣ a",
+            "action":{"type":"api","args":["restart"]},"state":"failed","created_at":1});
+        let e: Entry = serde_json::from_value(old).unwrap();
+        assert_eq!((e.finished_at, e.conversation), (None, None));
     }
     #[test]
     fn classifies_backend_operations_and_skips_instant_edits() {

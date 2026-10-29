@@ -203,6 +203,17 @@ impl Dialog {
         d.minimum_height = 16;
         d
     }
+    /// Whether `text` is already on screen in this dialog (body or status).
+    pub fn shows(&self, text: &str) -> bool {
+        let text = text.trim();
+        !text.is_empty()
+            && (self.body.iter().any(|l| l.trim() == text)
+                || self.status.as_deref().is_some_and(|s| s.trim() == text)
+                || self
+                    .body
+                    .iter()
+                    .any(|l| l.trim() == crate::messages::describe(text).trim()))
+    }
     pub fn finish(&mut self) {
         self.busy = false;
         self.buttons = vec![Row::yes("Close")];

@@ -11,6 +11,8 @@ use crate::op_queue::{self, Action, Command, Entry, State};
 pub const RECENT_LIMIT: usize = 5;
 /// Recent keeps finished operations created within this many seconds.
 const RECENT_WINDOW_SECS: i64 = 86_400;
+/// Longest failure reason shown on a Recent row.
+const RECENT_REASON_WIDTH: usize = 56;
 
 /// One row of the Operations queue popup.
 #[derive(Clone, Debug, PartialEq)]
@@ -98,7 +100,7 @@ impl Manager {
             return false;
         };
         let subject = self.resource_subject(&resource);
-        let entry = Entry::new(
+        let mut entry = Entry::new(
             resource.clone(),
             kind,
             subject.clone(),
@@ -106,6 +108,11 @@ impl Manager {
                 args: args.to_vec(),
             },
         );
+        entry.conversation = resource
+            .strip_prefix("session:")
+            .and_then(|s| self.session(s))
+            .and_then(|s| s["conversation_id"].as_str())
+            .map(str::to_owned);
         if self.can_start_now(&resource) {
             self.direct.insert(self.sequence + 1, entry.id.clone());
             let mut running = entry.clone();
@@ -374,7 +381,18 @@ impl Manager {
                     None => Row::yes("Unknown operation"),
                 },
                 QueueSlot::Recent(k) => match find("recent", k) {
-                    Some(i) => row(if i.failed { "✗" } else { "✓" }, i, i.status.clone()),
+                    Some(i) if i.failed => {
+                        // A failure's reason is the point of the row: the popup
+                        // widens for it (shortened to a readable length).
+                        let mut r = row(
+                            "✗",
+                            i,
+                            crate::widgets::ellipsize(&i.status, RECENT_REASON_WIDTH),
+                        );
+                        r.preview_info = false;
+                        r
+                    }
+                    Some(i) => row("✓", i, i.status.clone()),
                     None => Row::yes("Unknown operation"),
                 },
                 QueueSlot::Spacer => Row::separator(),
@@ -523,7 +541,58 @@ impl Manager {
         self.queue.retain(|o| o.id != key);
         self.queue_out.push(Command::Remove(key.to_owned()));
     }
-    /// Queue state for a session row badge: running, queued or failed locally.
+    /// The session's most recent finished outcome, from backend operations and
+    /// failed queue entries, as a badge only when it is a failure inside the
+    /// recency window: a newer success (or a dismissed failure) hides older ones.
+    pub(super) fn outcome_badge(
+        &self,
+        session: &str,
+        s: &Value,
+        now: i64,
+    ) -> Option<crate::session_list::Badge> {
+        let secs = |t: i64| if t > 100_000_000_000 { t / 1000 } else { t };
+        let backend = self
+            .operations
+            .iter()
+            .filter(|o| {
+                (o["source_session_id"] == session
+                    || o["session_id"] == session
+                    || s["pending_operation_id"].as_str() == Some(id(o)))
+                    && terminal(o["phase"].as_str().unwrap_or(""))
+            })
+            .map(|o| {
+                let at = o["updated_at"].as_i64().or(o["created_at"].as_i64());
+                let failed = o["phase"] == "failed" && !self.dismissed.contains(id(o));
+                let badge = failed.then(|| crate::session_list::Badge {
+                    kind: "operation".into(),
+                    id: id(o).to_owned(),
+                    text: failed_text(o["kind"].as_str().unwrap_or("operation")),
+                    active: false,
+                    queued: false,
+                });
+                (at.map(secs), badge)
+            });
+        let resource = format!("session:{session}");
+        let local = self
+            .queue
+            .iter()
+            .filter(|e| e.resource == resource && e.state == State::Failed)
+            .map(|e| {
+                let at = e.finished_at.or(e.started_at).unwrap_or(e.created_at);
+                let badge = crate::session_list::Badge {
+                    kind: "queue".into(),
+                    id: e.id.clone(),
+                    text: format!("{} failed", kind_noun(&e.kind)),
+                    active: false,
+                    queued: false,
+                };
+                (Some(secs(at)), Some(badge))
+            });
+        let (at, badge) = backend.chain(local).max_by_key(|(at, _)| *at)?;
+        // Undated outcomes cannot be placed in the window; show them only alone.
+        badge.filter(|_| at.is_none_or(|t| now - t < RECENT_WINDOW_SECS))
+    }
+    /// Queue state for a session row badge: starting or queued.
     pub(super) fn queue_badge(&self, session: &str) -> Option<crate::session_list::Badge> {
         let resource = format!("session:{session}");
         let mine: Vec<&Entry> = self
@@ -556,9 +625,7 @@ impl Manager {
                 true,
             ));
         }
-        mine.iter()
-            .find(|e| e.state == State::Failed)
-            .map(|e| badge(e, format!("{} failed", kind_noun(&e.kind)), false, false))
+        None
     }
 }
 impl Manager {
@@ -579,7 +646,8 @@ impl Manager {
             self.popup_size = popup_size;
             self.history.push(beneath);
         }
-        let rows = self.queue_rows();
+        let measured = self.queue_rows();
+        let mut rows = measured.clone();
         let palette = self.palette.clone();
         let description = format!(
             "Up to {} operations run at once; one at a time per session or account.",
@@ -588,7 +656,7 @@ impl Manager {
         let mut view = crate::popup::Choices {
             title: "Operations",
             description: &description,
-            rows: &rows,
+            rows: &measured,
             editor: None,
             note: &self.note,
             note_accent: false,
@@ -605,6 +673,19 @@ impl Manager {
         }
         self.popup_size =
             Some(view.grow_for_selection(self.popup_size.unwrap(), self.options.selected));
+        // Failure reasons shorten to the room the popup has instead of vanishing.
+        let inner = self.popup_size.unwrap().width.saturating_sub(4);
+        let left = crate::widgets::Options::left(inner, &rows);
+        for row in rows.iter_mut().filter(|r| !r.preview_info) {
+            if let (Some(column), Some(preview)) = (row.preview_column, &row.preview) {
+                let room = inner.saturating_sub(left + column + 1);
+                row.preview = Some(crate::widgets::ellipsize(preview, room));
+            }
+        }
+        let view = crate::popup::Choices {
+            rows: &rows,
+            ..view
+        };
         crate::popup::paint_choices(
             canvas,
             &palette,
@@ -846,6 +927,72 @@ mod tests {
         assert!(screen.contains("Running") && screen.contains("Queued"));
         assert!(screen.contains("queued #1"));
         assert!(lines[23].contains("Esc: Close"));
+    }
+    #[test]
+    fn row_badge_shows_only_the_most_recent_outcome_when_it_is_a_recent_failure() {
+        let now = crate::usage::clock();
+        let mut m = manager();
+        let failed_at = |at: i64| {
+            let mut e = queued("a", "restart");
+            e.state = State::Failed;
+            e.finished_at = Some(at);
+            e
+        };
+        let op = |id: &str, phase: &str, at: i64| json!({"id":id,"kind":"move_space","phase":phase,"source_session_id":"a","created_at":at});
+        // A queue failure older than a later success is not shown.
+        m.queue = vec![failed_at(now - 100)];
+        m.operations = vec![op("ok", "complete", now - 10)];
+        assert!(!m.badges().contains_key("a"), "newer success hides it");
+        // A failure newer than the latest success is.
+        m.queue = vec![failed_at(now - 5)];
+        let badge = &m.badges()["a"];
+        assert_eq!(
+            (badge.kind.as_str(), badge.text.as_str()),
+            ("queue", "restart failed")
+        );
+        // Old failures age out of the window.
+        m.operations.clear();
+        m.queue = vec![failed_at(now - RECENT_WINDOW_SECS - 1)];
+        assert!(!m.badges().contains_key("a"));
+        // The newest of a backend and a queue failure wins.
+        m.queue = vec![failed_at(now - 50)];
+        m.operations = vec![op("bad", "failed", now - 20)];
+        assert_eq!(m.badges()["a"].id, "bad");
+        m.queue = vec![failed_at(now - 1)];
+        assert_eq!(m.badges()["a"].kind, "queue");
+        // Running backend work and queued work still come first.
+        m.operations.push(op("live", "dispatching", now));
+        assert!(m.badges()["a"].active);
+        m.operations.pop();
+        m.queue.push(queued("a", "stop"));
+        assert!(m.badges()["a"].queued);
+        // A dismissed failure is still the latest outcome: older ones stay hidden.
+        m.queue = vec![failed_at(now - 100)];
+        m.operations = vec![op("bad", "failed", now - 20)];
+        m.dismissed.insert("bad".into());
+        assert!(!m.badges().contains_key("a"));
+    }
+    #[test]
+    fn failed_recent_rows_show_their_reason() {
+        let mut m = manager();
+        m.page = Page::Sessions;
+        let mut e = queued("a", "restart");
+        e.state = State::Failed;
+        e.detail = Some(op_queue::UNCERTAIN_DETAIL.into());
+        m.queue = vec![e];
+        m.operations = vec![
+            json!({"id":"o9","kind":"restart","phase":"failed","detail":"The terminal could not be reached.","source_session_id":"b","created_at":crate::usage::clock()}),
+        ];
+        m.open_queue();
+        let mut c = crate::render::Field::new(120, 24, 1967).paint(0);
+        m.paint_at(&mut c, 23, 100);
+        let screen: String = c
+            .cells
+            .chunks(120)
+            .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>() + "\n")
+            .collect();
+        assert!(screen.contains("Outcome uncertain"), "{screen}");
+        assert!(screen.contains("terminal could not"), "{screen}");
     }
     #[test]
     fn elapsed_uses_the_shared_live_counter_format() {

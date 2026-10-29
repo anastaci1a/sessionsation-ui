@@ -314,6 +314,13 @@ impl Default for Manager {
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).into()).collect()
 }
+/// A generation mismatch, raw (`STALE_TARGET`, `SESSION_STALE…`) or described.
+fn stale_error(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with("STALE")
+        || text.starts_with("SESSION_STALE")
+        || text == crate::messages::describe("STALE_TARGET")
+}
 /// `SESSION_MERGED: <surviving id>`: the entry was merged into another session.
 fn merged_survivor(text: &str) -> Option<String> {
     let rest = text.trim_start().strip_prefix("SESSION_MERGED: ")?;
@@ -2262,7 +2269,10 @@ impl Manager {
         let mut dialog = Dialog::new(title, body, buttons);
         dialog.compact =
             buttons == ["Close"] && matches!(form, Form::None | Form::SessionDetails(_));
-        dialog.size = self.dialog.as_ref().and_then(|d| d.size);
+        // An info-only dialog fits its own content instead of the frame it replaces.
+        dialog.size = (!dialog.compact)
+            .then(|| self.dialog.as_ref().and_then(|d| d.size))
+            .flatten();
         if matches!(form, Form::Loading) {
             dialog.minimum_height = 16;
             dialog.minimum_width = 76;
@@ -2609,44 +2619,36 @@ impl Manager {
                         || s["pending_operation_id"].as_str() == Some(id(o))
                 })
                 .max_by_key(|o| o["created_at"].as_i64());
-            let badge = match newest {
-                Some(o) => {
-                    let kind = o["kind"].as_str().unwrap_or("operation");
-                    let phase = o["phase"].as_str().unwrap_or("unknown");
-                    let recent = o["created_at"].as_i64().is_none_or(|t| now - t < 86_400);
-                    if !terminal(phase) {
-                        Some((active_text(kind, o, &self.space_names), true, id(o)))
-                    } else if self.dismissed.contains(id(o)) {
-                        None
-                    } else if phase == "failed" && recent {
-                        Some((failed_text(kind), false, id(o)))
-                    } else {
-                        None
-                    }
-                }
+            let running = match newest {
+                Some(o) if !terminal(o["phase"].as_str().unwrap_or("unknown")) => Some((
+                    active_text(
+                        o["kind"].as_str().unwrap_or("operation"),
+                        o,
+                        &self.space_names,
+                    ),
+                    id(o),
+                )),
+                Some(_) => None,
                 None => s["pending_operation_id"]
                     .as_str()
-                    .map(|op| ("operation running".to_owned(), true, op)),
+                    .map(|op| ("operation running".to_owned(), op)),
             };
-            // Running backend work first, then the queue (starting, queued or
-            // failed to start), then a recent backend failure.
-            if !badge.as_ref().is_some_and(|b| b.1)
-                && let Some(queued) = self.queue_badge(key)
-            {
-                out.insert(key.to_owned(), queued);
-                continue;
-            }
-            if let Some((text, active, op)) = badge {
-                out.insert(
-                    key.to_owned(),
-                    crate::session_list::Badge {
-                        kind: "operation".into(),
-                        id: op.to_owned(),
-                        text,
-                        active,
-                        queued: false,
-                    },
-                );
+            // Running backend work first, then the queue (starting or queued),
+            // then the session's most recent outcome when it is a recent failure.
+            let badge = match running {
+                Some((text, op)) => Some(crate::session_list::Badge {
+                    kind: "operation".into(),
+                    id: op.to_owned(),
+                    text,
+                    active: true,
+                    queued: false,
+                }),
+                None => self
+                    .queue_badge(key)
+                    .or_else(|| self.outcome_badge(key, s, now)),
+            };
+            if let Some(badge) = badge {
+                out.insert(key.to_owned(), badge);
             }
         }
         out
@@ -3234,6 +3236,15 @@ impl Manager {
             | crate::session_list::Action::Delete
             | crate::session_list::Action::Restore => {
                 let (command, title, text) = match action {
+                    crate::session_list::Action::Archive
+                        if crate::session_list::is_native_provider(&s) =>
+                    {
+                        (
+                            "archive",
+                            "Archive session",
+                            "Move this conversation's saved files to sessionsation-managed Archived Sessions; Restore brings them back. No agent is started; project files and account credentials stay in place.",
+                        )
+                    }
                     crate::session_list::Action::Archive => (
                         "archive",
                         "Archive session",
@@ -3710,6 +3721,11 @@ impl Manager {
                         session["activity"] = json!("unknown");
                     }
                 }
+                // A background read on an outdated generation is not the user's
+                // action going stale: read the session again instead of a notice.
+                if matches!(purpose, Purpose::Observe(_)) && stale_error(&e) {
+                    return self.refresh_sessions();
+                }
                 self.note = e.clone();
                 if self.foreground == Some(token)
                     && matches!(self.form, Form::Loading | Form::Progress)
@@ -3752,6 +3768,12 @@ impl Manager {
             }
             Purpose::State => {
                 let mut value = value;
+                // The cursor still on the first row of a cached list was never
+                // moved: keep it on the first row when the live order differs.
+                let untouched = self.cached_snapshot
+                    && self.page == Page::Sessions
+                    && self.options.selected
+                        == self.rows().iter().position(|r| !r.separator).unwrap_or(0);
                 if cached_req {
                     // A late cheap read must never replace newer full state.
                     if self.sessions_known && !self.cached_snapshot && token < self.last_full_token
@@ -3812,6 +3834,11 @@ impl Manager {
                 });
                 if initial_sessions {
                     self.options = Options::default();
+                }
+                let chosen = chosen.filter(|_| !untouched);
+                if untouched {
+                    self.options.selected =
+                        self.rows().iter().position(|r| !r.separator).unwrap_or(0);
                 }
                 if let Some(key) = chosen {
                     self.options.selected = self
@@ -3891,7 +3918,12 @@ impl Manager {
                     .then(|| self.operation_keys().get(self.options.selected).cloned())
                     .flatten()
                     .flatten();
+                let was_running = crate::op_queue::backend_running(&self.operations);
                 self.operations = value.as_array().cloned().unwrap_or_default();
+                // An operation that finished since the last read changed its
+                // session's generation: read the sessions again.
+                let finished =
+                    !was_running.is_subset(&crate::op_queue::backend_running(&self.operations));
                 // Forget dismissals of operations the backend no longer lists.
                 let known = self.dismissed.len();
                 self.dismissed
@@ -3942,6 +3974,9 @@ impl Manager {
                     && terminal(o["phase"].as_str().unwrap_or(""))
                 {
                     self.active_operation = None;
+                }
+                if finished && !self.pending.values().any(|p| matches!(p, Purpose::State)) {
+                    return self.refresh_sessions();
                 }
             }
             Purpose::Observe(key) => {
@@ -4278,6 +4313,25 @@ impl Manager {
                         }
                     }
                     return self.refresh();
+                } else if let (Some(key), Some(generation)) =
+                    (value["id"].as_str(), value["generation"].as_str())
+                    && let Some(cached) = self.sessions.iter_mut().find(|s| id(s) == key)
+                {
+                    // An instant session edit (rename) returns the session at its new
+                    // generation: adopt it so later reads and actions are not stale.
+                    cached["generation"] = json!(generation);
+                    if let Some(name) = value["name"].as_str() {
+                        cached["name"] = json!(name);
+                    }
+                    if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
+                        self.show(
+                            "Saved",
+                            vec!["The backend acknowledged this change.".into()],
+                            &["Close"],
+                            Form::None,
+                        );
+                    }
+                    return self.refresh_sessions();
                 } else if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
                     let note = if value["existing_home"] == true {
                         "An existing Claude home was registered unchanged."
@@ -4404,6 +4458,9 @@ impl Manager {
         // Saved-session notice: only on the session list, only until fresh state.
         let note = if self.note.is_empty() && self.page == Page::Sessions && self.cached_snapshot {
             "Showing saved sessions; refreshing…".to_owned()
+        } else if self.dialog.as_ref().is_some_and(|d| d.shows(&self.note)) {
+            // The open dialog already says this; the bottom lane does not repeat it.
+            String::new()
         } else {
             self.note.clone()
         };
@@ -8187,5 +8244,154 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
         assert!(refreshes(&sent));
         assert!(m.failure("HERDR_ATTACHMENT_MISMATCH".into()).is_empty());
         assert_eq!(m.note, "HERDR_ATTACHMENT_MISMATCH");
+    }
+}
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+    fn session(id: &str, generation: &str, activity: &str, accessed: i64) -> Value {
+        json!({"id":id,"name":id,"account_id":"codex:x","availability":"running","activity":activity,
+            "generation":generation,"last_accessed":accessed,"capabilities":{"rename":true}})
+    }
+    fn api(intents: &[Intent]) -> Option<(u64, Vec<String>)> {
+        intents.iter().find_map(|i| match i {
+            Intent::Api(token, args) => Some((*token, args.clone())),
+            _ => None,
+        })
+    }
+    #[test]
+    fn a_rename_adopts_the_new_generation_and_a_stale_observe_is_silent() {
+        let mut m = Manager {
+            sessions_known: true,
+            sessions: vec![session("a", "g1", "idle", 1)],
+            ..Manager::default()
+        };
+        m.page = Page::Session("a".into());
+        let sent = m.mutate(strings(&[
+            "rename",
+            "--session",
+            "a",
+            "--expected-generation",
+            "g1",
+            "--name",
+            "renamed",
+        ]));
+        let (token, _) = api(&sent).unwrap();
+        m.response(
+            token,
+            Ok(json!({"id":"a","name":"renamed","generation":"g2"})),
+        );
+        assert_eq!(m.sessions[0]["generation"], "g2");
+        assert_eq!(m.sessions[0]["name"], "renamed");
+        let d = m.dialog.as_ref().unwrap();
+        assert_eq!(d.title, "Saved");
+        assert!(d.size.is_none(), "the info dialog fits its own content");
+        m.dialog = None;
+        m.form = Form::None;
+        m.pending.clear();
+        // The next observe reads the new generation.
+        m.observe_after = None;
+        let (token, args) = m
+            .refresh()
+            .into_iter()
+            .find_map(|i| match i {
+                Intent::Api(t, a) if a[0] == "observe" => Some((t, a)),
+                _ => None,
+            })
+            .expect("observe");
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--expected-generation", "g2"])
+        );
+        // A background observe that still raced the change leaves no notice.
+        let intents = m.response(token, Err("STALE_TARGET".into()));
+        assert!(m.note.is_empty(), "{}", m.note);
+        assert!(
+            api(&intents).is_some_and(|(_, a)| a[0] == "state")
+                || m.pending.values().any(|p| matches!(p, Purpose::State)),
+            "the sessions are read again"
+        );
+    }
+    #[test]
+    fn a_finished_operation_rereads_sessions() {
+        let mut m = Manager {
+            sessions_known: true,
+            sessions: vec![session("a", "g1", "idle", 1)],
+            ..Manager::default()
+        };
+        m.page = Page::Sessions;
+        m.operations =
+            vec![json!({"id":"o","kind":"restart","phase":"dispatching","source_session_id":"a"})];
+        m.sequence += 1;
+        let token = m.sequence;
+        m.pending.insert(token, Purpose::Operations);
+        let intents = m.response(
+            token,
+            Ok(json!([{"id":"o","kind":"restart","phase":"complete","source_session_id":"a"}])),
+        );
+        assert!(api(&intents).is_some_and(|(_, a)| a[0] == "state"));
+    }
+    #[test]
+    fn first_sessions_entry_over_a_cached_list_starts_on_the_first_row() {
+        let mut m = Manager::default();
+        m.show_cached(&json!([
+            session("old", "g", "idle", 9),
+            session("busy", "g", "idle", 1),
+        ]));
+        m.page = Page::Home;
+        m.options.selected = 1;
+        m.activate();
+        assert_eq!(m.page, Page::Sessions);
+        let first = m.rows().iter().position(|r| !r.separator).unwrap();
+        assert_eq!(m.options.selected, first);
+        // Live state reorders (a busy session ranks first): the cursor stays put.
+        m.sequence += 1;
+        let token = m.sequence;
+        m.pending.insert(token, Purpose::State);
+        m.response(
+            token,
+            Ok(json!({"sessions":[session("old","g","idle",9),session("busy","g","busy",1)]})),
+        );
+        assert_eq!(m.options.selected, first);
+        // Once the user moves, the selection follows its session through updates.
+        let old = m.sessions.iter().position(|s| s["id"] == "old").unwrap();
+        let row = crate::session_list::session_row(&m.sessions, old);
+        m.options.selected = row;
+        m.sequence += 1;
+        let token = m.sequence;
+        m.pending.insert(token, Purpose::State);
+        m.response(
+            token,
+            Ok(json!({"sessions":[session("old","g","busy",9),session("busy","g","idle",1)]})),
+        );
+        let chosen = crate::session_list::session_index(&m.sessions, m.options.selected).unwrap();
+        assert_eq!(m.sessions[chosen]["id"], "old");
+    }
+    #[test]
+    fn the_status_lane_does_not_repeat_the_open_dialog() {
+        let mut m = Manager {
+            page: Page::Home,
+            dialog: Some(Dialog::new(
+                "Operation progress",
+                vec!["Moving the existing terminal.".into()],
+                &["Continue in background"],
+            )),
+            note: "Moving the existing terminal.".into(),
+            ..Manager::default()
+        };
+        let mut c = crate::render::Field::new(90, 24, 1).paint(0);
+        m.paint_at(&mut c, 23, 100);
+        let rows: Vec<String> = c
+            .cells
+            .chunks(90)
+            .map(|r| r.iter().map(|c| c.glyph.as_str()).collect())
+            .collect();
+        assert_eq!(
+            rows.iter()
+                .filter(|l| l.contains("Moving the existing terminal"))
+                .count(),
+            1,
+            "{rows:#?}"
+        );
     }
 }
