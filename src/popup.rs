@@ -103,6 +103,8 @@ pub struct Choices<'a> {
     pub large: bool,
     pub fit_description: bool,
     pub browse_hint: bool,
+    /// Mounted (head, tail) rows around a scrolling list, when the view has them.
+    pub sections: Option<(usize, usize)>,
 }
 /// Natural content width, capped for readable wrapping and the current terminal.
 pub fn content_width(
@@ -244,8 +246,12 @@ pub fn paint_choices(
         let menu_bottom = local.height.saturating_sub(usize::from(view.large));
         let bottom = menu_bottom.saturating_sub(note_height);
         options.back = false;
-        let footer = usize::from(view.editor.is_some()) * 2;
-        let (_, capacity) = if footer > 0 {
+        let footer = view
+            .sections
+            .map_or(usize::from(view.editor.is_some()) * 2, |(_, tail)| tail);
+        let (_, capacity) = if let Some((head, tail)) = view.sections {
+            options.paint_sections(local, view.rows, head, tail, top, menu_bottom, bottom + 1)
+        } else if footer > 0 {
             options.paint_footer_menu(local, view.rows, top, menu_bottom, bottom + 1)
         } else {
             options.paint_menu(local, view.rows, top, bottom, bottom + 1)
@@ -378,7 +384,7 @@ mod tests {
     fn description_width_fits_a_sentence_with_one_space_before_the_border() {
         use crate::widgets::{Options, Row};
         for (title, sentence) in [
-            ("Choose Account", "Choose an account for this session."),
+            ("Choose account", "Choose an account for this session."),
             ("Choose Space", "Choose a destination Space."),
         ] {
             let rows = with_cancel([Row::yes("Example").popup_option()]);
@@ -392,6 +398,7 @@ mod tests {
                 large: false,
                 fit_description: true,
                 browse_hint: false,
+                sections: None,
             };
             let size = view.measure((120, 30));
             assert_eq!(size.width, sentence.len() + 4);
@@ -429,6 +436,7 @@ mod tests {
             large: false,
             fit_description: false,
             browse_hint: false,
+            sections: None,
         };
         let size = view.measure((100, 30));
         assert!(!Options::previews_detached(size.width - 4, &rows));
@@ -461,6 +469,7 @@ mod tests {
             large: false,
             fit_description: false,
             browse_hint: false,
+            sections: None,
         };
         let opened = view.measure((100, 30));
         assert_eq!(opened.width, 14);
@@ -497,6 +506,7 @@ mod tests {
             large: true,
             fit_description: false,
             browse_hint: false,
+            sections: None,
         };
         for height in 16..45 {
             let measured = view.measure((100, height));
@@ -530,6 +540,7 @@ mod tests {
                 large: false,
                 fit_description: false,
                 browse_hint: false,
+                sections: None,
             };
             let size = view.measure(viewport);
             let detached = crate::widgets::Options::previews_detached(size.width - 4, &rows);
@@ -591,6 +602,7 @@ mod tests {
             large: true,
             fit_description: false,
             browse_hint: true,
+            sections: None,
         };
         for width in [60, 100] {
             for now in [0, 1467, 4700] {

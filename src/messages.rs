@@ -22,10 +22,10 @@ pub fn describe(text: &str) -> String {
             "The backend has not returned this launch record yet. Its outcome is unconfirmed; it will not be sent again."
         }
         "SESSION_NOT_FOUND" => {
-            "This session is no longer in the current list. Return to Manage Sessions to refresh it."
+            "This session is no longer in the current list. Return to Manage sessions to refresh it."
         }
         "SESSION_NOT_ATTACHED" | "SESSION_ATTACHMENT_UNAVAILABLE" => {
-            "This session no longer has a verified live terminal attachment. Refresh Manage Sessions; use Start Session if the agent has exited."
+            "This session no longer has a verified live terminal attachment. Refresh Manage sessions; use Start session if the agent has exited."
         }
         "SESSION_UNAVAILABLE" => {
             "The session's process or saved history could not be located. Refresh the session list before trying again."
@@ -34,13 +34,13 @@ pub fn describe(text: &str) -> String {
             "The saved session changed. Select it again to review the current account, history and directory."
         }
         "SESSION_ALREADY_RUNNING" | "SESSION_ALREADY_RUNNING_OR_UNAVAILABLE" => {
-            "The saved session is now running or no longer available to resume. Review it in Manage Sessions."
+            "The saved session is now running or no longer available to resume. Review it in Manage sessions."
         }
         "SESSION_OPERATION_IN_PROGRESS" | "RESUME_IN_PROGRESS" | "OPERATION_BUSY" => {
             "Another action is still changing this session. Check its progress in Operations first."
         }
         "SESSION_STALE" => {
-            "This session's process is no longer verified. Refresh Manage Sessions; nothing was started or resumed."
+            "This session's process is no longer verified. Refresh Manage sessions; nothing was started or resumed."
         }
         "UNSUPPORTED_PROVIDER_OPERATION" => {
             "This provider does not support that action. No change was made."

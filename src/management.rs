@@ -151,6 +151,44 @@ pub struct Manager {
     pub focused_space: Option<String>,
     place: Option<Place>,
     merge_target: Option<(String, u8)>,
+    /// Focus is on the selected session row's operation badge.
+    pub badge_focus: bool,
+    /// Operations page filter.
+    pub operation_filter: OperationFilter,
+    /// First Esc on Home arms closing; a second within one second closes.
+    close_armed: Option<std::time::Instant>,
+    /// HERDR Space names by ID, for operation badges.
+    pub space_names: BTreeMap<String, String>,
+    ticks_since_operations: u32,
+}
+/// Operations page filter, cycled with Left/Right on its selector row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OperationFilter {
+    #[default]
+    All,
+    InProgress,
+    Failed,
+    Completed,
+}
+impl OperationFilter {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::InProgress => "In progress",
+            Self::Failed => "Failed",
+            Self::Completed => "Completed",
+        }
+    }
+    pub fn cycle(self, previous: bool) -> Self {
+        const ALL: [OperationFilter; 4] = [
+            OperationFilter::All,
+            OperationFilter::InProgress,
+            OperationFilter::Failed,
+            OperationFilter::Completed,
+        ];
+        let i = ALL.iter().position(|f| *f == self).unwrap_or(0);
+        ALL[if previous { (i + 3) % 4 } else { (i + 1) % 4 }]
+    }
 }
 /// Automatic provider login in progress: the backend plan runs in a HERDR pane
 /// while the account is polled until it no longer needs authentication.
@@ -162,6 +200,7 @@ pub struct LoginWait {
 }
 const LOGIN_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 const LOGIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+const CLOSE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
 impl Default for Manager {
     fn default() -> Self {
         Self {
@@ -208,6 +247,11 @@ impl Default for Manager {
             focused_space: None,
             place: None,
             merge_target: None,
+            badge_focus: false,
+            operation_filter: OperationFilter::All,
+            close_armed: None,
+            space_names: BTreeMap::new(),
+            ticks_since_operations: 0,
         }
     }
 }
@@ -253,10 +297,129 @@ fn relative(now: i64, then: Option<i64>) -> String {
         _ => format!("{}d ago", age / 86400),
     }
 }
+/// RFC 3339 timestamp (`2026-01-01T09:00:00Z`, optional fraction and offset) in Unix seconds.
+fn parse_time(text: &str) -> Option<i64> {
+    let b = text.as_bytes();
+    let num = |r: std::ops::Range<usize>| -> Option<i64> { text.get(r)?.parse().ok() };
+    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || !matches!(b[10], b'T' | b' ') {
+        return None;
+    }
+    let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (hh, mm, ss) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    let mut rest = &text[19..];
+    if let Some(fraction) = rest.strip_prefix('.') {
+        rest = fraction.trim_start_matches(|c: char| c.is_ascii_digit());
+    }
+    let offset = match rest {
+        "" | "Z" | "z" => 0,
+        _ => {
+            let sign = if rest.starts_with('-') { -1 } else { 1 };
+            let h: i64 = rest.get(1..3)?.parse().ok()?;
+            let m: i64 = rest.get(4..6)?.parse().ok()?;
+            sign * (h * 3600 + m * 60)
+        }
+    };
+    // Days from civil (proleptic Gregorian).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + hh * 3600 + mm * 60 + ss - offset)
+}
+/// Human byte size: `24 KB`, `1.2 MB`.
+fn size(bytes: u64) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} B"),
+        1024..1_048_576 => format!("{} KB", bytes / 1024),
+        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.),
+    }
+}
 /// Usage details body. Missing windows and unknown state are stated, never 0%.
 fn usage_lines(a: &Account, now: i64) -> Vec<String> {
     let usage = Usage::account_at(a, now);
-    let mut body = vec![a.id.clone()];
+    let mut facts: Vec<(&str, String)> = vec![
+        (
+            "Account",
+            format!(
+                "{} {}",
+                crate::usage::provider_symbol(a.provider()),
+                account_title(a)
+            ),
+        ),
+        (
+            "Provider",
+            crate::client::provider_label(a.provider()).to_owned(),
+        ),
+        ("Status", usage.status.clone()),
+    ];
+    // The account home exactly as the backend publishes it; never derived here.
+    if let Some(home) = a
+        .details
+        .get("config_home")
+        .or_else(|| a.details.get("home"))
+        .and_then(Value::as_str)
+        .map(clean)
+        .filter(|h| !h.is_empty())
+    {
+        facts.insert(2, ("Directory", home));
+    }
+    let state = crate::usage::usage_state(a).map(clean);
+    let source = a.usage["source"]
+        .as_str()
+        .or_else(|| a.details.get("usage_source").and_then(Value::as_str))
+        .map(clean);
+    let joined: Vec<String> = state.into_iter().chain(source).collect();
+    if !joined.is_empty() {
+        facts.push(("Usage", joined.join(" · ")));
+    }
+    if let Some(semantics) = a.usage["semantics"].as_str() {
+        facts.push(("Semantics", clean(semantics)));
+    }
+    if let Some(then) = crate::usage::observed_at(a, now) {
+        facts.push(("Observed", relative(now, Some(then))));
+    }
+    for (window, label) in [("short", "5h window"), ("weekly", "Weekly")] {
+        let w = &a.usage[window];
+        let used = w["used_percent"].as_f64().filter(|n| n.is_finite());
+        facts.push((
+            label,
+            match (w.is_object(), used) {
+                (true, Some(used)) => format!(
+                    "{:.0}% left · {used:.0}% used · resets {}",
+                    100. - used,
+                    w["resets_at"]
+                        .as_i64()
+                        .map_or("at an unknown time".into(), crate::status::local_time)
+                ),
+                (_, None) if crate::usage::usage_state(a) == Some("unsupported") => {
+                    "usage unsupported".into()
+                }
+                (true, None) => "usage unknown".into(),
+                (false, _) => "unavailable".into(),
+            },
+        ));
+    }
+    let width = facts.iter().map(|(l, _)| l.len() + 1).max().unwrap_or(0);
+    let mut body: Vec<String> = facts
+        .into_iter()
+        .map(|(label, value)| format!("{:<width$}  {value}", format!("{label}:")))
+        .collect();
+    body.push(String::new());
+    let limits: Vec<String> = usage
+        .windows
+        .iter()
+        .filter_map(|w| w.limit.map(|l| format!("{l:.0}% left {}", w.label)))
+        .collect();
+    if !limits.is_empty() {
+        body.push(format!(
+            "┿ marks the saved switch threshold ({})",
+            limits.join(" · ")
+        ));
+    }
+    body.push("Identifiers".into());
+    body.push(format!("  {:<w$}  {}", "Account ID", a.id, w = width - 2));
     if let Some(name) = a
         .details
         .get("display_name")
@@ -264,47 +427,7 @@ fn usage_lines(a: &Account, now: i64) -> Vec<String> {
         .map(clean)
         .filter(|n| !n.is_empty())
     {
-        body.push(format!("Display name: {name}"));
-    }
-    body.extend([
-        format!("Provider: {}", crate::client::provider_label(a.provider())),
-        format!("Status: {}", usage.status),
-    ]);
-    if let Some(state) = crate::usage::usage_state(a) {
-        body.push(format!("Usage state: {}", clean(state)));
-    }
-    if let Some(source) = a.usage["source"]
-        .as_str()
-        .or_else(|| a.details.get("usage_source").and_then(Value::as_str))
-    {
-        body.push(format!("Source: {}", clean(source)));
-    }
-    if let Some(semantics) = a.usage["semantics"].as_str() {
-        body.push(format!("Semantics: {}", clean(semantics)));
-    }
-    if let Some(then) = crate::usage::observed_at(a, now) {
-        body.push(format!("Observed: {}", relative(now, Some(then))));
-    }
-    for (window, label) in [("short", "Short window"), ("weekly", "Weekly")] {
-        let w = &a.usage[window];
-        let used = w["used_percent"].as_f64().filter(|n| n.is_finite());
-        body.push(match (w.is_object(), used) {
-            (true, Some(used)) => format!(
-                "{label} ({} minutes): {used}% used; resets {}",
-                w["duration_minutes"],
-                w["resets_at"]
-                    .as_i64()
-                    .map_or("at an unknown time".into(), |t| format!(
-                        "at {}",
-                        crate::status::local_time(t)
-                    ))
-            ),
-            (_, None) if crate::usage::usage_state(a) == Some("unsupported") => {
-                format!("{label}: usage unsupported")
-            }
-            (true, None) => format!("{label}: usage unknown"),
-            (false, _) => format!("{label}: unavailable"),
-        });
+        body.push(format!("  {:<w$}  {name}", "Display name", w = width - 2));
     }
     body
 }
@@ -400,6 +523,159 @@ fn terminal(phase: &str) -> bool {
         "complete" | "completed" | "cancelled" | "failed" | "recovered"
     )
 }
+/// Plain-language name of an operation or launch kind.
+pub fn kind_label(kind: &str) -> String {
+    match kind {
+        "move_space" => "Move to Space",
+        "account" | "switch" => "Switch account",
+        "account_delete" => "Delete account",
+        "restart" => "Restart",
+        "terminate" | "stop" => "End session",
+        "directory" | "relocate" => "Change directory",
+        "move_project" => "Move project folder",
+        "pause" => "Pause work",
+        "archive_session" => "Archive session",
+        "restore_session" => "Restore session",
+        "delete_session" => "Delete session",
+        "launch" => "New session",
+        "resume-launch" | "resume" => "Resume",
+        other => return crate::messages::phase(other),
+    }
+    .into()
+}
+/// Badge text for work in progress, in the present tense.
+fn active_text(kind: &str, record: &Value, spaces: &BTreeMap<String, String>) -> String {
+    if record["phase"]
+        .as_str()
+        .is_some_and(|p| p.starts_with("awaiting_"))
+    {
+        return "needs your answer".into();
+    }
+    match kind {
+        "move_space" => record["space_id"]
+            .as_str()
+            .and_then(|id| spaces.get(id))
+            .map_or_else(|| "moving".into(), |name| format!("moving to {name}")),
+        "account" | "switch" => record["target_account_id"].as_str().map_or_else(
+            || "switching account".into(),
+            |a| format!("switching to {}", crate::usage::short_name(a)),
+        ),
+        "restart" => "restarting".into(),
+        "terminate" | "stop" => "ending".into(),
+        "directory" | "relocate" | "move_project" => "changing directory".into(),
+        "pause" => "pausing".into(),
+        "archive_session" => "archiving".into(),
+        "restore_session" => "restoring".into(),
+        "delete_session" => "deleting".into(),
+        "resume-launch" => "resuming".into(),
+        _ => "working".into(),
+    }
+}
+/// Badge text for a failed operation.
+fn failed_text(kind: &str) -> String {
+    let noun = match kind {
+        "move_space" => "move",
+        "account" | "switch" => "switch",
+        "restart" => "restart",
+        "terminate" | "stop" => "end",
+        "directory" | "relocate" | "move_project" => "directory change",
+        "pause" => "pause",
+        "archive_session" => "archive",
+        "restore_session" => "restore",
+        "delete_session" => "delete",
+        "resume-launch" => "resume",
+        _ => "operation",
+    };
+    format!("{noun} failed")
+}
+/// Short status for an operations row; failures carry their reason inline.
+fn operation_row_status(kind: &str, record: &Value) -> String {
+    let phase = if kind == "operation" {
+        operation_status(record)
+    } else {
+        launch_status(record)
+    };
+    match phase {
+        "complete" | "completed" => "done".into(),
+        "failed" => {
+            let reason = record["detail"]
+                .as_str()
+                .or_else(|| record["error"].as_str())
+                .map(crate::messages::describe)
+                .map(|r| clean(&r))
+                .filter(|r| !r.trim().is_empty());
+            match reason {
+                Some(reason) => format!("failed · {}", reason.trim_end_matches('.')),
+                None => "failed".into(),
+            }
+        }
+        "running" => "in progress".into(),
+        "confirmation" => "needs your answer".into(),
+        "checking" => "checking".into(),
+        other => other.into(),
+    }
+}
+/// Which filter group an operations row belongs to.
+fn operation_group(kind: &str, record: &Value) -> OperationFilter {
+    let phase = if kind == "operation" {
+        operation_status(record)
+    } else {
+        launch_status(record)
+    };
+    match phase {
+        "failed" => OperationFilter::Failed,
+        "complete" | "completed" | "cancelled" | "recovered" => OperationFilter::Completed,
+        _ => OperationFilter::InProgress,
+    }
+}
+/// Local calendar day (days since the epoch in local time) and its label.
+fn local_day(seconds: i64) -> Option<(i64, String)> {
+    let time = seconds as libc::time_t;
+    let mut broken = std::mem::MaybeUninit::<libc::tm>::uninit();
+    let mut buffer = [0i8; 32];
+    // libc writes into fixed, valid storage and does not retain pointers.
+    unsafe {
+        if libc::localtime_r(&time, broken.as_mut_ptr()).is_null() {
+            return None;
+        }
+        let tm = broken.assume_init();
+        let n = libc::strftime(
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            c"%a %b %-d".as_ptr(),
+            &tm,
+        );
+        let label =
+            String::from_utf8_lossy(std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), n))
+                .into_owned();
+        let key = i64::from(tm.tm_year) * 400 + i64::from(tm.tm_yday);
+        Some((key, label))
+    }
+}
+/// `Today`, `Yesterday` or `Mon Oct 26`; undated legacy records are `Undated`.
+fn day_heading(now: i64, then: Option<i64>) -> String {
+    let Some(then) = then.map(|t| if t > 100_000_000_000 { t / 1000 } else { t }) else {
+        return "Undated".into();
+    };
+    let (Some((today, _)), Some((day, label))) = (local_day(now), local_day(then)) else {
+        return "Undated".into();
+    };
+    let yesterday = local_day(now - 86_400).map(|(k, _)| k);
+    if day == today {
+        "Today".into()
+    } else if Some(day) == yesterday {
+        "Yesterday".into()
+    } else {
+        label
+    }
+}
+/// One entry of the Operations page layout.
+#[derive(Clone, Debug, PartialEq)]
+enum Slot {
+    Filter,
+    Heading(String),
+    Entry(String, String),
+}
 impl Manager {
     fn request(&mut self, args: Vec<String>, purpose: Purpose) -> Vec<Intent> {
         self.sequence += 1;
@@ -464,8 +740,7 @@ impl Manager {
             let reason = self
                 .provider_reason(&provider, "account_limits")
                 .unwrap_or_else(|| "unsupported".into());
-            row.with_selected_preview(format!("({reason})"))
-                .preview_gap(1)
+            row.with_reason(reason)
         }
     }
     fn logout_account_row(&self, key: &str, removed: bool) -> Row {
@@ -478,8 +753,7 @@ impl Manager {
             let reason = self
                 .provider_reason(&provider, "account_logout")
                 .unwrap_or_else(|| "unsupported".into());
-            row.with_selected_preview(format!("({reason})"))
-                .preview_gap(1)
+            row.with_reason(reason)
         }
     }
     fn rename_account_row(&self, key: &str) -> Row {
@@ -491,8 +765,7 @@ impl Manager {
             let reason = self
                 .provider_reason(&provider, "account_rename")
                 .unwrap_or_else(|| "unsupported".into());
-            row.with_selected_preview(format!("({reason})"))
-                .preview_gap(1)
+            row.with_reason(reason)
         }
     }
     fn remove_account_row(&self, key: &str, removed: bool) -> Row {
@@ -510,8 +783,7 @@ impl Manager {
             let reason = self
                 .provider_reason(&provider, "account_removal")
                 .unwrap_or_else(|| "unsupported".into());
-            row.with_selected_preview(format!("({reason})"))
-                .preview_gap(1)
+            row.with_reason(reason)
         }
     }
     /// Providers the backend reports as implemented and that this UI has a flow for.
@@ -555,10 +827,29 @@ impl Manager {
         };
         let row = Row::gate("Delete account", reason.is_none());
         if let Some(reason) = reason {
-            row.with_selected_preview(format!("({reason})"))
-                .preview_gap(1)
+            row.with_reason(reason)
         } else {
             row
+        }
+    }
+    /// Archived name, shortened to `budget` cells; only colliding names gain a
+    /// short ID suffix (`codex-root · 7792`).
+    fn archive_label(&self, s: &Value, budget: usize) -> String {
+        let name = crate::session_list::full_name(s);
+        let collides = self
+            .archives
+            .iter()
+            .filter(|o| crate::session_list::full_name(o) == name)
+            .count()
+            > 1;
+        if collides {
+            let suffix = format!(" · {}", id(s).chars().take(4).collect::<String>());
+            format!(
+                "{}{suffix}",
+                crate::widgets::ellipsize(&name, budget.saturating_sub(suffix.chars().count()))
+            )
+        } else {
+            crate::widgets::ellipsize(&name, budget)
         }
     }
     fn selected_account(&self) -> Option<String> {
@@ -637,10 +928,16 @@ impl Manager {
         }
     }
     fn show_usage(&mut self, a: &Account) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() as i64);
-        self.show("Details", usage_lines(a, now), &["Close"], Form::None);
+        let now = crate::usage::clock();
+        self.show(
+            "Account details",
+            usage_lines(a, now),
+            &["Close"],
+            Form::None,
+        );
+        if let Some(d) = &mut self.dialog {
+            Self::dim_identifiers(d);
+        }
     }
     fn show_login(&mut self, key: &str) {
         self.show(
@@ -743,8 +1040,8 @@ impl Manager {
                     crate::usage::provider_symbol(provider)
                 );
             }
-            Page::Sessions => "Manage Sessions",
-            Page::Archives => "Archived Sessions",
+            Page::Sessions => "Manage sessions",
+            Page::Archives => "Archived sessions",
             Page::Session(key) | Page::Spaces(key) => {
                 return format!(
                     "Session: {}",
@@ -754,8 +1051,15 @@ impl Manager {
                 );
             }
             Page::Operations => "Operations",
-            Page::Launch(..) => "Launch progress",
-            Page::Operation(_) => "Operation",
+            Page::Launch(kind, _) => return kind_label(kind),
+            Page::Operation(key) => {
+                return self
+                    .operations
+                    .iter()
+                    .find(|o| id(o) == key)
+                    .and_then(|o| o["kind"].as_str())
+                    .map_or_else(|| "Operation".into(), kind_label);
+            }
         }
         .into()
     }
@@ -796,6 +1100,7 @@ impl Manager {
                 .operation_keys()
                 .get(index)
                 .cloned()
+                .flatten()
                 .map(|(kind, key)| Focus::Operation(kind, key)),
             _ => self
                 .rows()
@@ -838,7 +1143,7 @@ impl Manager {
             Some(Focus::Operation(kind, key)) => self
                 .operation_keys()
                 .iter()
-                .position(|entry| entry == &(kind.clone(), key.clone())),
+                .position(|entry| entry.as_ref() == Some(&(kind.clone(), key.clone()))),
             Some(Focus::Label(label)) => self.rows().iter().position(|r| r.label == label),
             None => None,
         };
@@ -870,9 +1175,9 @@ impl Manager {
         match &self.page {
             Page::Home => {
                 let mut rows = vec![
-                    Row::yes("New Session"),
-                    Row::yes("Manage Sessions"),
-                    Row::yes("Add Account"),
+                    Row::yes("New session"),
+                    Row::yes("Manage sessions"),
+                    Row::yes("Add account"),
                     Row::separator(),
                     Row::yes("Settings"),
                 ];
@@ -929,6 +1234,7 @@ impl Manager {
                     self.remove_account_row(key, removed),
                     self.delete_account_row(key),
                 ]);
+                crate::widgets::align_reasons(&mut rows);
                 rows
             }
             Page::Sessions => crate::session_list::rows_with_archives(
@@ -939,13 +1245,7 @@ impl Manager {
             Page::Archives => self
                 .archives
                 .iter()
-                .map(|s| {
-                    Row::yes(crate::usage::display_name(
-                        s["name"].as_str().unwrap_or("Unnamed"),
-                    ))
-                    .with_selected_preview(format!("({})", id(s)))
-                    .preview_gap(1)
-                })
+                .map(|s| Row::yes(self.archive_label(s, usize::MAX)))
                 .collect(),
             Page::Spaces(_) => self.space_choices["spaces"]
                 .as_array()
@@ -995,26 +1295,7 @@ impl Manager {
                     ),
                 ]
             }
-            Page::Operations => {
-                let entries = self.operation_entries();
-                let width = entries.iter().map(|e| e.2.len()).max().unwrap_or(0);
-                entries
-                    .into_iter()
-                    .map(|(kind, key, label, record)| {
-                        let label = format!("{label}:");
-                        let width = width + 1;
-                        let row = Row::yes(format!(
-                            "{label:<width$} {}",
-                            if kind == "operation" {
-                                operation_status(record)
-                            } else {
-                                launch_status(record)
-                            }
-                        ));
-                        row.with_selected_preview(format!("({key})")).preview_gap(1)
-                    })
-                    .collect()
-            }
+            Page::Operations => self.operation_rows(),
             Page::Operation(key) => {
                 let o = self
                     .operations
@@ -1103,10 +1384,44 @@ impl Manager {
         });
         entries
     }
-    fn operation_keys(&self) -> Vec<(String, String)> {
-        self.operation_entries()
+    /// Operations page layout: the filter selector, then day headings and entries.
+    fn operation_slots(&self) -> Vec<Slot> {
+        let now = crate::usage::clock();
+        let mut slots = vec![Slot::Filter];
+        let mut last: Option<String> = None;
+        for (kind, key, _, record) in self.operation_entries() {
+            if self.operation_filter != OperationFilter::All
+                && operation_group(kind, record) != self.operation_filter
+            {
+                continue;
+            }
+            let heading = day_heading(now, record["created_at"].as_i64());
+            if last.as_ref() != Some(&heading) {
+                slots.push(Slot::Heading(heading.clone()));
+                last = Some(heading);
+            }
+            slots.push(Slot::Entry(kind.into(), key.into()));
+        }
+        if slots.len() == 1 {
+            slots.push(Slot::Heading(
+                if self.operation_filter == OperationFilter::All {
+                    "No operations"
+                } else {
+                    "Nothing matches this filter"
+                }
+                .into(),
+            ));
+        }
+        slots
+    }
+    /// The entry key at each Operations row (None for the filter and headings).
+    fn operation_keys(&self) -> Vec<Option<(String, String)>> {
+        self.operation_slots()
             .into_iter()
-            .map(|(kind, key, _, _)| (kind.into(), key.into()))
+            .map(|slot| match slot {
+                Slot::Entry(kind, key) => Some((kind, key)),
+                _ => None,
+            })
             .collect()
     }
     fn retain_operation_focus(&mut self, chosen: Option<(String, String)>) {
@@ -1114,9 +1429,130 @@ impl Manager {
             self.options.selected = self
                 .operation_keys()
                 .iter()
-                .position(|k| *k == chosen)
+                .position(|k| k.as_ref() == Some(&chosen))
                 .unwrap_or(0);
         }
+        let rows = self.rows();
+        self.options.selected = self.options.selected.min(rows.len().saturating_sub(1));
+        if rows.get(self.options.selected).is_some_and(|r| r.separator) {
+            self.options.selected = 0;
+        }
+    }
+    /// Provider symbol and the best known name for an operation's subject.
+    fn operation_subject(&self, kind: &str, r: &Value) -> String {
+        let (session, account) = if kind == "operation" {
+            (
+                r["source_session_id"]
+                    .as_str()
+                    .or_else(|| r["session_id"].as_str()),
+                r["account_id"]
+                    .as_str()
+                    .or_else(|| r["source_account_id"].as_str()),
+            )
+        } else {
+            (
+                r["request"]["session_id"].as_str(),
+                r["request"]["account_id"].as_str(),
+            )
+        };
+        let symbol = |provider: &str| crate::usage::provider_symbol(provider);
+        if let Some(s) = session.and_then(|id| self.session(id)) {
+            let provider = s["provider"]
+                .as_str()
+                .or_else(|| {
+                    s["account_id"]
+                        .as_str()
+                        .and_then(|a| a.split_once(':').map(|p| p.0))
+                })
+                .unwrap_or("codex");
+            return format!("{} {}", symbol(provider), crate::session_list::full_name(s));
+        }
+        let provider_of = |a: &str| a.split_once(':').map_or("codex", |(p, _)| p).to_owned();
+        if let Some(name) = r["request"]["name"].as_str().filter(|n| !n.is_empty()) {
+            return format!(
+                "{} {}",
+                symbol(&account.map(provider_of).unwrap_or_else(|| "codex".into())),
+                clean(name)
+            );
+        }
+        match account {
+            Some(a) => format!(
+                "{} {}",
+                symbol(&provider_of(a)),
+                self.account(a)
+                    .map(account_title)
+                    .unwrap_or_else(|| crate::usage::short_name(a))
+            ),
+            None => "unknown session".into(),
+        }
+    }
+    /// Newest-first rows: relative time, subject, plain kind and an inline status.
+    fn operation_rows(&self) -> Vec<Row> {
+        use unicode_width::UnicodeWidthStr;
+        let now = crate::usage::clock();
+        let entries = self.operation_entries();
+        let find = |kind: &str, key: &str| {
+            entries
+                .iter()
+                .find(|e| e.0 == kind && e.1 == key)
+                .map(|e| e.3)
+        };
+        let slots = self.operation_slots();
+        let described: Vec<Option<(String, String, String, String)>> = slots
+            .iter()
+            .map(|slot| match slot {
+                Slot::Entry(kind, key) => find(kind, key).map(|r| {
+                    let code = if kind == "operation" {
+                        r["kind"].as_str().unwrap_or("operation")
+                    } else {
+                        kind.as_str()
+                    };
+                    (
+                        relative(now, r["created_at"].as_i64()).replace("unknown", "—"),
+                        crate::widgets::ellipsize(&self.operation_subject(kind, r), 24),
+                        kind_label(code),
+                        operation_row_status(kind, r),
+                    )
+                }),
+                _ => None,
+            })
+            .collect();
+        let width = |f: fn(&(String, String, String, String)) -> &String| {
+            described
+                .iter()
+                .flatten()
+                .map(|d| UnicodeWidthStr::width(f(d).as_str()))
+                .max()
+                .unwrap_or(0)
+        };
+        let (time_w, subject_w, kind_w) = (width(|d| &d.0), width(|d| &d.1), width(|d| &d.2));
+        let pad = |text: &str, w: usize| {
+            format!(
+                "{text}{}",
+                " ".repeat(w.saturating_sub(UnicodeWidthStr::width(text)))
+            )
+        };
+        slots
+            .iter()
+            .zip(described)
+            .map(|(slot, described)| match (slot, described) {
+                (Slot::Filter, _) => Row::yes("Show").with_choice(self.operation_filter.label()),
+                (Slot::Heading(label), _) => Row::heading(label.clone()),
+                (Slot::Entry(..), Some((time, subject, kind, status))) => {
+                    let label = format!(
+                        "{}{time}  {}  {}",
+                        " ".repeat(time_w.saturating_sub(UnicodeWidthStr::width(time.as_str()))),
+                        pad(&subject, subject_w),
+                        pad(&kind, kind_w),
+                    );
+                    let mut row = Row::yes(label).with_reason(status);
+                    row.preview = row.preview.map(|p| p.trim_start_matches("· ").to_owned());
+                    row.preview_column = Some(2 + time_w + subject_w + kind_w + 6);
+                    row
+                }
+                (Slot::Entry(..), None) => Row::yes("Unknown operation"),
+            })
+            .collect()
     }
     fn launch_record(&self, kind: &str, key: &str) -> Option<&Value> {
         self.launches
@@ -1185,7 +1621,10 @@ impl Manager {
         }
         if (self.active_operation.is_some()
             || matches!(self.form, Form::Operation(_) | Form::OperationApproval(..))
-            || matches!(self.page, Page::Operations | Page::Operation(_)))
+            || matches!(
+                self.page,
+                Page::Operations | Page::Operation(_) | Page::Sessions
+            ))
             && !self
                 .pending
                 .values()
@@ -1309,7 +1748,6 @@ impl Manager {
         );
         self.cached_snapshot = true;
         self.cache_out = None;
-        self.note = "Showing saved sessions; refreshing…".into();
     }
     /// Result of opening the login pane. Only a failure is surfaced, with the
     /// command a person can run themselves.
@@ -1456,125 +1894,119 @@ impl Manager {
         {
             self.refresh_with(true)
         } else {
-            self.poll_sessions(false)
+            let mut out = self.poll_sessions(false);
+            // Session badges follow operations: every second while one is active,
+            // otherwise every five seconds.
+            self.ticks_since_operations += 1;
+            let active = self.badges().values().any(|b| b.active);
+            if self.page == Page::Sessions
+                && self.visible
+                && self.ticks_since_operations >= if active { 1 } else { 5 }
+                && !self
+                    .pending
+                    .values()
+                    .any(|p| matches!(p, Purpose::Operations))
+            {
+                self.ticks_since_operations = 0;
+                out.extend(self.request(strings(&["operations"]), Purpose::Operations));
+            }
+            out
         }
     }
-    /// Continuation, branch and native-kind facts; absent facts are simply not shown.
-    fn identity_lines(value: &Value) -> Vec<String> {
+    /// Session details share one layout for every provider: the facts people use
+    /// first, then a dim Identifiers group.
+    fn session_detail_lines(value: &Value) -> Vec<String> {
         let text = |v: &Value| v.as_str().map(clean).filter(|s| !s.is_empty());
-        let mut lines = vec![];
-        if let Some(ids) = value["previous_conversation_ids"].as_array() {
-            let ids: Vec<_> = ids.iter().filter_map(&text).collect();
-            if !ids.is_empty() {
-                lines.push(format!("Earlier native session IDs: {}", ids.join(", ")));
+        let now = crate::usage::clock();
+        let mut status = match value["availability"].as_str() {
+            Some("running") => match value["native_status"]
+                .as_str()
+                .or_else(|| value["activity"].as_str())
+            {
+                Some("busy") => "running · busy".to_owned(),
+                Some("idle") => "running · idle".to_owned(),
+                _ => "running".to_owned(),
+            },
+            Some("stopped" | "saved") => "saved".into(),
+            Some("archived") => "archived".into(),
+            Some("stale") => "stale".into(),
+            Some(other) if !other.is_empty() => clean(other),
+            _ => "unknown".into(),
+        };
+        if matches!(
+            text(&value["native"]["kind"]).as_deref(),
+            Some("bg" | "background")
+        ) {
+            status.push_str(" · background");
+        }
+        let created = value["conversation_created_at"].as_i64().or_else(|| {
+            value["conversation_created_at"]
+                .as_str()
+                .and_then(parse_time)
+        });
+        let mut facts = vec![
+            ("Account", crate::session_list::account_tag(value)),
+            ("Status", status),
+            (
+                "Directory",
+                text(&value["directory"]).unwrap_or_else(|| "unknown".into()),
+            ),
+            (
+                "Last active",
+                relative(now, value["last_accessed"].as_i64()),
+            ),
+            ("Created", relative(now, created)),
+        ];
+        if let Some(bytes) = value["history_file_bytes"].as_u64() {
+            facts.push(("History", size(bytes)));
+        }
+        let mut ids = vec![("Session", id(value).to_owned())];
+        if let Some(native) = text(&value["conversation_id"]) {
+            ids.push(("Native session", native));
+        }
+        if let Some(pid) = value["attachment"]["pid"]
+            .as_u64()
+            .or_else(|| value["pid"].as_u64())
+            .filter(|_| value["availability"] == "running")
+        {
+            ids.push(("Process", pid.to_string()));
+        }
+        if let Some(job) = text(&value["native"]["job_id"]) {
+            ids.push(("Job", job));
+        }
+        if let Some(earlier) = value["previous_conversation_ids"].as_array() {
+            let earlier: Vec<_> = earlier.iter().filter_map(&text).collect();
+            if !earlier.is_empty() {
+                ids.push(("Earlier IDs", earlier.join(" · ")));
             }
         }
         if let Some(parent) = text(&value["forked_from_conversation_id"]) {
-            lines.push(format!("Forked from: {parent}"));
+            ids.push(("Forked from", parent));
         }
-        if value["native"].is_object() {
-            let kind = match text(&value["native"]["kind"]).as_deref() {
-                Some("bg" | "background") => "background".to_owned(),
-                Some(other) => other.to_owned(),
-                None => "unknown".to_owned(),
-            };
-            lines.push(format!("Native kind: {kind}"));
-            if let Some(job) = text(&value["native"]["job_id"]) {
-                lines.push(format!("Native job ID: {job}"));
-            }
-        }
+        let width = facts
+            .iter()
+            .map(|(l, _)| l.len() + 1)
+            .chain(ids.iter().map(|(l, _)| l.len() + 2))
+            .max()
+            .unwrap_or(0);
+        let mut lines: Vec<String> = facts
+            .into_iter()
+            .map(|(label, value)| format!("{:<width$}  {value}", format!("{label}:")))
+            .collect();
+        lines.push(String::new());
+        lines.push("Identifiers".into());
+        lines.extend(
+            ids.into_iter()
+                .map(|(label, value)| format!("  {label:<w$}  {value}", w = width - 2)),
+        );
         lines
     }
-    fn claude_detail_lines(value: &Value) -> Vec<String> {
-        let text = |v: &Value| v.as_str().map(clean).filter(|s| !s.is_empty());
-        let provider = if crate::session_list::is_gemini(value) {
-            "gemini"
-        } else {
-            "claude"
-        };
-        let status = match value["availability"].as_str() {
-            Some("running") => match value["native_status"].as_str() {
-                Some("idle") => "running (idle)",
-                Some("busy") => "running (busy)",
-                _ => "running",
-            },
-            Some("stopped") => "stopped",
-            Some("stale") => "stale",
-            _ => "unknown",
-        };
-        let pid = value["attachment"]["pid"]
-            .as_u64()
-            .or_else(|| value["pid"].as_u64())
-            .filter(|_| value["availability"] == "running");
-        let mut lines = vec![
-            format!("Provider: {}", crate::client::provider_label(provider)),
-            format!(
-                "Managed account: {}",
-                text(&value["account_id"]).unwrap_or_else(|| "unknown".into())
-            ),
-            format!(
-                "{} session ID (native): {}",
-                if provider == "gemini" {
-                    "Gemini"
-                } else {
-                    "Claude"
-                },
-                text(&value["conversation_id"]).unwrap_or_else(|| "unknown".into())
-            ),
-            format!(
-                "Directory: {}",
-                text(&value["directory"]).unwrap_or_else(|| "unknown".into())
-            ),
-            format!("Status: {status}"),
-            format!(
-                "Sessionsation name: {}",
-                text(&value["name"]).unwrap_or_else(|| "unknown".into())
-            ),
-            format!(
-                "Native name: {}",
-                text(&value["native_name"]).unwrap_or_else(|| "unknown".into())
-            ),
-        ];
-        lines.splice(3..3, Self::identity_lines(value));
-        if let Some(pid) = pid {
-            lines.push(format!("Process ID: {pid}"));
-        }
-        lines.push(format!("Session: {}", id(value)));
-        lines
-    }
-    fn session_detail_lines(value: &Value) -> Vec<String> {
-        if crate::session_list::is_native_provider(value) {
-            return Self::claude_detail_lines(value);
-        }
-        let mut lines = vec![
-            format!("Name: {}", value["name"].as_str().unwrap_or("")),
-            format!("Account: {}", value["account_id"].as_str().unwrap_or("")),
-            format!(
-                "Created: {}",
-                value["conversation_created_at"]
-                    .as_str()
-                    .unwrap_or("Unknown")
-            ),
-            format!(
-                "Saved history: {}",
-                value["history_file_bytes"]
-                    .as_u64()
-                    .map(|n| format!("{n} bytes"))
-                    .unwrap_or_else(|| "Unknown".into())
-            ),
-            format!(
-                "Directory: {}",
-                value["directory"].as_str().unwrap_or("unavailable")
-            ),
-            format!("Session: {}", id(value)),
-            format!(
-                "Conversation: {}",
-                value["conversation_id"].as_str().unwrap_or("")
-            ),
-            format!("Generation: {}", value["generation"].as_str().unwrap_or("")),
-        ];
-        lines.splice(7..7, Self::identity_lines(value));
-        lines
+    /// Dim everything from the Identifiers group on.
+    fn dim_identifiers(dialog: &mut Dialog) {
+        dialog.dim_from = dialog
+            .body
+            .iter()
+            .position(|l| l == "Identifiers" || l.starts_with("┿ marks"));
     }
     fn target(s: &Value, command: &str) -> Vec<String> {
         strings(&[
@@ -1635,7 +2067,7 @@ impl Manager {
             return;
         };
         if s["capabilities"]["switch_account"] != true {
-            self.note = "The session is not currently available for account switching. Review its state in Manage Sessions.".into();
+            self.note = "The session is not currently available for account switching. Review its state in Manage sessions.".into();
             return;
         }
         let mut args = Self::target(&s, "switch");
@@ -1705,27 +2137,45 @@ impl Manager {
             self.moving = Some(self.accounts.clone());
             return vec![];
         }
+        let armed = self.close_armed.take();
+        let filter_row =
+            self.page == Page::Operations && self.options.selected == 0 && !self.options.back;
         match key.code {
             KeyCode::Home | KeyCode::End => {
                 self.options
                     .boundary(&self.rows(), false, key.code == KeyCode::End);
+                self.badge_focus = false;
                 if !self.usage_selectable() {
                     self.usage_focus = false;
+                }
+                vec![]
+            }
+            KeyCode::PageUp | KeyCode::PageDown => {
+                if self.page != Page::Home {
+                    self.options.page(&self.rows(), key.code == KeyCode::PageUp);
+                    self.badge_focus = false;
                 }
                 vec![]
             }
             KeyCode::Up | KeyCode::Down => {
                 self.options
                     .step_with_wrap(&self.rows(), false, key.code == KeyCode::Up, wrap);
+                self.badge_focus = false;
                 if !self.usage_selectable() {
                     self.usage_focus = false;
                 }
+                vec![]
+            }
+            KeyCode::Left | KeyCode::Right if filter_row => {
+                self.operation_filter = self.operation_filter.cycle(key.code == KeyCode::Left);
                 vec![]
             }
             KeyCode::Left if matches!(self.page, Page::Spaces(_)) => vec![],
             KeyCode::Left => {
                 if self.usage_focus {
                     self.usage_focus = false;
+                } else if self.badge_focus {
+                    self.badge_focus = false;
                 } else {
                     self.options.back = true;
                 }
@@ -1735,19 +2185,150 @@ impl Manager {
                 if !self.options.back && self.usage_selectable() {
                     self.usage_focus = true;
                 }
+                if !self.options.back && self.selected_badge().is_some() {
+                    self.badge_focus = true;
+                }
                 self.options.back = false;
                 vec![]
+            }
+            KeyCode::Esc if self.page == Page::Home && self.history.is_empty() => {
+                // Closing the popup from Home needs a second Esc within one second.
+                if armed.is_some_and(|t| t.elapsed() <= CLOSE_WINDOW) {
+                    vec![Intent::Exit]
+                } else {
+                    self.close_armed = Some(std::time::Instant::now());
+                    vec![]
+                }
             }
             KeyCode::Esc => self.back(),
             KeyCode::Enter | KeyCode::Char(' ') => {
                 if self.options.back {
                     self.back()
+                } else if self.badge_focus {
+                    self.open_badge()
                 } else {
                     self.activate()
                 }
             }
             _ => vec![],
         }
+    }
+    /// The selected session row's operation badge, when it has one.
+    fn selected_badge(&self) -> Option<crate::session_list::Badge> {
+        if self.page != Page::Sessions {
+            return None;
+        }
+        let index = crate::session_list::session_index(&self.sessions, self.options.selected)?;
+        let key = id(&self.sessions[index]);
+        self.badges().remove(key)
+    }
+    /// True while a first Esc on Home waits for its confirming second press.
+    pub fn close_pending(&self) -> bool {
+        self.close_armed
+            .is_some_and(|t| t.elapsed() <= CLOSE_WINDOW)
+    }
+    /// Pending and recently failed operations by session ID.
+    pub fn badges(&self) -> BTreeMap<String, crate::session_list::Badge> {
+        let now = crate::usage::clock();
+        let mut out = BTreeMap::new();
+        for s in &self.sessions {
+            let key = id(s);
+            let newest = self
+                .operations
+                .iter()
+                .filter(|o| {
+                    o["source_session_id"] == key
+                        || o["session_id"] == key
+                        || s["pending_operation_id"].as_str() == Some(id(o))
+                })
+                .max_by_key(|o| o["created_at"].as_i64());
+            let badge = match newest {
+                Some(o) => {
+                    let kind = o["kind"].as_str().unwrap_or("operation");
+                    let phase = o["phase"].as_str().unwrap_or("unknown");
+                    let recent = o["created_at"].as_i64().is_none_or(|t| now - t < 86_400);
+                    if !terminal(phase) {
+                        Some((active_text(kind, o, &self.space_names), true, id(o)))
+                    } else if phase == "failed" && recent {
+                        Some((failed_text(kind), false, id(o)))
+                    } else {
+                        None
+                    }
+                }
+                None => s["pending_operation_id"]
+                    .as_str()
+                    .map(|op| ("operation running".to_owned(), true, op)),
+            };
+            if let Some((text, active, op)) = badge {
+                out.insert(
+                    key.to_owned(),
+                    crate::session_list::Badge {
+                        kind: "operation".into(),
+                        id: op.to_owned(),
+                        text,
+                        active,
+                    },
+                );
+            }
+        }
+        out
+    }
+    /// Enter on a badge opens that operation's progress or details over the list.
+    fn open_badge(&mut self) -> Vec<Intent> {
+        let Some(badge) = self.selected_badge() else {
+            self.badge_focus = false;
+            return vec![];
+        };
+        self.details_open = true;
+        let o = self
+            .operations
+            .iter()
+            .find(|o| id(o) == badge.id)
+            .cloned()
+            .unwrap_or(Value::Null);
+        let phase = o["phase"].as_str().unwrap_or("unknown");
+        let finished = terminal(phase);
+        self.show(
+            &kind_label(o["kind"].as_str().unwrap_or("operation")),
+            Self::operation_body(&o, &badge.id),
+            &[if finished {
+                "Close"
+            } else {
+                "Continue in background"
+            }],
+            Form::Operation(badge.id.clone()),
+        );
+        if let Some(d) = &mut self.dialog {
+            d.dim_from = Some(d.body.len().saturating_sub(2));
+            if !finished {
+                d.busy = true;
+            }
+        }
+        if !self
+            .pending
+            .values()
+            .any(|p| matches!(p, Purpose::Operations))
+        {
+            return self.request(strings(&["operations"]), Purpose::Operations);
+        }
+        vec![]
+    }
+    /// Operation dialog body: what is happening, the backend detail, and its ID.
+    fn operation_body(o: &Value, key: &str) -> Vec<String> {
+        let mut body = vec![if o.is_null() {
+            "Loading…".to_owned()
+        } else {
+            crate::messages::operation_phase(
+                o["kind"].as_str().unwrap_or(""),
+                o["phase"].as_str().unwrap_or("unknown"),
+            )
+        }];
+        if let Some(detail) = o["detail"].as_str().map(clean).filter(|d| !d.is_empty()) {
+            body.push(detail);
+        }
+        body.push(String::new());
+        body.push(format!("Operation ID  {key}"));
+        body
     }
     pub fn paste(&mut self, text: &str) {
         if let Some(d) = &mut self.dialog {
@@ -1796,7 +2377,7 @@ impl Manager {
                 .collect();
             buttons.push("Cancel");
             self.show(
-                "Add Account",
+                "Add account",
                 vec!["Choose the provider for the new account.".into()],
                 &buttons,
                 Form::AddProvider(providers),
@@ -1817,7 +2398,7 @@ impl Manager {
             ));
         }
         self.show(
-            "Add Account",
+            "Add account",
             body,
             &["Add account", "Cancel"],
             Form::Add(provider.to_owned()),
@@ -1985,11 +2566,11 @@ impl Manager {
                                 "Add to HERDR",
                             ),
                             Place::Start => (
-                                "Start Session",
+                                "Start session",
                                 format!(
                                     "Start this saved session in a new tab in {space_name}. The conversation is resumed; no message is sent."
                                 ),
-                                "Start Session",
+                                "Start session",
                             ),
                         };
                         self.show(
@@ -2050,7 +2631,11 @@ impl Manager {
             }
 
             Page::Operations => {
-                if let Some((kind, key)) = self.operation_keys().get(index).cloned() {
+                if index == 0 {
+                    self.operation_filter = self.operation_filter.cycle(false);
+                    return vec![];
+                }
+                if let Some((kind, key)) = self.operation_keys().get(index).cloned().flatten() {
                     if kind == "operation" {
                         self.enter(Page::Operation(key));
                     } else {
@@ -2091,18 +2676,8 @@ impl Manager {
                     0 => {
                         self.details_open = true;
                         self.show(
-                            if terminal(o["phase"].as_str().unwrap_or("")) {
-                                "Operation details"
-                            } else {
-                                "Operation progress"
-                            },
-                            vec![
-                                crate::messages::operation_phase(
-                                    o["kind"].as_str().unwrap_or(""),
-                                    o["phase"].as_str().unwrap_or("unknown"),
-                                ),
-                                o["detail"].as_str().unwrap_or("").into(),
-                            ],
+                            &kind_label(o["kind"].as_str().unwrap_or("operation")),
+                            Self::operation_body(&o, &key),
                             &[if terminal(o["phase"].as_str().unwrap_or("")) {
                                 "Close"
                             } else {
@@ -2110,6 +2685,9 @@ impl Manager {
                             }],
                             Form::Operation(key.clone()),
                         );
+                        if let Some(d) = &mut self.dialog {
+                            d.dim_from = Some(d.body.len().saturating_sub(2));
+                        }
                     }
                     1 | 2 => self.confirm(
                         "Operation confirmation",
@@ -2265,17 +2843,17 @@ impl Manager {
                 let (command, title, text) = match action {
                     crate::session_list::Action::Archive => (
                         "archive",
-                        "Archive Session",
+                        "Archive session",
                         "Compress and move saved conversation history to sessionsation-managed Archived Sessions. No agent is started; project files and account credentials stay in place.",
                     ),
                     crate::session_list::Action::Restore => (
                         "restore-session",
-                        "Restore Session",
+                        "Restore session",
                         "Restore the saved conversation for later resume. This does not start an agent or send a message.",
                     ),
                     _ => (
                         "delete-session",
-                        "Delete Session",
+                        "Delete session",
                         "Permanently delete this conversation and its archived data. This cannot be undone. Project files and account credentials are unaffected.",
                     ),
                 };
@@ -2306,6 +2884,9 @@ impl Manager {
                     &["Close"],
                     Form::SessionDetails(key),
                 );
+                if let Some(d) = &mut self.dialog {
+                    Self::dim_identifiers(d);
+                }
                 return self.refresh_sessions();
             }
             crate::session_list::Action::Rename => {
@@ -2316,7 +2897,7 @@ impl Manager {
                         if crate::session_list::is_gemini(&s) {
                             "Changes the Sessionsation name only. Gemini CLI has no native rename."
                         } else {
-                            "Changes the Sessionsation name only. Claude's own title is applied the next time this session is launched or resumed."
+                            "Changes the Sessionsation name only. Claude Code's own title is applied the next time this session is launched or resumed."
                         }
                     } else {
                         "Keep the same session and conversation identities."
@@ -2366,12 +2947,21 @@ impl Manager {
                 } else {
                     "stop"
                 };
+                let name = s["name"]
+                    .as_str()
+                    .map(clean)
+                    .unwrap_or_else(|| "this session".into());
                 self.confirm(
-                    "Session confirmation",
-                    vec![format!(
-                        "{}: {command}. Conversation history is retained.",
-                        s["name"].as_str().unwrap_or("session")
-                    )],
+                    if command == "restart" {
+                        "Restart Codex"
+                    } else {
+                        "End session"
+                    },
+                    vec![if command == "restart" {
+                        format!("Restart Codex for {name}? Conversation history is retained.")
+                    } else {
+                        format!("End {name}? Conversation history is retained.")
+                    }],
                     Self::target(&s, command),
                 );
             }
@@ -2720,9 +3310,6 @@ impl Manager {
                     self.last_full_token = token;
                     self.cached_snapshot = false;
                     self.cache_out = Some(value["sessions"].clone());
-                    if self.note.starts_with("Showing saved sessions") {
-                        self.note.clear();
-                    }
                 }
                 let initial_sessions = self.page == Page::Sessions && !self.sessions_known;
                 let archives_selected = self.sessions_known
@@ -2795,12 +3382,14 @@ impl Manager {
                     let body = Self::session_detail_lines(session);
                     if let Some(d) = &mut self.dialog {
                         d.body = body;
+                        Self::dim_identifiers(d);
                     }
                 }
             }
             Purpose::Launches(kind) => {
                 let chosen = (self.page == Page::Operations)
                     .then(|| self.operation_keys().get(self.options.selected).cloned())
+                    .flatten()
                     .flatten();
                 self.launches
                     .insert(kind, value.as_array().cloned().unwrap_or_default());
@@ -2837,6 +3426,7 @@ impl Manager {
             Purpose::Operations => {
                 let chosen = (self.page == Page::Operations)
                     .then(|| self.operation_keys().get(self.options.selected).cloned())
+                    .flatten()
                     .flatten();
                 self.operations = value.as_array().cloned().unwrap_or_default();
                 self.retain_operation_focus(chosen);
@@ -2870,13 +3460,9 @@ impl Manager {
                     && let Some(o) = self.operations.iter().find(|o| id(o) == key)
                     && let Some(d) = &mut self.dialog
                 {
-                    d.body = vec![
-                        crate::messages::operation_phase(
-                            o["kind"].as_str().unwrap_or(""),
-                            o["phase"].as_str().unwrap_or("unknown"),
-                        ),
-                        o["detail"].as_str().unwrap_or("").into(),
-                    ];
+                    d.body = Self::operation_body(o, key);
+                    d.dim_from = Some(d.body.len().saturating_sub(2));
+                    d.title = kind_label(o["kind"].as_str().unwrap_or("operation"));
                     if terminal(o["phase"].as_str().unwrap_or("")) {
                         d.finish();
                     }
@@ -3013,7 +3599,7 @@ impl Manager {
                         "Session start requested",
                         vec![
                             format!("{} was opened in a new HERDR tab.", session["name"].as_str().map(clean).unwrap_or_default()),
-                            "Its confirmed state appears in Manage Sessions after a refresh. Nothing is retried automatically.".into(),
+                            "Its confirmed state appears in Manage sessions after a refresh. Nothing is retried automatically.".into(),
                         ],
                         &["Close"],
                         Form::None,
@@ -3262,6 +3848,7 @@ impl Manager {
                 large: false,
                 fit_description: true,
                 browse_hint: false,
+                sections: None,
             };
             if self
                 .popup_size
@@ -3285,20 +3872,47 @@ impl Manager {
         }
         let hints = if self.moving.is_some() {
             hint_lines(&["▲/▼: Move", "Enter: Save", "Esc: Cancel"], canvas.width)
+        } else if let Some(d) = &self.dialog {
+            // The footer follows the top dialog.
+            let info = d.compact
+                || d.buttons.is_empty() && d.fields.is_empty()
+                || d.buttons.len() == 1 && d.buttons[0].label == "Close";
+            let tokens: &[&str] = if info {
+                &["Enter/Esc: Close"]
+            } else if d
+                .buttons
+                .iter()
+                .any(|b| b.label == "Continue in background")
+            {
+                &["Esc: Close"]
+            } else {
+                &["▲/▼: Choose", "Enter: Select", "Esc: Cancel"]
+            };
+            hint_lines(tokens, canvas.width)
         } else {
             let mut tokens = vec!["▲/▼/◀/▶: Move", "Enter/Space: Select"];
             if self.can_start_move() {
                 tokens.push("m: Move");
             }
-            tokens.push(if self.page == Page::Home {
-                "Esc: Close"
+            tokens.push(if self.page == Page::Home && self.history.is_empty() {
+                if self.close_pending() {
+                    "Esc again to close"
+                } else {
+                    "Esc: Close"
+                }
             } else {
                 "Esc: Back"
             });
             hint_lines(&tokens, canvas.width)
         };
+        // Saved-session notice: only on the session list, only until fresh state.
+        let note = if self.note.is_empty() && self.page == Page::Sessions && self.cached_snapshot {
+            "Showing saved sessions; refreshing…".to_owned()
+        } else {
+            self.note.clone()
+        };
         let controls_start = canvas.height.saturating_sub(hints.len());
-        let list_controls = if self.note.is_empty() {
+        let list_controls = if note.is_empty() {
             controls_start
         } else {
             controls_start.saturating_sub(2)
@@ -3328,7 +3942,7 @@ impl Manager {
             }
             let bottom = list_controls.saturating_sub(1).max(10);
             let selected = self.options.selected.checked_sub(5);
-            self.account_scroll = AccountsLayout::scroll_for(
+            self.account_scroll = l.scroll(
                 &self.accounts,
                 self.account_scroll,
                 selected,
@@ -3351,7 +3965,11 @@ impl Manager {
             let menu_controls = list_controls;
             let bottom = menu_controls.saturating_sub(1);
             let (left, _) = if self.page == Page::Sessions {
-                crate::session_list::paint_with_archives(
+                let badges = self.badges();
+                if self.badge_focus && self.selected_badge().is_none() {
+                    self.badge_focus = false;
+                }
+                crate::session_list::paint_with(
                     canvas,
                     &mut self.options,
                     &self.sessions,
@@ -3359,9 +3977,34 @@ impl Manager {
                     bottom,
                     now,
                     menu_controls,
-                    !self.archives.is_empty(),
+                    crate::session_list::Extras {
+                        archives: !self.archives.is_empty(),
+                        badges: Some(&badges),
+                        badge_focus: self.badge_focus,
+                    },
                 )
             } else {
+                let mut rows = rows;
+                let budget = crate::session_list::name_budget(canvas.width);
+                if self.page == Page::Archives {
+                    for (row, s) in rows.iter_mut().zip(&self.archives) {
+                        row.label = self.archive_label(s, budget);
+                    }
+                }
+                // Inline statuses and reasons shorten to the space they have; when
+                // too narrow, the selected one moves below the list (standard wrap).
+                for row in rows.iter_mut() {
+                    if let (Some(column), Some(preview)) = (row.preview_column, &row.preview)
+                        && !row.preview_choice
+                    {
+                        let room = canvas.width.saturating_sub(column + 6);
+                        if room >= 6 {
+                            row.preview = Some(crate::widgets::ellipsize(preview, room));
+                        } else {
+                            row.preview_selected_only = true;
+                        }
+                    }
+                }
                 self.options
                     .paint_menu(canvas, &rows, 3, bottom, menu_controls)
             };
@@ -3376,8 +4019,8 @@ impl Manager {
                 },
             );
         }
-        if !self.note.is_empty() {
-            crate::widgets::paint_status(canvas, controls_start, &self.note);
+        if !note.is_empty() {
+            crate::widgets::paint_status(canvas, controls_start, &note);
         }
         crate::widgets::paint_hints(canvas, &hints);
         if let Some(d) = &mut self.dialog {
@@ -3457,7 +4100,10 @@ mod tests {
                 } else if label == "Move to Space" {
                     assert!(matches!(&intents[0], Intent::Api(_, a) if a[0]=="spaces"));
                 } else {
-                    assert_eq!(m.dialog.as_ref().unwrap().title, "Session confirmation");
+                    assert!(matches!(
+                        m.dialog.as_ref().unwrap().title.as_str(),
+                        "End session" | "Restart Codex"
+                    ));
                     assert!(intents.is_empty());
                 }
             }
@@ -3500,36 +4146,28 @@ mod tests {
         assert!(m.dialog.is_none());
     }
     #[test]
-    fn archived_ids_share_list_wide_preview_fit_and_unbolded_gray() {
+    fn archived_names_gain_a_short_id_only_when_they_collide() {
         use super::*;
         let mut m = setup();
         m.page = Page::Archives;
-        m.archives = vec![json!({"id":"short-id","name":"Saved"})];
-        m.archives.extend((0..20).map(
-            |i| json!({"id":format!("archive-{i}-with-a-longer-stable-session-id"),"name":"Other"}),
-        ));
-        let rows = m.rows();
-        assert_eq!(rows[0].preview.as_deref(), Some("(short-id)"));
-        assert!(rows.iter().all(|r| r.preview_selected_only
-            && r.preview_fg == crate::widgets::SECONDARY
-            && r.preview_gap == 1));
-        assert!(Options::previews_detached(40, &rows));
+        m.archives = vec![
+            json!({"id":"7792aaaa","name":"codex-root"}),
+            json!({"id":"1234bbbb","name":"codex-root"}),
+            json!({"id":"5555cccc","name":"unique"}),
+        ];
+        let labels: Vec<_> = m.rows().into_iter().map(|r| r.label).collect();
+        assert_eq!(labels, ["codex-root · 7792", "codex-root · 1234", "unique"]);
+        assert!(m.rows().iter().all(|r| r.preview.is_none()));
+        // Narrow lists shorten the name, never the suffix.
+        m.archives[0]["name"] = json!("a-very-long-archived-session-name");
+        m.archives[1]["name"] = json!("a-very-long-archived-session-name");
         let mut c = Canvas::new(40, 24);
-        m.options.paint_menu(&mut c, &rows, 3, 18, 23);
-        let first = c.cells.iter().position(|c| c.glyph == "(").unwrap();
-        assert!(first / 40 > 3);
-        assert!(
-            c.cells[first..first + 10]
-                .iter()
-                .all(|c| c.fg == crate::widgets::SECONDARY && !c.bold)
-        );
-        assert!(!Options::previews_detached(120, &rows));
-        let mut c = Canvas::new(120, 24);
-        m.options.paint_menu(&mut c, &rows, 3, 18, 23);
-        assert_eq!(
-            c.cells.iter().position(|c| c.glyph == "(").unwrap() / 120,
-            3
-        );
+        m.paint_at(&mut c, 23, 100);
+        let line: String = c.cells[3 * 40..4 * 40]
+            .iter()
+            .map(|c| c.glyph.as_str())
+            .collect();
+        assert!(line.contains("… · 7792"), "{line}");
     }
     #[test]
     fn loading_confirmation_and_operation_share_the_opened_frame() {
@@ -3645,7 +4283,7 @@ mod tests {
         m.options.selected = m.rows().len() - 1;
         m.key(enter);
         assert_eq!(m.page, Page::Operations);
-        m.options.selected = 1;
+        m.options.selected = 3;
         m.key(enter);
         assert_eq!(m.page, Page::Operation("o1".into()));
         m.operations
@@ -3654,7 +4292,7 @@ mod tests {
         assert_eq!(m.page, Page::Operations);
         assert_eq!(
             m.operation_keys()[m.options.selected],
-            ("operation".into(), "o1".into())
+            Some(("operation".into(), "o1".into()))
         );
         m.key(escape);
         assert_eq!(m.page, Page::Sessions);
@@ -3887,7 +4525,7 @@ mod tests {
         for confirm in [false, true] {
             let mut m = setup();
             m.go(Page::Session("saved".into()));
-            let sent = m.preview("Start Session", vec![], Purpose::Resume("saved".into()));
+            let sent = m.preview("Start session", vec![], Purpose::Resume("saved".into()));
             let Intent::Api(token, _) = sent[0] else {
                 panic!()
             };
@@ -3926,22 +4564,28 @@ mod tests {
         }
     }
     #[test]
-    fn operations_share_creation_order_status_columns_and_id_presentation() {
+    fn operations_are_newest_first_grouped_by_day_filterable_and_plain() {
         let mut m = setup();
         m.page = Page::Operations;
         m.operations = vec![
             json!({"id":"old","kind":"switch","phase":"complete","created_at":10,"updated_at":1000}),
-            json!({"id":"new","kind":"account_delete","phase":"running","created_at":20,"updated_at":1}),
-            json!({"id":"legacy","kind":"switch","phase":"complete","updated_at":2000}),
+            json!({"id":"new","kind":"account_delete","account_id":"codex:fixture0","phase":"running","created_at":20,"updated_at":1}),
+            json!({"id":"legacy","kind":"move_space","phase":"failed","detail":"Destination Space is gone.","updated_at":2000}),
         ];
-        m.launches.insert("launch",vec![json!({"request":{"request_id":"12345678-1234-4234-8234-123456789abc"},"phase":"running","created_at":30})]);
+        m.launches.insert("launch",vec![json!({"request":{"request_id":"12345678-1234-4234-8234-123456789abc","name":"fresh","account_id":"codex:fixture0"},"phase":"running","created_at":30})]);
         m.launches.insert(
             "resume-launch",
             vec![json!({"request":{"request_id":"resume-id"},"phase":"running","created_at":15})],
         );
-        let keys = m.operation_keys();
+        let entries = |m: &Manager| -> Vec<String> {
+            m.operation_keys()
+                .into_iter()
+                .flatten()
+                .map(|(_, key)| key)
+                .collect()
+        };
         assert_eq!(
-            keys.iter().map(|(_, key)| key.as_str()).collect::<Vec<_>>(),
+            entries(&m),
             vec![
                 "12345678-1234-4234-8234-123456789abc",
                 "new",
@@ -3951,28 +4595,52 @@ mod tests {
             ]
         );
         let rows = m.rows();
-        assert!(rows[0].label.ends_with("complete"));
-        assert!(
-            rows.iter()
-                .all(|r| !r.label.split_once(':').unwrap().0.ends_with(' '))
+        assert_eq!(rows[0].label, "Show");
+        assert!(rows[0].preview_choice);
+        assert_eq!(rows[0].preview.as_deref(), Some("‹ All ›"));
+        // The filter row sits directly above the first day heading.
+        assert!(rows[1].separator);
+        assert_eq!(rows[1].label, "Today");
+        let undated = rows.iter().position(|r| r.label == "Undated").unwrap();
+        assert!(rows[undated].separator);
+        let labels: Vec<_> = rows.iter().map(|r| r.label.clone()).collect();
+        assert!(labels[2].contains("⏣ fresh") && labels[2].contains("New session"));
+        assert!(labels[3].contains("Delete account"));
+        assert!(labels[4].contains("Resume"));
+        assert!(labels[5].contains("Switch account"));
+        assert!(labels[undated + 1].contains("Move to Space"));
+        assert_eq!(rows[3].preview.as_deref(), Some("in progress"));
+        assert_eq!(rows[5].preview.as_deref(), Some("done"));
+        assert_eq!(
+            rows[undated + 1].preview.as_deref(),
+            Some("failed · Destination Space is gone")
         );
+        // Kinds, times and statuses line up in columns.
+        let column = rows[2].preview_column;
         assert!(
-            rows.iter()
-                .all(|r| r.label.rfind(' ').unwrap() + 1 == rows[0].label.rfind(' ').unwrap() + 1)
+            rows[2..]
+                .iter()
+                .filter(|r| !r.separator)
+                .all(|r| r.preview_column == column)
         );
-        assert!(rows.iter().all(|r| r.preview_gap == 1
-            && r.preview_selected_only
-            && r.preview.as_ref().unwrap().starts_with('(')
-            && r.preview.as_ref().unwrap().ends_with(')')));
-        assert!(Options::previews_detached(60, &rows));
-        m.operations[0]["updated_at"] = json!(999999);
-        assert_eq!(m.operation_keys(), keys);
+        // Left/Right on the filter row cycles; the list follows.
         m.options.selected = 0;
+        m.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(m.operation_filter, OperationFilter::InProgress);
+        assert_eq!(entries(&m), vec!["new"]);
+        m.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(entries(&m), vec!["legacy"]);
+        m.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        m.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(m.operation_filter, OperationFilter::All);
+        assert!(!m.options.back);
+        m.options.selected = 2;
         m.activate();
         assert_eq!(
             m.page,
             Page::Launch("launch", "12345678-1234-4234-8234-123456789abc".into())
         );
+        assert_eq!(m.title(), "New session");
     }
     #[test]
     fn unchanged_rename_is_valid_but_other_names_and_generation_stay_checked() {
@@ -4020,7 +4688,7 @@ mod tests {
                 .unwrap()
                 .body
                 .iter()
-                .any(|s| s == "Name: Cached")
+                .any(|s| s.starts_with("Directory:") && s.ends_with("/cached"))
         );
         let Intent::Api(token, args) = &sent[0] else {
             panic!()
@@ -4033,7 +4701,7 @@ mod tests {
                 .unwrap()
                 .body
                 .iter()
-                .any(|s| s == "Name: Fresh")
+                .any(|s| s.starts_with("Directory:") && s.ends_with("/fresh"))
         );
         assert!(
             m.dialog
@@ -4041,7 +4709,7 @@ mod tests {
                 .unwrap()
                 .body
                 .iter()
-                .any(|s| s == "Generation: new")
+                .all(|s| !s.contains("Generation") && !s.contains("new"))
         );
         // State polls are throttled to one per five ticks.
         let sent = (0..5).flat_map(|_| m.refresh_live()).collect::<Vec<_>>();
@@ -4056,7 +4724,7 @@ mod tests {
                 .unwrap()
                 .body
                 .iter()
-                .any(|s| s == "Name: Fresh")
+                .any(|s| s.starts_with("Directory:") && s.ends_with("/fresh"))
         );
         m.submit(0, vec![]);
         assert_eq!(m.page, Page::Session("one".into()));
@@ -4195,17 +4863,17 @@ mod tests {
         m.page = Page::Account("codex:account1".into());
         assert_eq!(
             m.delete_account_row("codex:account1").preview.as_deref(),
-            Some("(unsupported)")
+            Some("· unsupported")
         );
         m.capabilities["providers"][0]["account_deletion"] = json!(true);
         for (preview, reason) in [
             (
                 json!({"can_delete":false,"owner_upgrade_required":true}),
-                Some("(owner update needed)"),
+                Some("· owner update needed"),
             ),
             (
                 json!({"can_delete":false,"affected_sessions":[{"running":true}]}),
-                Some("(active sessions)"),
+                Some("· active sessions"),
             ),
             (json!({"can_delete":true}), None),
         ] {
@@ -4511,7 +5179,7 @@ mod tests {
         m.inventory((0..30).map(account).collect());
         let mut c = Canvas::new(60, 20);
         m.paint(&mut c, 19);
-        assert_eq!(m.rows()[2].label, "Add Account");
+        assert_eq!(m.rows()[2].label, "Add account");
         assert!(screen_text(&c).contains("account0"));
         m.options.selected = 5 + 29;
         let mut c = Canvas::new(60, 20);
@@ -4559,12 +5227,12 @@ mod tests {
         m.key(key(KeyCode::Enter));
         assert_eq!(m.page, Page::Operations);
         assert_eq!(m.options.selected, 0);
-        m.options.selected = 1;
+        m.options.selected = 3;
         m.key(key(KeyCode::Enter));
         assert_eq!(m.page, Page::Operation("op2".into()));
         assert_eq!(m.options.selected, 0);
         m.key(key(KeyCode::Esc));
-        assert_eq!((m.page.clone(), m.options.selected), (Page::Operations, 1));
+        assert_eq!((m.page.clone(), m.options.selected), (Page::Operations, 3));
         m.key(key(KeyCode::Esc));
         assert_eq!(m.page, Page::Sessions);
         assert_eq!(m.options.selected, m.rows().len() - 1);
@@ -4594,7 +5262,17 @@ mod tests {
         // Rendered immediately: no request needed, known, marked refreshing.
         assert!(m.sessions_known && m.cached_snapshot);
         assert_eq!(m.sessions[0]["name"], "Saved copy");
-        assert!(m.note.starts_with("Showing saved sessions"));
+        // The notice belongs to the session list only, never a global note.
+        assert!(m.note.is_empty());
+        let notice = |m: &mut Manager| {
+            let mut c = Canvas::new(80, 24);
+            m.paint_at(&mut c, 23, 100);
+            screen_text(&c).contains("Showing saved sessions; refreshing")
+        };
+        assert!(notice(&mut m));
+        m.page = Page::Home;
+        assert!(!notice(&mut m), "never on Home");
+        m.page = Page::Sessions;
         assert!(m.cache_out.is_none(), "cache is never re-saved from itself");
         // Nothing from the cache can be acted on: no generation, no capabilities.
         assert!(m.sessions[0].get("generation").is_none());
@@ -4604,7 +5282,7 @@ mod tests {
         assert!(
             m.rows()
                 .iter()
-                .all(|r| !r.enabled || r.label == "Session Details"),
+                .all(|r| !r.enabled || r.label == "Session details"),
             "{:?}",
             m.rows()
                 .iter()
@@ -4621,7 +5299,7 @@ mod tests {
         assert!(!m.cached_snapshot);
         assert_eq!(m.sessions[0]["name"], "Fresh");
         assert_eq!(m.sessions[0]["generation"], "new");
-        assert!(!m.note.starts_with("Showing saved"));
+        assert!(!notice(&mut m), "gone once fresh data arrives");
         assert_eq!(m.cache_out.take().unwrap()[0]["name"], "Fresh");
         // A cache arriving after fresh data is ignored.
         m.show_cached(&cached);
@@ -4880,64 +5558,137 @@ mod tests {
         assert!(!m.dialog.as_ref().unwrap().fields[0].valid());
     }
     #[test]
-    fn selected_operation_id_falls_below_list_only_when_it_fits() {
+    fn home_needs_a_second_esc_within_a_second_and_footers_follow_context() {
         let mut m = setup();
-        let a = "11111111-1111-4111-8111-111111111111";
-        let b = "22222222-2222-4222-8222-222222222222";
-        m.operations = vec![
-            json!({"id":a,"kind":"switch","phase":"complete"}),
-            json!({"id":b,"kind":"switch","phase":"failed"}),
-        ];
-        m.go(Page::Operations);
-        for (width, height, visible) in [
-            (120, 24, true),
-            (45, 16, true),
-            (30, 16, false),
-            (45, 10, true),
-            (45, 9, false),
-            (45, 8, false),
-        ] {
-            let mut c = Canvas::new(width, height);
-            m.paint(&mut c, height - 1);
-            let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
-            assert_eq!(text.contains(a), visible, "{width}x{height}");
-            assert!(!text.contains(b));
-            if width == 45 && height == 16 {
-                assert!(c.cells[5 * width..6 * width].iter().all(|c| c.glyph == " "));
-                assert_eq!(c.cells[6 * width + (width - a.len() - 2) / 2].glyph, "(");
-            }
-        }
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let footer = |m: &mut Manager| {
+            let mut c = Canvas::new(100, 30);
+            m.paint_at(&mut c, 29, 100);
+            screen_text(&c)
+        };
+        assert!(footer(&mut m).contains("Esc: Close"));
+        assert!(m.key(esc).is_empty(), "first Esc only arms");
+        assert!(footer(&mut m).contains("Esc again to close"));
+        assert!(matches!(&m.key(esc)[..], [Intent::Exit]));
+        // An expired arm needs two presses again; other keys disarm.
+        m.close_armed = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+        assert!(m.key(esc).is_empty());
+        m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(!footer(&mut m).contains("Esc again"));
+        assert!(m.key(esc).is_empty(), "disarmed by another key");
+        m.close_armed = None;
+        // Close itself still closes at once.
+        m.options.back = true;
+        assert!(matches!(
+            &m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))[..],
+            [Intent::Exit]
+        ));
+        m.options.back = false;
+        m.go(Page::Sessions);
+        assert!(footer(&mut m).contains("Esc: Back"));
+        m.show(
+            "Confirm",
+            vec!["Sure?".into()],
+            &["Confirm", "Cancel"],
+            Form::None,
+        );
+        assert!(footer(&mut m).contains("Esc: Cancel"));
+        m.show("Info", vec!["Done.".into()], &["Close"], Form::None);
+        assert!(footer(&mut m).contains("Enter/Esc: Close"));
     }
     #[test]
-    fn scrolling_operations_reserve_counter_id_and_control_gaps() {
+    fn session_badges_follow_operations_and_open_their_progress() {
+        let mut m = setup();
+        m.space_names.insert("w2".into(), "work".into());
+        m.sessions_known = true;
+        m.sessions = vec![
+            json!({"id":"s1","name":"liq-glass-lead","account_id":"codex:account1","availability":"running","activity":"idle","pending_operation_id":"op1","capabilities":{}}),
+            json!({"id":"s2","name":"other","account_id":"codex:account1","availability":"saved","capabilities":{}}),
+        ];
+        m.operations = vec![
+            json!({"id":"op1","kind":"move_space","session_id":"s1","phase":"dispatching","space_id":"w2","created_at":90}),
+            json!({"id":"op2","kind":"move_space","session_id":"s2","phase":"failed","created_at":95,"detail":"gone"}),
+            json!({"id":"op0","kind":"move_space","session_id":"s2","phase":"complete","created_at":10}),
+        ];
+        let badges = m.badges();
+        assert_eq!(badges["s1"].text, "moving to work");
+        assert!(badges["s1"].active);
+        assert_eq!(badges["s2"].text, "move failed");
+        assert!(!badges["s2"].active);
+        m.go(Page::Sessions);
+        let mut c = Canvas::new(100, 30);
+        m.paint_at(&mut c, 29, 100);
+        let text = screen_text(&c);
+        assert!(text.contains("moving to work") && text.contains("✗ move failed"));
+        // The action menu never leaks the operation kind into labels.
+        assert!(!m.rows().iter().any(|r| r.label.contains("moving")));
+        // Right focuses the badge, Enter opens its progress over the list, Left returns.
+        m.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert!(m.badge_focus);
+        let sent = m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(&sent[..], [Intent::Api(_, a)] if a[0] == "operations"));
+        assert_eq!(m.page, Page::Sessions);
+        let d = m.dialog.as_ref().unwrap();
+        assert_eq!(d.title, "Move to Space");
+        assert!(d.body.iter().any(|l| l.contains("op1")));
+        m.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(m.dialog.is_none());
+        assert_eq!(m.page, Page::Sessions);
+        assert!(m.badge_focus, "closing returns to the badge");
+        m.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert!(!m.badge_focus && !m.options.back);
+        m.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert!(m.options.back);
+        // A row without a badge keeps Right as before.
+        m.options.back = false;
+        m.options.selected = crate::session_list::session_row(&m.sessions, 1);
+        m.operations.truncate(1);
+        m.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert!(!m.badge_focus);
+    }
+    #[test]
+    fn operation_ids_stay_out_of_the_list_and_details_are_titled_by_kind() {
         let mut m = setup();
         let a = "11111111-1111-4111-8111-111111111111";
+        m.operations = vec![
+            json!({"id":a,"kind":"move_space","phase":"failed","detail":"Space vanished.","created_at":50}),
+        ];
+        m.go(Page::Operations);
+        for (width, height) in [(120, 24), (45, 16), (30, 16)] {
+            let mut c = Canvas::new(width, height);
+            m.paint(&mut c, height - 1);
+            assert!(!screen_text(&c).contains(a), "{width}x{height}");
+        }
+        m.options.selected = 2;
+        m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(m.page, Page::Operation(a.into()));
+        assert_eq!(m.title(), "Move to Space");
+        m.options.selected = 0;
+        m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let d = m.dialog.as_ref().unwrap();
+        assert_eq!(d.title, "Move to Space");
+        assert!(d.body.contains(&"Space vanished.".to_owned()));
+        let id_line = d.body.iter().position(|l| l.contains(a)).unwrap();
+        assert!(d.dim_from.is_some_and(|i| i <= id_line), "IDs are dim");
+    }
+    #[test]
+    fn scrolling_operations_keep_the_filter_and_a_range_counter() {
+        let mut m = setup();
         m.operations = (0..10)
-            .map(|_| json!({"id":a,"kind":"switch","phase":"complete"}))
+            .map(|i| json!({"id":format!("op{i}"),"kind":"switch","phase":"complete","created_at":50}))
             .collect();
         m.go(Page::Operations);
         let mut c = Canvas::new(45, 16);
         m.paint(&mut c, 15);
-        let line = |y: usize| {
-            c.cells[y * 45..(y + 1) * 45]
-                .iter()
-                .map(|c| c.glyph.as_str())
-                .collect::<String>()
-        };
-        assert!(line(10).contains("1–7 of 10"));
-        assert_eq!(line(10).find('1'), Some(18));
-        assert_eq!(
-            c.cells[10 * 45 + 18].fg,
-            c.cells[14 * 45..15 * 45]
-                .iter()
-                .find(|c| c.glyph == "M")
-                .unwrap()
-                .fg
-        );
-        assert_eq!(line(11).trim(), "");
-        assert!(line(12).contains(a));
-        assert_eq!(line(13).trim(), "");
-        assert!(line(14).contains("Move"));
+        let text = screen_text(&c);
+        assert!(text.contains("Show  ‹ All ›"), "{text}");
+        assert!(text.contains(" of 12"), "{text}");
+        m.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        let mut c = Canvas::new(45, 16);
+        m.paint(&mut c, 15);
+        assert!(screen_text(&c).contains("12 of 12"));
+        m.key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        assert!(m.options.selected < 11);
     }
     #[test]
     fn deletion_preview_cancels_without_mutation_and_confirmation_delegates_once() {
@@ -5064,18 +5815,18 @@ mod tests {
         let mut m = Manager::default();
         assert!(!m.inventory_known);
         m.paint(&mut Canvas::new(80, 30), 29);
-        assert_eq!(m.rows()[2].label, "Add Account");
+        assert_eq!(m.rows()[2].label, "Add account");
         m.options.selected = 2;
         m.activate();
-        assert_eq!(m.dialog.as_ref().unwrap().title, "Add Account");
+        assert_eq!(m.dialog.as_ref().unwrap().title, "Add account");
         m.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         m.inventory(vec![account(1), account(2)]);
         m.paint(&mut Canvas::new(80, 30), 29);
-        assert_eq!(m.rows()[2].label, "Add Account");
+        assert_eq!(m.rows()[2].label, "Add account");
         assert_eq!(m.options.selected, 2);
         m.inventory((0..30).map(account).collect());
         m.paint(&mut Canvas::new(80, 30), 29);
-        assert_eq!(m.rows()[2].label, "Add Account");
+        assert_eq!(m.rows()[2].label, "Add account");
         assert_eq!(m.options.selected, 2);
     }
     #[test]
@@ -5353,20 +6104,30 @@ mod tests {
     #[test]
     fn usage_details_label_source_semantics_age_and_missing_windows() {
         let lines = usage_lines(&claude("claude-main"), 400);
-        let text = lines.join("\n");
-        assert!(text.contains("Provider: Claude Code"));
-        assert!(text.contains("Source: claude-code-statusline"));
-        assert!(text.contains("Semantics: Claude Code statusline rate limits"));
-        assert!(text.contains("Observed: 5m ago"));
-        assert!(text.contains("40% used; resets at "));
-        assert!(!text.contains("Unix"));
-        assert!(text.contains("Weekly: unavailable"));
-        assert!(!text.contains("Weekly (10080 minutes)"));
+        assert_eq!(fact(&lines, "Account").as_deref(), Some("✻ claude-main"));
+        assert_eq!(fact(&lines, "Provider").as_deref(), Some("Claude Code"));
+        assert_eq!(
+            fact(&lines, "Usage").as_deref(),
+            Some("fresh · claude-code-statusline")
+        );
+        assert_eq!(
+            fact(&lines, "Semantics").as_deref(),
+            Some("Claude Code statusline rate limits")
+        );
+        assert_eq!(fact(&lines, "Observed").as_deref(), Some("5m ago"));
+        // Both meanings, joined with the small bullet.
+        assert!(
+            fact(&lines, "5h window")
+                .unwrap()
+                .starts_with("60% left · 40% used · resets ")
+        );
+        assert_eq!(fact(&lines, "Weekly").as_deref(), Some("unavailable"));
+        assert!(!lines.join("\n").contains('/'), "no slashes between values");
         let mut missing = claude("claude-new");
         missing.usage = json!({"state":"missing","observed_at":null,"short":null,"weekly":null});
-        let text = usage_lines(&missing, 400).join("\n");
-        assert!(text.contains("Status: Usage unavailable"));
-        assert!(!text.contains("Observed"));
+        let lines = usage_lines(&missing, 400);
+        assert_eq!(fact(&lines, "Status").as_deref(), Some("Usage unavailable"));
+        assert!(fact(&lines, "Observed").is_none());
         for bogus in [json!(0), json!(null), json!(-5), json!(10_000)] {
             let mut g = gemini("gem-main");
             g.usage["observed_at"] = bogus;
@@ -5374,51 +6135,108 @@ mod tests {
             assert!(!text.contains("Observed") && !text.contains("ago"));
             assert_eq!(Usage::account_at(&g, 400).age, None);
         }
-        assert!(text.contains("Short window: unavailable"));
-        assert!(!text.contains("0%"));
         let mut codex = account(1);
         codex.usage["weekly"] = Value::Null;
-        assert!(
-            usage_lines(&codex, 400)
-                .join("\n")
-                .contains("Weekly: unavailable")
+        assert_eq!(
+            fact(&usage_lines(&codex, 400), "Weekly").as_deref(),
+            Some("unavailable")
         );
     }
     #[test]
-    fn claude_session_details_use_native_labels_and_unknown_for_absent_values() {
+    fn account_details_explain_the_threshold_marker_in_a_dim_legend() {
+        let mut home = claude("main");
+        home.details
+            .insert("config_home".into(), json!("/data/accounts/claude-main"));
+        let lines = usage_lines(&home, 400);
+        assert_eq!(
+            fact(&lines, "Directory").as_deref(),
+            Some("/data/accounts/claude-main")
+        );
+        assert!(fact(&usage_lines(&account(1), 400), "Directory").is_none());
+        let mut a = account(1);
+        a.details.insert(
+            "switch_thresholds".into(),
+            json!({"customized":true,"short_percent":80,"weekly_percent":90}),
+        );
+        let mut m = setup();
+        m.show_usage(&a);
+        let d = m.dialog.as_ref().unwrap();
+        assert_eq!(d.title, "Account details");
+        let legend = d
+            .body
+            .iter()
+            .position(|l| l.starts_with("┿ marks"))
+            .unwrap();
+        assert!(d.body[legend].contains("(20% left 5h · 10% left wk)"));
+        assert_eq!(d.dim_from, Some(legend));
+        assert!(d.body[legend..].iter().any(|l| l.contains("Account ID")));
+        // Without a saved threshold there is no legend.
+        let mut plain = account(2);
+        plain.details.remove("switch_thresholds");
+        let lines = usage_lines(&plain, 400);
+        assert!(!lines.iter().any(|l| l.starts_with("┿")));
+    }
+    fn fact(lines: &[String], label: &str) -> Option<String> {
+        lines
+            .iter()
+            .find_map(|l| l.strip_prefix(&format!("{label}:")))
+            .map(|v| v.trim().to_owned())
+    }
+    #[test]
+    fn session_details_share_one_layout_for_every_provider() {
         let mut live = claude_session("running");
         live["attachment"] =
             json!({"host":"herdr","target":"herdr/default/w:p","pid":4242,"process_start":1});
         live["native_name"] = json!("Native title");
         live["directory"] = json!("/work/example");
+        live["last_accessed"] = json!(100 - 300);
+        live["conversation_created_at"] = json!("1969-12-29T00:01:40Z");
         let lines = Manager::session_detail_lines(&live);
+        let labels: Vec<_> = lines
+            .iter()
+            .take(5)
+            .map(|l| l.split(':').next().unwrap().to_owned())
+            .collect();
         assert_eq!(
-            lines,
-            [
-                "Provider: Claude Code",
-                "Managed account: claude:claude-main",
-                "Claude session ID (native): native-1",
-                "Directory: /work/example",
-                "Status: running (idle)",
-                "Sessionsation name: Work",
-                "Native name: Native title",
-                "Process ID: 4242",
-                "Session: c",
-            ]
+            labels,
+            ["Account", "Status", "Directory", "Last active", "Created"]
         );
-        let stopped = Manager::session_detail_lines(&claude_session("stopped")).join("\n");
-        assert!(stopped.contains("Status: stopped"));
-        assert!(stopped.contains("Directory: unknown"));
-        assert!(stopped.contains("Native name: unknown"));
-        assert!(!stopped.contains("Process ID"));
-        for (state, label) in [
-            ("stale", "stale"),
-            ("unknown", "unknown"),
-            ("weird", "unknown"),
-        ] {
-            let text = Manager::session_detail_lines(&claude_session(state)).join("\n");
-            assert!(text.contains(&format!("Status: {label}")));
+        assert_eq!(fact(&lines, "Account").as_deref(), Some("✻ claude-main"));
+        assert_eq!(fact(&lines, "Status").as_deref(), Some("running · idle"));
+        assert_eq!(fact(&lines, "Last active").as_deref(), Some("5m ago"));
+        assert_eq!(fact(&lines, "Created").as_deref(), Some("3d ago"));
+        let ids = lines.iter().position(|l| l == "Identifiers").unwrap();
+        let rest = lines[ids..].join("\n");
+        assert!(rest.contains("Native session  native-1"));
+        assert!(rest.contains("4242"));
+        // Values line up in one column across both groups.
+        let column = |l: &String| l.find("native-1").or_else(|| l.find("✻"));
+        assert_eq!(
+            lines[0].chars().position(|c| c == '✻'),
+            lines
+                .iter()
+                .find(|l| l.contains("native-1"))
+                .and_then(|l| l.find("native-1"))
+        );
+        let _ = column;
+        // The same labels for Codex; no generation hash.
+        let codex = json!({"id":"x","name":"n","account_id":"codex:work","availability":"saved",
+            "generation":"gen-hash","conversation_id":"conv","history_file_bytes":24576});
+        let lines = Manager::session_detail_lines(&codex);
+        assert_eq!(fact(&lines, "Account").as_deref(), Some("⏣ work"));
+        assert_eq!(fact(&lines, "Status").as_deref(), Some("saved"));
+        assert_eq!(fact(&lines, "History").as_deref(), Some("24 KB"));
+        assert!(!lines.join("\n").contains("gen-hash"));
+        let stopped = Manager::session_detail_lines(&claude_session("stopped"));
+        assert_eq!(fact(&stopped, "Directory").as_deref(), Some("unknown"));
+        assert!(!stopped.join("\n").contains("Process"));
+        for (state, label) in [("stale", "stale"), ("unknown", "unknown")] {
+            let lines = Manager::session_detail_lines(&claude_session(state));
+            assert_eq!(fact(&lines, "Status").as_deref(), Some(label));
         }
+        assert_eq!(parse_time("1970-01-02T00:00:00Z"), Some(86_400));
+        assert_eq!(parse_time("1970-01-01T01:00:00+01:00"), Some(0));
+        assert_eq!(parse_time("nonsense"), None);
     }
     #[test]
     fn claude_rename_is_a_label_change_without_an_observation_round_trip() {
@@ -5434,9 +6252,10 @@ mod tests {
         };
         let labels: Vec<_> = m.rows().iter().map(|r| r.label.clone()).collect();
         assert_eq!(
-            labels,
-            ["Focus Session", "Session Details", "Rename Session"]
+            labels[..3],
+            ["Focus session", "Session details", "Rename session"]
         );
+        assert!(m.rows()[3..].iter().all(|r| !r.enabled));
         m.options.selected = 2;
         // No `observe` request: Claude has no provider observation to wait for.
         assert!(m.activate().is_empty());
@@ -5510,14 +6329,21 @@ mod tests {
         assert!(!limits.enabled);
         assert_eq!(
             limits.preview.as_deref(),
-            Some("(Gemini CLI exposes no usage limits)")
+            Some("· Gemini CLI exposes no usage limits")
         );
-        let text = usage_lines(&m.accounts[3], 0).join("\n");
-        assert!(text.contains("Provider: Gemini CLI"));
-        assert!(text.contains("Status: Usage unsupported"));
-        assert!(text.contains("Source: gemini-cli-unsupported"));
-        assert!(text.contains("Short window: usage unsupported"));
-        assert!(!text.contains('%'));
+        let lines = usage_lines(&m.accounts[3], 0);
+        assert_eq!(fact(&lines, "Provider").as_deref(), Some("Gemini CLI"));
+        assert_eq!(fact(&lines, "Status").as_deref(), Some("Usage unsupported"));
+        assert!(
+            fact(&lines, "Usage")
+                .unwrap()
+                .contains("gemini-cli-unsupported")
+        );
+        assert_eq!(
+            fact(&lines, "5h window").as_deref(),
+            Some("usage unsupported")
+        );
+        assert!(!lines.join("\n").contains('%'));
     }
     #[test]
     fn gemini_login_plan_uses_the_pane_flow_and_wording() {
@@ -5539,17 +6365,17 @@ mod tests {
     #[test]
     fn gemini_sessions_use_claude_actions_native_label_and_status_gating() {
         let s = gemini_session(json!("idle"));
-        let lines = Manager::session_detail_lines(&s).join("\n");
-        assert!(lines.contains("Provider: Gemini CLI"));
-        assert!(lines.contains("Gemini session ID (native): gem-native-1"));
-        assert!(lines.contains("Status: running (idle)"));
+        let lines = Manager::session_detail_lines(&s);
+        assert_eq!(fact(&lines, "Account").as_deref(), Some("✦ gem-main"));
+        assert_eq!(fact(&lines, "Status").as_deref(), Some("running · idle"));
+        assert!(lines.join("\n").contains("Native session  gem-native-1"));
         let labels: Vec<_> = crate::session_list::actions(&s, true)
             .into_iter()
             .map(|(r, _)| r.label)
             .collect();
         assert_eq!(
-            labels,
-            ["Focus Session", "Session Details", "Rename Session"]
+            labels[..3],
+            ["Focus session", "Session details", "Rename session"]
         );
         // Detached running Gemini session: Add to HERDR is disabled with the reason.
         let mut d = gemini_session(json!("idle"));
@@ -5557,12 +6383,12 @@ mod tests {
         let rows = crate::session_list::actions(&d, true);
         assert_eq!(rows[0].0.label, "Add to HERDR");
         assert!(!rows[0].0.enabled);
-        assert_eq!(rows[0].0.preview.as_deref(), Some("(no native attach)"));
+        assert_eq!(rows[0].0.preview.as_deref(), Some("· no native attach"));
         let mut st = gemini_session(json!(null));
         st["availability"] = json!("stopped");
         st["capabilities"]["resume"] = json!(true);
         let rows = crate::session_list::actions(&st, true);
-        assert_eq!(rows[0].0.label, "Start Session");
+        assert_eq!(rows[0].0.label, "Start session");
         assert!(rows[0].0.enabled);
     }
     #[test]
@@ -5601,7 +6427,7 @@ mod tests {
     fn stale_resume_error_is_explained_without_marking_live() {
         assert_eq!(
             crate::messages::describe("SESSION_STALE: gone"),
-            "This session's process is no longer verified. Refresh Manage Sessions; nothing was started or resumed."
+            "This session's process is no longer verified. Refresh Manage sessions; nothing was started or resumed."
         );
         assert!(crate::messages::describe("SESSION_ALREADY_RUNNING").contains("now running"));
     }
@@ -5905,7 +6731,12 @@ mod tests {
             .details
             .insert("display_name".into(), json!("Team Work"));
         let lines = usage_lines(&m.accounts[0], 0);
-        assert!(lines.iter().any(|l| l == "Display name: Team Work"));
+        assert_eq!(fact(&lines, "Account").as_deref(), Some("⏣ Team Work"));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("Display name") && l.ends_with("Team Work"))
+        );
     }
     #[test]
     fn claude_native_status_drives_activity_ordering_and_busy_styling() {
@@ -6001,7 +6832,7 @@ mod tests {
         let mut m = placed(vec![s.clone()]);
         m.paint(&mut canvas, 23);
         let text: String = canvas.cells.iter().map(|c| c.glyph.as_str()).collect();
-        assert!(text.contains("Open in another terminal"));
+        assert!(text.contains("· open in another terminal"));
         assert!(!text.contains("INTERACTIVE_ELSEWHERE"));
         assert!(m.activate().is_empty(), "disabled row sends nothing");
         // Codex shares the row; a HERDR pane or an older backend keeps Focus Session.
@@ -6013,7 +6844,7 @@ mod tests {
         codex["attachment"] = json!({"host":"herdr"});
         assert_eq!(
             crate::session_list::actions(&codex, true)[0].0.label,
-            "Focus Session"
+            "Focus session"
         );
         let mut old = tmux_claude(json!(true));
         old["capabilities"]
@@ -6022,7 +6853,7 @@ mod tests {
             .remove("add_to_herdr");
         assert_eq!(
             crate::session_list::actions(&old, true)[0].0.label,
-            "Focus Session"
+            "Focus session"
         );
     }
     #[test]
@@ -6145,7 +6976,7 @@ mod tests {
                 "remembered Space beats the focused one"
             );
             m.activate();
-            assert_eq!(m.dialog.as_ref().unwrap().title, "Start Session");
+            assert_eq!(m.dialog.as_ref().unwrap().title, "Start session");
             assert_eq!(m.dialog.as_ref().unwrap().fields[0].input.value, "Work");
             let (token, args) = api(&m.submit(0, vec!["Fresh".into()]));
             assert_eq!(
@@ -6170,39 +7001,27 @@ mod tests {
         }
     }
     #[test]
-    fn session_details_show_continuations_forks_and_native_kind_only_when_known() {
+    fn session_details_list_earlier_ids_forks_and_jobs_only_when_known() {
         let mut s = claude_session("running");
         s["previous_conversation_ids"] = json!(["old-1", "old-2"]);
         s["forked_from_conversation_id"] = json!("parent");
         s["native"] = json!({"kind":"bg","job_id":"job-7"});
-        let text = Manager::session_detail_lines(&s).join("\n");
-        for line in [
-            "Earlier native session IDs: old-1, old-2",
-            "Forked from: parent",
-            "Native kind: background",
-            "Native job ID: job-7",
-        ] {
-            assert!(text.contains(line), "{line}");
+        let lines = Manager::session_detail_lines(&s);
+        assert_eq!(
+            fact(&lines, "Status").as_deref(),
+            Some("running · idle · background")
+        );
+        let ids = lines.iter().position(|l| l == "Identifiers").unwrap();
+        let rest = lines[ids..].join("\n");
+        for part in ["old-1 · old-2", "Forked from", "parent", "Job", "job-7"] {
+            assert!(rest.contains(part), "{part}");
         }
-        s["native"] = json!({"kind":"interactive"});
-        let text = Manager::session_detail_lines(&s).join("\n");
-        assert!(text.contains("Native kind: interactive") && !text.contains("job ID"));
-        s["native"] = json!({});
-        assert!(
-            Manager::session_detail_lines(&s)
-                .join("\n")
-                .contains("Native kind: unknown")
-        );
         let plain = Manager::session_detail_lines(&claude_session("running")).join("\n");
-        assert!(
-            !plain.contains("Earlier")
-                && !plain.contains("Forked")
-                && !plain.contains("Native kind")
-        );
+        assert!(!plain.contains("Earlier") && !plain.contains("Forked") && !plain.contains("Job"));
         let mut codex =
             json!({"id":"x","previous_conversation_ids":["a"],"forked_from_conversation_id":"b"});
         let text = Manager::session_detail_lines(&codex).join("\n");
-        assert!(text.contains("Earlier native session IDs: a") && text.contains("Forked from: b"));
+        assert!(text.contains("Earlier IDs") && text.contains("Forked from"));
         codex["previous_conversation_ids"] = json!([]);
         assert!(
             !Manager::session_detail_lines(&codex)

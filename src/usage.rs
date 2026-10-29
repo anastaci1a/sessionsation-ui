@@ -40,6 +40,8 @@ pub struct Usage {
     pub stale: bool,
     /// Compact age of the observation (`42m ago`) once it is 60 s old or more.
     pub age: Option<String>,
+    /// Draw the age after the first value (false: the layout puts it under the name).
+    pub age_inline: bool,
 }
 /// Backend usage state (`fresh|partial|stale|missing|no_windows|error`), read from
 /// the usage object or the account-level mirror.
@@ -53,7 +55,8 @@ static CLOCK_OVERRIDE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI
 pub fn set_clock(now: i64) {
     CLOCK_OVERRIDE.store(now, std::sync::atomic::Ordering::Relaxed);
 }
-fn clock() -> i64 {
+/// Wall clock in Unix seconds, honouring `set_clock` (tests and demos).
+pub fn clock() -> i64 {
     match CLOCK_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
         0 if cfg!(test) => 100,
         0 => std::time::SystemTime::now()
@@ -159,6 +162,7 @@ impl Usage {
             status,
             stale,
             age: observed_at(a, now).and_then(|t| compact_age(now - t)),
+            age_inline: true,
         }
     }
     pub fn status_only(&self) -> bool {
@@ -193,7 +197,7 @@ impl Usage {
     /// half-cell cap), never centred; longer text keeps this start and grows right.
     /// Age suffix colour: the dimmest secondary grey, one level up while the row
     /// is selected (the plain unselected menu-item grey); never bold.
-    fn age_color(selected: bool) -> [u8; 3] {
+    pub fn age_color(selected: bool) -> [u8; 3] {
         if selected {
             crate::widgets::SECONDARY
         } else {
@@ -215,8 +219,11 @@ impl Usage {
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
+            if row > 0 || !self.age_inline {
+                break;
+            }
             let main =
-                UnicodeWidthStr::width(format!("{:>digits$}% {}", "0", window.label).as_str());
+                UnicodeWidthStr::width(format!("{:>digits$}% left {}", "0", window.label).as_str());
             let start = x + bar + 1 + main;
             for col in start..start + age.len() + 3 {
                 if y + row < canvas.height && col < canvas.width {
@@ -234,7 +241,7 @@ impl Usage {
         if self.status_only() {
             (UnicodeWidthStr::width(self.status_label().as_str()) + 1).max(bar)
         } else {
-            bar + digits + 5 + self.age.as_ref().map_or(0, |a| a.len() + 3)
+            bar + digits + 10
         }
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, digits: usize) {
@@ -275,8 +282,13 @@ impl Usage {
             return;
         }
         if let Some(row) = self.windows.iter().position(|w| w.remaining.is_some()) {
+            let age = self
+                .age
+                .as_ref()
+                .filter(|_| row == 0 && self.age_inline)
+                .map_or(0, |a| a.len() + 3);
             canvas.text(
-                x + self.width(bar, digits),
+                x + self.width(bar, digits) + age,
                 y + row,
                 " ◀",
                 Cell {
@@ -363,21 +375,19 @@ impl Usage {
             let length = bar.saturating_sub(1) as f64;
             let filled = window.remaining.map(|p| length * p.clamp(0., 100.) / 100.);
             let Some(filled) = filled else {
-                // A missing window is stated in its own row, never drawn as 0%.
-                let text = format!(
-                    "{} {}",
-                    window.label,
-                    if self.status == "Ready" {
-                        "unknown"
-                    } else {
-                        &self.status
-                    }
-                );
-                canvas.accent_text(
-                    x,
+                // A missing window keeps its row and column: a dashed track and `?`,
+                // never drawn as 0%.
+                let muted = Cell {
+                    fg: crate::widgets::MUTED,
+                    ..Cell::default()
+                };
+                canvas.text(x, y + row, &"╌".repeat(bar), muted.clone(), false);
+                canvas.text(
+                    x + bar + 1,
                     y + row,
-                    &crate::widgets::ellipsize(&text, bar),
-                    Accent::default(),
+                    &format!("{:>digits$}% left {}", "?", window.label),
+                    muted,
+                    false,
                 );
                 continue;
             };
@@ -417,7 +427,7 @@ impl Usage {
                 .remaining
                 .map(|p| format!("{p:.0}"))
                 .unwrap_or_else(|| "?".into());
-            let label = format!("{:>digits$}% {}", percent, window.label);
+            let label = format!("{:>digits$}% left {}", percent, window.label);
             canvas.text(
                 x + bar + 1,
                 y + row,
@@ -433,7 +443,7 @@ impl Usage {
                 },
                 false,
             );
-            if let Some(age) = &self.age {
+            if let Some(age) = self.age.as_ref().filter(|_| row == 0 && self.age_inline) {
                 canvas.text(
                     x + bar + 1 + UnicodeWidthStr::width(label.as_str()),
                     y + row,
@@ -511,15 +521,15 @@ pub struct AccountsLayout {
     pub bar_width: usize,
     pub digits: usize,
     pub height: usize,
+    /// Observation ages go under the names instead of after the values.
+    pub age_below: bool,
 }
 impl AccountsLayout {
+    /// Columns are centred without the observation age, which hangs to the right.
+    /// If any account's age cannot fit inline, every account shows it on its
+    /// secondary line, under the name.
     pub fn fit(accounts: &[Account], width: usize) -> Self {
         let uses: Vec<_> = accounts.iter().map(Usage::account).collect();
-        let height = uses
-            .iter()
-            .map(|u| u.height() + 1)
-            .sum::<usize>()
-            .saturating_sub(1);
         let mut names = accounts
             .iter()
             .map(|a| UnicodeWidthStr::width(account_title(a).as_str()))
@@ -539,19 +549,42 @@ impl AccountsLayout {
         }
         let total = fixed(names) + right(bar);
         let left = width.saturating_sub(total) / 2;
-        Self {
+        let bars = left + fixed(names);
+        let age_below = uses.iter().any(|u| {
+            !u.status_only()
+                && u.age
+                    .as_ref()
+                    .is_some_and(|age| bars + u.width(bar, digits) + 3 + age.len() + 1 > width)
+        });
+        let mut layout = Self {
             left,
             symbol_x: left + 2,
             name_x: left + 4,
             name_width: names,
-            bars: left + fixed(names),
+            bars,
             bar_width: bar,
             digits,
-            height,
+            height: 0,
+            age_below,
+        };
+        layout.height = uses
+            .iter()
+            .map(|u| layout.row_height(u) + 1)
+            .sum::<usize>()
+            .saturating_sub(1);
+        layout
+    }
+    /// Terminal rows one account occupies (without the blank after it).
+    pub fn row_height(&self, usage: &Usage) -> usize {
+        if self.age_below && usage.age.is_some() && !usage.status_only() {
+            usage.height().max(2)
+        } else {
+            usage.height()
         }
     }
     /// First account to draw so `selected` is visible in `rows` terminal rows.
-    pub fn scroll_for(
+    pub fn scroll(
+        &self,
         accounts: &[Account],
         first: usize,
         selected: Option<usize>,
@@ -559,7 +592,7 @@ impl AccountsLayout {
     ) -> usize {
         let heights: Vec<usize> = accounts
             .iter()
-            .map(|a| Usage::account(a).height() + 1)
+            .map(|a| self.row_height(&Usage::account(a)) + 1)
             .collect();
         let mut first = first.min(accounts.len().saturating_sub(1));
         let Some(sel) = selected.filter(|s| *s < accounts.len()) else {
@@ -571,6 +604,15 @@ impl AccountsLayout {
             first += 1;
         }
         first
+    }
+    /// Scroll for a layout whose ages fit inline.
+    pub fn scroll_for(
+        accounts: &[Account],
+        first: usize,
+        selected: Option<usize>,
+        rows: usize,
+    ) -> usize {
+        Self::fit(accounts, usize::MAX / 4).scroll(accounts, first, selected, rows)
     }
     #[allow(clippy::too_many_arguments)]
     pub fn paint(
@@ -589,8 +631,10 @@ impl AccountsLayout {
         let name_focus = !depressed && !usage_focus;
         let mut y = top;
         for (index, account) in accounts.iter().enumerate().skip(first) {
-            let usage = Usage::account(account);
-            if y + usage.height() > bottom {
+            let mut usage = Usage::account(account);
+            usage.age_inline = !self.age_below;
+            let height = self.row_height(&usage);
+            if y + height > bottom {
                 break;
             }
             let active = selected == Some(index) && !back;
@@ -637,8 +681,24 @@ impl AccountsLayout {
                     active && usage.status == "Login required",
                 );
             }
-            if active {
+            // The age brightens only while the cursor is on the usage itself.
+            if active && usage_focus {
                 usage.recolor_age(canvas, self.bars, y, self.bar_width, self.digits, true);
+            }
+            if self.age_below
+                && !usage.status_only()
+                && let Some(age) = &usage.age
+            {
+                canvas.text(
+                    self.name_x,
+                    y + 1,
+                    &crate::widgets::ellipsize(&format!("({age})"), self.name_width),
+                    Cell {
+                        fg: Usage::age_color(active && usage_focus),
+                        ..Cell::default()
+                    },
+                    false,
+                );
             }
             if moving_row {
                 canvas.accent_text(
@@ -648,7 +708,7 @@ impl AccountsLayout {
                     Accent::default(),
                 );
             }
-            y += usage.height() + 1;
+            y += height + 1;
         }
     }
 }
@@ -767,6 +827,7 @@ mod tests {
             status: "Ready".into(),
             stale: false,
             age: None,
+            age_inline: true,
         };
         let mut plain = Canvas::new(40, 4);
         let mut focus = Canvas::new(40, 4);
@@ -806,6 +867,7 @@ mod tests {
                 windows: vec![],
                 stale: false,
                 age: None,
+                age_inline: true,
             };
             let mut c = field.paint(4200);
             let mut expected = c.clone();
@@ -859,6 +921,59 @@ mod tests {
         assert_eq!(display_name("abcdefghijklmnopqrstuvwx"), "abcdefghijklmno…");
         assert_eq!(short_name("codex:abcdefghijklmnopqrstuvwx"), "abcdefghijk…");
         assert_eq!(display_name("my:session"), "my:session");
+    }
+    #[test]
+    fn values_read_as_remaining_and_ages_hang_right_or_wrap_together() {
+        let mut a = account();
+        a.usage["observed_at"] = json!(40);
+        let accounts = vec![a.clone(), account()];
+        let u = Usage::account(&accounts[0]);
+        assert_eq!(u.age.as_deref(), Some("1m ago"));
+        // The age is outside the centred block.
+        let with = AccountsLayout::fit(&accounts, 120);
+        let without = AccountsLayout::fit(&[account(), account()], 120);
+        assert_eq!(with.left, without.left);
+        assert!(!with.age_below);
+        let mut c = Canvas::new(120, 12);
+        with.paint(&mut c, &accounts, 1, 12, 0, None, false, false, None);
+        let row = |c: &Canvas, y: usize| -> String {
+            (0..c.width)
+                .map(|x| c.cells[y * c.width + x].glyph.as_str())
+                .collect()
+        };
+        assert!(row(&c, 1).contains("% left 5h (1m ago)"), "{}", row(&c, 1));
+        assert!(!row(&c, 2).contains("ago"), "shown once per account");
+        // Too narrow for any inline age: every account shows it under its name.
+        let tight = AccountsLayout::fit(&accounts, 52);
+        assert!(tight.age_below);
+        let mut c = Canvas::new(52, 12);
+        tight.paint(&mut c, &accounts, 1, 12, 0, None, false, false, None);
+        assert!(!row(&c, 1).contains("ago"));
+        let under = row(&c, 2);
+        assert_eq!(under.find("(1m"), Some(tight.name_x));
+        assert_eq!(c.cells[2 * 52 + tight.name_x].fg, crate::widgets::MUTED);
+        // Selecting the account name (the left cursor) keeps the age dark; only
+        // usage focus brightens it.
+        for (usage_focus, colour) in [
+            (false, crate::widgets::MUTED),
+            (true, crate::widgets::SECONDARY),
+        ] {
+            let mut c = Canvas::new(120, 12);
+            with.paint(
+                &mut c,
+                &accounts,
+                1,
+                12,
+                0,
+                Some(0),
+                false,
+                usage_focus,
+                None,
+            );
+            let line = row(&c, 1);
+            let x = line[..line.find("(1m").unwrap()].chars().count();
+            assert_eq!(c.cells[120 + x].fg, colour, "usage focus {usage_focus}");
+        }
     }
     fn account() -> Account {
         serde_json::from_value(json!({"id":"codex:long-account-name", "selectable":true,
@@ -966,7 +1081,7 @@ mod tests {
             .iter()
             .map(|c| c.glyph.as_str())
             .collect::<String>();
-        assert!(text.contains(" 80% 5h"));
+        assert!(text.contains(" 80% left 5h"));
         let mut a = account();
         a.usage["short"]["used_percent"] = json!(75.);
         Usage::account(&a).paint(&mut c, 1, 1, 10, 3);
@@ -1161,7 +1276,7 @@ pub fn picker_labels<A: std::borrow::Borrow<Account>>(accounts: &[A]) -> Vec<Str
     values
         .into_iter()
         .map(|(short, weekly)| match short {
-            Some(short) => format!("{short:>digits$}% 5h / {weekly:>digits$}% wk"),
+            Some(short) => format!("{short:>digits$}% 5h · {weekly:>digits$}% wk"),
             None => format!("{weekly:>digits$}% wk"),
         })
         .collect()
@@ -1182,14 +1297,14 @@ mod picker_tests {
             account(None, 55.),
         ];
         let labels = picker_labels(&accounts);
-        assert_eq!(labels, vec![" 5% 5h / 80% wk", "99% 5h /  6% wk", "45% wk"]);
+        assert_eq!(labels, vec![" 5% 5h · 80% wk", "99% 5h ·  6% wk", "45% wk"]);
         assert_eq!(labels[0].find('/'), labels[1].find('/'));
         assert_eq!(labels[0].find('%'), labels[1].find('%'));
         accounts[1].usage["short"]["used_percent"] = json!(0);
-        assert_eq!(picker_labels(&accounts)[0], "  5% 5h /  80% wk");
+        assert_eq!(picker_labels(&accounts)[0], "  5% 5h ·  80% wk");
         assert_eq!(
             picker_labels(&[account(Some(95.), 94.)])[0],
-            "5% 5h / 6% wk"
+            "5% 5h · 6% wk"
         );
         accounts[2].usage["short"] = json!({"duration_minutes":60,"used_percent":0});
         assert!(!picker_labels(&accounts)[2].contains('/'));
@@ -1216,7 +1331,7 @@ mod picker_tests {
             assert_eq!(u.status, "Usage unavailable", "{state}");
             assert!(u.status_only());
             assert!(u.windows.iter().all(|w| w.remaining.is_none()));
-            assert_eq!(picker_labels(&[a]), ["?% 5h / ?% wk"]);
+            assert_eq!(picker_labels(&[a]), ["?% 5h · ?% wk"]);
         }
         let none = claude_account(
             json!({"state":"missing","observed_at":null,"short":null,"weekly":null}),
@@ -1333,7 +1448,7 @@ mod picker_tests {
             "a missing window is not 100% or 0%"
         );
         assert!(!u.status_only());
-        assert_eq!(picker_labels(&[partial]), ["75% 5h /  ?% wk"]);
+        assert_eq!(picker_labels(&[partial]), ["75% 5h ·  ?% wk"]);
     }
     #[test]
     fn claude_auth_detail_and_null_codex_windows_are_not_ready_or_zero() {
@@ -1349,7 +1464,7 @@ mod picker_tests {
         assert_eq!(a.provider(), "claude");
     }
     #[test]
-    fn missing_window_row_is_painted_in_its_own_row_with_a_word_not_a_bar() {
+    fn missing_window_row_keeps_its_columns_with_a_dashed_track_and_unknown_value() {
         let a = claude_account(json!({"state":"partial","observed_at":100,"short":null,
             "weekly":{"duration_minutes":10080,"used_percent":50}}));
         // Short absent: only the weekly row exists and it is a real bar.
@@ -1364,6 +1479,8 @@ mod picker_tests {
                 .collect()
         };
         assert!(row(0).contains("5h"));
-        assert!(row(1).starts_with("wk unknown"));
+        // A dashed track keeps the column; its value is unknown, never 0%.
+        assert!(row(1).starts_with("╌╌╌╌╌╌╌╌╌╌╌╌  ?% left wk"), "{}", row(1));
+        assert_eq!(canvas.cells[40].fg, crate::widgets::MUTED);
     }
 }

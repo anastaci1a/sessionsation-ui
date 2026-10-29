@@ -109,6 +109,7 @@ enum Message {
     Receipt(String, Result<Value, String>),
     Focused(Result<(), String>),
     Saved(Result<(), String>),
+    Created(sessionsation_ui::app::Target, PathBuf, Result<(), String>),
 }
 impl Message {
     fn kind(&self) -> &'static str {
@@ -127,6 +128,7 @@ impl Message {
             Message::Receipt(..) => "receipt",
             Message::Focused(_) => "focused",
             Message::Saved(_) => "saved",
+            Message::Created(..) => "created",
         }
     }
 }
@@ -177,6 +179,26 @@ impl Effects {
                             .await
                             .map_err(|e| e.to_string());
                         let _ = tx.send(Message::SessionFocused(result)).await;
+                    });
+                }
+                Effect::CreateDirectories(target, path, missing) => {
+                    tokio::spawn(async move {
+                        let result = tokio::task::spawn_blocking(move || {
+                            for dir in &missing {
+                                match std::fs::create_dir(dir) {
+                                    Ok(()) => {}
+                                    Err(e)
+                                        if e.kind() == std::io::ErrorKind::AlreadyExists
+                                            && dir.is_dir() => {}
+                                    Err(e) => return Err(format!("{}: {e}", dir.display())),
+                                }
+                            }
+                            Ok(())
+                        })
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r);
+                        let _ = tx.send(Message::Created(target, path, result)).await;
                     });
                 }
                 Effect::LaunchLogin(argv) => {
@@ -348,6 +370,7 @@ fn effect_kind(effect: &Effect) -> String {
         Effect::Api(token, args) => format!("api#{token} {}", args.join(" ")),
         Effect::FocusSession(..) => "focus_session".into(),
         Effect::LaunchLogin(_) => "launch_login".into(),
+        Effect::CreateDirectories(..) => "create_directories".into(),
         Effect::Inspect(..) => "inspect".into(),
         Effect::Validate(..) => "validate".into(),
         Effect::Start(_) => "start".into(),
@@ -653,6 +676,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           Message::LoginLaunched(result)=>{let intents=app.manager.login_launched(result);next=app.management(intents);app.dirty=true;},
           Message::SessionFocused(result)=>{match result{Ok(())=>app.exit=true,Err(e)=>{let intents=app.manager.failure(e);next=app.management(intents);}}app.dirty=true;},
           Message::Theme(result)=>{match result{Ok((palette,note))=>{app.manager.palette=palette;if let Some(note)=note{app.manager.note=note;}},Err(e)=>app.manager.note=e}app.dirty=true;},
+          Message::Created(target,path,result)=>{next=app.directories_created(target,path,result);},
           Message::Directory(revision,result)=>app.listing(revision,result),
           Message::Validation(revision,result)=>app.validation(revision,result),
           Message::Receipt(id,result)=>{if receipt_pending.as_deref()==Some(id.as_str()){receipt_pending=None;}

@@ -17,6 +17,72 @@ pub enum Mode {
     Global,
     PerSpace,
 }
+/// Star field amount (Appearance).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Starfield {
+    Off,
+    Calm,
+    #[default]
+    Normal,
+    Lively,
+}
+impl Starfield {
+    pub const ALL: [Self; 4] = [Self::Off, Self::Calm, Self::Normal, Self::Lively];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Calm => "Calm",
+            Self::Normal => "Normal",
+            Self::Lively => "Lively",
+        }
+    }
+    /// Star density and twinkle rate in per mille.
+    pub fn density(self) -> i64 {
+        match self {
+            Self::Off => 0,
+            Self::Calm => 450,
+            Self::Normal => 1000,
+            Self::Lively => 1700,
+        }
+    }
+}
+/// Star brightness (Appearance).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Brightness {
+    Dim,
+    #[default]
+    Normal,
+    Bright,
+}
+impl Brightness {
+    pub const ALL: [Self; 3] = [Self::Dim, Self::Normal, Self::Bright];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dim => "Dim",
+            Self::Normal => "Normal",
+            Self::Bright => "Bright",
+        }
+    }
+    pub fn scale(self) -> i64 {
+        match self {
+            Self::Dim => 550,
+            Self::Normal => 1000,
+            Self::Bright => 1400,
+        }
+    }
+}
+/// Next or previous value of a short cycle, wrapping.
+pub fn cycle<T: Copy + PartialEq>(all: &[T], current: T, previous: bool) -> T {
+    let i = all.iter().position(|v| *v == current).unwrap_or(0);
+    let n = all.len();
+    all[if previous {
+        (i + n - 1) % n
+    } else {
+        (i + 1) % n
+    }]
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Preferences {
@@ -27,6 +93,10 @@ pub struct Preferences {
     pub last_account: Option<String>,
     #[serde(default)]
     pub root_plans: BTreeMap<String, Vec<PathBuf>>,
+    #[serde(default)]
+    pub starfield: Starfield,
+    #[serde(default)]
+    pub brightness: Brightness,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -37,6 +107,8 @@ impl Default for Preferences {
             space_roots: BTreeMap::new(),
             last_account: None,
             root_plans: BTreeMap::new(),
+            starfield: Starfield::Normal,
+            brightness: Brightness::Normal,
         }
     }
 }

@@ -6,7 +6,7 @@ use unicode_width::UnicodeWidthStr;
 pub const SECONDARY: [u8; 3] = [188; 3];
 pub const MUTED: [u8; 3] = [108; 3];
 pub const SELECTED: [u8; 3] = [238; 3];
-pub const UNSET: &str = "<unset>";
+pub const UNSET: &str = "not set";
 pub const NAME_MAX_CHARS: usize = 30;
 pub use crate::navigation::{Navigation, SelectionNavigation};
 
@@ -16,6 +16,8 @@ pub struct TextInput {
     /// UTF-8 byte offset at a grapheme boundary.
     pub cursor: usize,
     pub max_chars: Option<usize>,
+    /// Faint completion drawn after the value while the cursor is at its end.
+    pub ghost: String,
 }
 impl TextInput {
     pub fn new(value: String) -> Self {
@@ -24,6 +26,7 @@ impl TextInput {
             value,
             cursor,
             max_chars: None,
+            ghost: String::new(),
         }
     }
     pub fn limited(mut self, max_chars: usize) -> Self {
@@ -141,6 +144,22 @@ impl TextInput {
             canvas.widget_text(cursor, y, glyph, style, false);
             canvas.cursor = Some((cursor, y));
         }
+        if !self.ghost.is_empty() && self.cursor == self.value.len() && y < canvas.height {
+            let room = (x + width).saturating_sub(cursor);
+            let ghost = clip(&self.ghost, room);
+            if !ghost.is_empty() {
+                canvas.widget_text(
+                    cursor,
+                    y,
+                    &ghost,
+                    Cell {
+                        fg: canvas.popup_palette.as_ref().map_or(MUTED, |p| p.muted),
+                        ..Cell::default()
+                    },
+                    false,
+                );
+            }
+        }
     }
 }
 
@@ -165,9 +184,24 @@ pub struct Row {
     placeholder: bool,
     preview_group: u8,
     field_padding: Option<std::ops::Range<usize>>,
+    /// The preview is an interactive `‹ value ›` selector cycled with Left/Right.
+    pub preview_choice: bool,
+    /// Leading label characters drawn in the bright text colour (typed prefix).
+    pub highlight: usize,
 }
 impl Row {
     pub fn field(label: &str, value: impl std::fmt::Display, label_width: usize) -> Self {
+        let value = value.to_string();
+        if value == UNSET {
+            // Placeholder: dim text in the value column, never part of the label.
+            let mut row = Self::yes(format!("{label}:"));
+            row.preview = Some(UNSET.into());
+            row.preview_column = Some(2 + label_width + 2);
+            row.preview_fg = MUTED;
+            row.preview_gap = 1;
+            row.field_padding = Some(label.len() + 1..label_width + 2);
+            return row;
+        }
         let mut row = Self::yes(format!(
             "{:<width$} {value}",
             format!("{label}:"),
@@ -199,6 +233,8 @@ impl Row {
             placeholder: false,
             preview_group: 0,
             field_padding: None,
+            preview_choice: false,
+            highlight: 0,
         }
     }
     pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
@@ -293,6 +329,34 @@ impl Row {
                 <= width.saturating_sub(self.preview_edge_padding))
         .then_some(start)
     }
+    /// Nonselectable group label drawn after the standard bullet (`• Today`).
+    pub fn heading(label: impl Into<String>) -> Self {
+        let mut row = Self::separator();
+        row.label = label.into();
+        row
+    }
+    /// Short, always-visible dim reason for an unavailable row (`· reason`).
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.preview = Some(format!("· {}", reason.into()));
+        self.preview_selected_only = false;
+        self.preview_fg = MUTED;
+        self.preview_gap = 2;
+        self
+    }
+    /// An interactive value cycled with Left/Right, drawn as `‹ value ›` with dim
+    /// arrows and the active value highlighted.
+    pub fn with_choice(mut self, value: impl AsRef<str>) -> Self {
+        self.preview = Some(format!("‹ {} ›", value.as_ref()));
+        self.preview_selected_only = false;
+        self.preview_choice = true;
+        self.preview_gap = 2;
+        self
+    }
+    pub fn has_reason(&self) -> bool {
+        !self.preview_selected_only
+            && !self.right_preview
+            && self.preview.as_deref().is_some_and(|p| p.starts_with("· "))
+    }
     pub fn separator() -> Self {
         Self {
             symbol: None,
@@ -313,6 +377,8 @@ impl Row {
             placeholder: false,
             preview_group: 0,
             field_padding: None,
+            preview_choice: false,
+            highlight: 0,
         }
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, selected: bool, back: bool) {
@@ -408,6 +474,18 @@ impl Row {
                     ..Accent::default()
                 },
             );
+            if !self.label.is_empty() {
+                canvas.widget_text(
+                    x + 2,
+                    y,
+                    &self.label,
+                    Cell {
+                        fg: MUTED,
+                        ..Cell::default()
+                    },
+                    false,
+                );
+            }
             return;
         }
         canvas.accent_text(
@@ -460,6 +538,19 @@ impl Row {
                 },
                 self.enabled,
             );
+            if self.highlight > 0 && !selected {
+                let prefix: String = self.label.chars().take(self.highlight).collect();
+                canvas.widget_text(
+                    x + 2,
+                    y,
+                    &prefix,
+                    Cell {
+                        fg: canvas.popup_palette.as_ref().map_or(SELECTED, |p| p.text),
+                        ..Cell::default()
+                    },
+                    false,
+                );
+            }
         }
         if !self.enabled && y < canvas.height {
             // Layout gaps are not part of either struck-through text segment.
@@ -493,6 +584,36 @@ impl Row {
         preview: &str,
         selected: bool,
     ) {
+        if self.preview_choice {
+            let arrow = Cell {
+                fg: if selected { SECONDARY } else { MUTED },
+                ..Cell::default()
+            };
+            let inner = preview
+                .trim_start_matches("‹ ")
+                .trim_end_matches(" ›")
+                .to_owned();
+            canvas.widget_text(x, y, "‹ ", arrow.clone(), false);
+            canvas.widget_text(
+                x + 2,
+                y,
+                &inner,
+                Cell {
+                    fg: if selected { SELECTED } else { SECONDARY },
+                    bold: selected,
+                    ..Cell::default()
+                },
+                false,
+            );
+            canvas.widget_text(
+                x + 2 + UnicodeWidthStr::width(inner.as_str()),
+                y,
+                " ›",
+                arrow,
+                false,
+            );
+            return;
+        }
         if self.preview_accent {
             canvas.accent_text(
                 x,
@@ -527,6 +648,20 @@ pub struct Options {
     pub navigation: SelectionNavigation,
     /// Whether the highlighted row's preview was rendered by the last menu paint.
     pub preview_visible: bool,
+    /// Visible list rows at the last paint; PageUp/PageDown move by this much.
+    pub capacity: usize,
+}
+/// Align every row's always-visible reason into one column after the longest label.
+pub fn align_reasons(rows: &mut [Row]) {
+    let longest = rows
+        .iter()
+        .filter(|r| !r.separator)
+        .map(|r| UnicodeWidthStr::width(r.label.as_str()))
+        .max()
+        .unwrap_or(0);
+    for row in rows.iter_mut().filter(|r| r.has_reason()) {
+        row.preview_column = Some(2 + longest + 2);
+    }
 }
 
 /// Shared bottom hints: token wrapping never changes the star-field geometry.
@@ -674,6 +809,20 @@ pub fn ellipsize(text: &str, width: usize) -> String {
     }
     format!("{}…", clip(text, width - 1))
 }
+/// Keep the end of a long value (paths), marking hidden text with a leading `…`.
+pub fn ellipsize_start(text: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_owned();
+    }
+    let graphemes: Vec<&str> = text.graphemes(true).collect();
+    let mut used = 1;
+    let mut start = graphemes.len();
+    while start > 0 && used + UnicodeWidthStr::width(graphemes[start - 1]) <= width {
+        start -= 1;
+        used += UnicodeWidthStr::width(graphemes[start]);
+    }
+    format!("…{}", graphemes[start..].concat())
+}
 pub fn clip(text: &str, width: usize) -> String {
     let mut used = 0;
     text.graphemes(true)
@@ -715,6 +864,43 @@ impl Options {
             self.scroll = rows.len();
         } else if !previous && self.selected < before {
             self.scroll = 0;
+        }
+    }
+    /// PageUp/PageDown: move one visible page, landing on the nearest selectable row.
+    pub fn page(&mut self, rows: &[Row], previous: bool) {
+        let count = rows.len();
+        if count == 0 {
+            return;
+        }
+        self.back = false;
+        let step = self.capacity.saturating_sub(1).max(1);
+        let target = if previous {
+            self.selected.saturating_sub(step)
+        } else {
+            (self.selected + step).min(count - 1)
+        };
+        if let Some(found) = (0..count)
+            .filter(|i| !rows[*i].separator)
+            .min_by_key(|i| (i.abs_diff(target), if previous { *i } else { count - i }))
+        {
+            self.selected = found;
+        }
+    }
+    /// Stepping in a list whose last `pinned` rows stay mounted below it: entering
+    /// the pinned group never scrolls the list; leaving it upward re-enters the
+    /// list at its last item.
+    pub fn step_pinned(&mut self, rows: &[Row], pinned: usize, previous: bool, wrap: bool) {
+        let scroll = self.scroll;
+        self.step_with_wrap(rows, false, previous, wrap);
+        if self.selected + pinned >= rows.len() {
+            self.scroll = scroll;
+        }
+    }
+    pub fn boundary_pinned(&mut self, rows: &[Row], pinned: usize, last: bool) {
+        let scroll = self.scroll;
+        self.boundary(rows, false, last);
+        if last && pinned > 0 {
+            self.scroll = scroll;
         }
     }
     pub fn boundary(&mut self, rows: &[Row], bottom_action: bool, last: bool) {
@@ -858,6 +1044,7 @@ impl Options {
             }
         }
         self.scroll = self.scroll.min(rows.len().saturating_sub(capacity));
+        self.capacity = capacity;
         let left = Self::left(canvas.width, rows);
         let detached_groups = Self::preview_groups(canvas.width, rows);
         for (i, row) in rows.iter().enumerate().skip(self.scroll).take(capacity) {
@@ -880,12 +1067,25 @@ impl Options {
         bottom: usize,
         controls_start: usize,
     ) -> (usize, usize) {
-        if rows.len() < 2 || bottom.saturating_sub(top) < 4 {
+        self.paint_pinned_menu(canvas, rows, 2, top, bottom, controls_start)
+    }
+    /// The last `pinned` rows (a bullet and actions) stay mounted below a list
+    /// that keeps its own scroll position while focus visits them.
+    pub fn paint_pinned_menu(
+        &mut self,
+        canvas: &mut Canvas,
+        rows: &[Row],
+        pinned: usize,
+        top: usize,
+        bottom: usize,
+        controls_start: usize,
+    ) -> (usize, usize) {
+        if rows.len() < pinned || bottom.saturating_sub(top) < pinned + 2 {
             return self.paint_menu(canvas, rows, top, bottom, controls_start);
         }
-        let end = rows.len() - 2;
+        let end = rows.len() - pinned;
         let note_rows = bottom.saturating_sub(controls_start.saturating_sub(1));
-        let capacity = bottom.saturating_sub(top + 2 + note_rows).min(end);
+        let capacity = bottom.saturating_sub(top + pinned + note_rows).min(end);
         let mut body = self.clone();
         if self.selected >= end {
             body.selected = usize::MAX;
@@ -905,7 +1105,85 @@ impl Options {
             );
         }
         body.paint_range(canvas, end, capacity, footer_top);
-        (left, capacity + 2)
+        self.capacity = capacity;
+        (left, capacity + pinned)
+    }
+    /// A scrolling list between mounted sections: the first `head` rows stay above
+    /// it and the last `tail` rows below it. The list keeps its own scroll index
+    /// (`scroll` is relative to the list) while focus visits either section.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint_sections(
+        &mut self,
+        canvas: &mut Canvas,
+        rows: &[Row],
+        head: usize,
+        tail: usize,
+        top: usize,
+        bottom: usize,
+        controls_start: usize,
+    ) -> (usize, usize) {
+        if rows.len() < head + tail || bottom.saturating_sub(top) < head + tail + 2 {
+            return self.paint_menu(canvas, rows, top, bottom, controls_start);
+        }
+        let end = rows.len() - tail;
+        let list = &rows[head..end];
+        let note_rows = bottom.saturating_sub(controls_start.saturating_sub(1));
+        let capacity = bottom
+            .saturating_sub(top + head + tail + note_rows)
+            .min(list.len());
+        let mut body = self.clone();
+        body.selected = if (head..end).contains(&self.selected) {
+            self.selected - head
+        } else {
+            usize::MAX
+        };
+        let left = Self::left(canvas.width, rows);
+        for (i, row) in rows[..head].iter().enumerate() {
+            row.paint(
+                canvas,
+                left,
+                top + i,
+                self.selected == i && !self.back,
+                self.back,
+            );
+        }
+        body.paint(canvas, list, top + head, top + head + capacity);
+        self.scroll = body.scroll;
+        self.preview_visible = false;
+        let footer_top = top + head + capacity + note_rows;
+        for (i, row) in rows[end..].iter().enumerate() {
+            row.paint(
+                canvas,
+                left,
+                footer_top + i,
+                self.selected == end + i && !self.back,
+                self.back,
+            );
+        }
+        body.paint_range(canvas, list.len(), capacity, footer_top);
+        self.capacity = capacity;
+        (left, head + capacity + tail)
+    }
+    /// Stepping with mounted sections: focus entering a section never moves the
+    /// list; leaving one re-enters the list at its nearest edge.
+    pub fn step_sections(
+        &mut self,
+        rows: &[Row],
+        head: usize,
+        tail: usize,
+        previous: bool,
+        wrap: bool,
+    ) {
+        let scroll = self.scroll;
+        self.step_with_wrap(rows, false, previous, wrap);
+        if self.selected < head || self.selected + tail >= rows.len() {
+            self.scroll = scroll;
+        }
+    }
+    pub fn boundary_sections(&mut self, rows: &[Row], last: bool) {
+        let scroll = self.scroll;
+        self.boundary(rows, false, last);
+        self.scroll = scroll;
     }
     pub fn paint_range(&self, canvas: &mut Canvas, count: usize, capacity: usize, y: usize) {
         if capacity == 0 || count <= capacity {
@@ -949,8 +1227,7 @@ impl Options {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEvent, KeyEventKind};
-    use std::time::{Duration, Instant};
+
     #[test]
     fn overflowing_input_shows_an_ellipsis_and_keeps_the_full_value() {
         let mut input = TextInput::new("/projects/deeper/path".into());
@@ -1077,7 +1354,7 @@ mod tests {
     #[test]
     fn persistent_status_takes_priority_over_usage_at_narrow_widths() {
         let row = Row::yes("longaccount")
-            .with_column_preview("100% 5h / 100% wk", 15, false)
+            .with_column_preview("100% 5h · 100% wk", 15, false)
             .with_status("Ready", true)
             .popup_option();
         for width in [18, 24, 35, 80] {
@@ -1105,101 +1382,6 @@ mod tests {
         assert!(line(3).contains("Cancel"));
         assert_eq!(c.cells[40 + Options::left(40, &rows)].glyph, "●");
         assert!(c.cells.iter().all(|c| !c.strike && !c.bold));
-    }
-    #[test]
-    fn held_arrows_stop_at_edges_and_release_rearms_wrap() {
-        let mut nav = Navigation::default();
-        let start = Instant::now();
-        let down = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE);
-        let mut repeated = down;
-        repeated.kind = KeyEventKind::Repeat;
-        let mut released = down;
-        released.kind = KeyEventKind::Release;
-        let rows = vec![
-            Row::yes("First"),
-            Row::yes("Last"),
-            Row::gate("Unavailable", false),
-        ];
-        let mut options = Options::default();
-        options.step_with_wrap(&rows, false, false, nav.key_at(down, start));
-        assert_eq!(options.selected, 1);
-        for i in 1..20 {
-            options.step_with_wrap(
-                &rows,
-                false,
-                false,
-                nav.key_at(repeated, start + Duration::from_millis(i * 100)),
-            );
-            assert_eq!(options.selected, 2);
-        }
-        nav.key_at(released, start + Duration::from_millis(2000));
-        options.step_with_wrap(
-            &rows,
-            false,
-            false,
-            nav.key_at(down, start + Duration::from_millis(2001)),
-        );
-        assert_eq!(options.selected, 0);
-        let up = KeyEvent::new(KeyCode::Up, crossterm::event::KeyModifiers::NONE);
-        let mut repeated_up = up;
-        repeated_up.kind = KeyEventKind::Repeat;
-        options.step_with_wrap(
-            &rows,
-            false,
-            true,
-            nav.key_at(repeated_up, start + Duration::from_millis(2100)),
-        );
-        assert_eq!(options.selected, 0);
-        options.step_with_wrap(&rows, false, true, {
-            let mut release = up;
-            release.kind = KeyEventKind::Release;
-            nav.key_at(release, start + Duration::from_millis(2199));
-            nav.key_at(up, start + Duration::from_millis(2200))
-        });
-        assert_eq!(options.selected, 2);
-        let mut legacy = Navigation::default();
-        assert!(legacy.key_at(down, start));
-        assert!(legacy.key_at(down, start + Duration::from_millis(500)));
-        assert!(!legacy.key_at(down, start + Duration::from_millis(530)));
-        assert!(legacy.key_at(down, start + Duration::from_millis(1300)));
-    }
-    #[test]
-    fn mixed_legacy_arrows_after_enhanced_events_remain_one_hold() {
-        let start = Instant::now();
-        let rows = vec![Row::yes("First"), Row::yes("Middle"), Row::yes("Last")];
-        for previous in [false, true] {
-            let key = KeyEvent::new(
-                if previous { KeyCode::Up } else { KeyCode::Down },
-                crossterm::event::KeyModifiers::NONE,
-            );
-            let mut nav = Navigation::default();
-            let mut unrelated =
-                KeyEvent::new(KeyCode::Char('x'), crossterm::event::KeyModifiers::NONE);
-            unrelated.kind = KeyEventKind::Release;
-            nav.key_at(unrelated, start);
-            let mut options = Options {
-                selected: 1,
-                ..Options::default()
-            };
-            for i in 1..30 {
-                if i == 10 {
-                    nav.key_at(unrelated, start + Duration::from_millis(i * 30 - 1));
-                }
-                let fresh = nav.key_at(key, start + Duration::from_millis(i * 30));
-                options.step_with_wrap(&rows, false, previous, fresh);
-                assert_eq!(options.selected, if previous { 0 } else { 2 });
-            }
-            let mut released = key;
-            released.kind = KeyEventKind::Release;
-            nav.key_at(released, start + Duration::from_millis(901));
-            options.step_with_wrap(
-                &rows,
-                false,
-                previous,
-                nav.key_at(key, start + Duration::from_millis(902)),
-            );
-            assert_eq!(options.selected, if previous { 2 } else { 0 });
-        }
     }
     #[test]
     fn boundaries_skip_separators_and_include_unavailable_or_bottom_actions() {
@@ -1232,37 +1414,6 @@ mod tests {
         assert_eq!(ellipsize("long", 1), "…");
         assert_eq!(ellipsize("long", 0), "");
         assert_eq!(ellipsize("fits", 4), "fits");
-    }
-    #[test]
-    fn held_wrap_uses_starting_row_in_both_directions() {
-        let rows = vec![Row::yes("First"), Row::yes("Middle"), Row::yes("Last")];
-        for previous in [false, true] {
-            for origin in 0..3 {
-                let mut options = Options {
-                    selected: origin,
-                    ..Options::default()
-                };
-                let edge = if previous { 0 } else { 2 };
-                for step in 0..10 {
-                    options.step_with_wrap(&rows, false, previous, step == 0);
-                    let expected = if origin == edge {
-                        if previous {
-                            2_usize.saturating_sub(step)
-                        } else {
-                            step.min(2)
-                        }
-                    } else if previous {
-                        origin.saturating_sub(step + 1)
-                    } else {
-                        (origin + step + 1).min(2)
-                    };
-                    assert_eq!(
-                        options.selected, expected,
-                        "origin={origin}, previous={previous}, step={step}"
-                    );
-                }
-            }
-        }
     }
     #[test]
     fn eighteen_options_fit_twenty_two_body_rows_before_scrolling() {

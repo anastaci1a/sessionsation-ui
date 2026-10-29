@@ -1,95 +1,41 @@
-//! Terminal-independent gesture tracking and axis-independent selection movement.
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+//! Terminal-independent key gestures and axis-independent selection movement.
+//!
+//! Every key press is delivered immediately; nothing is deferred or dropped.
+//! Wrapping past an edge is limited per gesture instead: a press may wrap unless
+//! it continues a hold (the same direction within `HOLD_GAP`) that has already
+//! crossed an edge, and native repeat events never wrap. Legacy terminals such as
+//! Termux report a held arrow as a stream of presses without repeat or release
+//! events; such a hold crosses an edge at most once and never spins around.
+use crossterm::event::{KeyEvent, KeyEventKind};
 use std::time::{Duration, Instant};
 
-/// Native repeat/release events are exact. Legacy arrow bursts have no release
-/// bytes, so a quiet gap separates gestures conservatively.
+/// Presses of one direction closer together than this continue one hold.
+pub const HOLD_GAP: Duration = Duration::from_millis(150);
+
 #[derive(Default)]
-pub struct Navigation {
-    last: Option<(KeyCode, Instant)>,
-    pending: Option<(KeyEvent, Instant)>,
-}
+pub struct Navigation;
 impl Navigation {
+    /// Each event with its wrap permission (`true` for presses, `false` for
+    /// native repeats and releases). No event is held back.
     pub fn events(&mut self, key: KeyEvent) -> Vec<(KeyEvent, bool)> {
-        self.events_at(key, Instant::now())
+        vec![(key, self.key_at(key, Instant::now()))]
     }
+    /// Retained for the event loop's frame tick; nothing is ever pending.
     pub fn flush(&mut self) -> Vec<(KeyEvent, bool)> {
-        self.flush_at(Instant::now())
+        vec![]
     }
-    fn flush_at(&mut self, now: Instant) -> Vec<(KeyEvent, bool)> {
-        if self.pending.is_some_and(|(_, deadline)| now >= deadline) {
-            let (key, _) = self.pending.take().unwrap();
-            self.last = Some((key.code, now));
-            vec![(key, true)]
-        } else {
-            vec![]
-        }
-    }
-    fn events_at(&mut self, key: KeyEvent, now: Instant) -> Vec<(KeyEvent, bool)> {
-        let mut events = Vec::new();
-        if let Some((pending, deadline)) = self.pending.take() {
-            if key.kind == KeyEventKind::Release && key.code != pending.code {
-                self.pending = Some((pending, deadline));
-                return vec![(key, false)];
-            }
-            if key.code == pending.code && key.kind != KeyEventKind::Release {
-                // A rapid follow-up proves the delayed first repeat belongs to
-                // the original hold. Neither event may rearm its wrap permission.
-                self.last = Some((key.code, now));
-                return vec![(pending, false), (key, false)];
-            }
-            events.push((pending, true));
-        }
-        let ambiguous = key.kind == KeyEventKind::Press
-            && matches!(
-                key.code,
-                KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right
-            )
-            && self.last.is_some_and(|(code, at)| {
-                let gap = now.saturating_duration_since(at);
-                code == key.code
-                    && gap >= Duration::from_millis(150)
-                    && gap <= Duration::from_millis(1200)
-            });
-        if ambiguous {
-            // Legacy terminals report a delayed first repeat as another Press.
-            // Resolve that ambiguity over one short repeat interval. The initial
-            // press and native repeat/release events are never delayed.
-            self.pending = Some((key, now + Duration::from_millis(100)));
-            self.last = Some((key.code, now));
-        } else {
-            events.push((key, self.key_at(key, now)));
-        }
-        events
-    }
-    pub(crate) fn key_at(&mut self, key: KeyEvent, now: Instant) -> bool {
-        if key.kind == KeyEventKind::Release {
-            if self.last.is_some_and(|(code, _)| code == key.code) {
-                self.last = None;
-            }
-            return false;
-        }
-        if !matches!(
-            key.code,
-            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right
-        ) {
-            self.last = None;
-            return true;
-        }
-        let fresh = key.kind == KeyEventKind::Press
-            && self.last.is_none_or(|(last, at)| {
-                last != key.code || now.saturating_duration_since(at) >= Duration::from_millis(150)
-            });
-        self.last = Some((key.code, now));
-        fresh
+    pub(crate) fn key_at(&mut self, key: KeyEvent, _now: Instant) -> bool {
+        key.kind == KeyEventKind::Press
     }
 }
 
-/// A held direction may wrap once, only when its gesture began at that edge.
+/// Wrap bookkeeping for one list: the current hold's direction, its last step
+/// and whether it has already crossed an edge.
 #[derive(Clone, Debug, Default)]
 pub struct SelectionNavigation {
     direction: Option<bool>,
-    edge: bool,
+    last: Option<Instant>,
+    crossed: bool,
 }
 impl SelectionNavigation {
     pub fn boundary(
@@ -112,28 +58,43 @@ impl SelectionNavigation {
         selected: usize,
         count: usize,
         previous: bool,
-        fresh: bool,
+        press: bool,
+        focusable: impl Fn(usize) -> bool,
+    ) -> usize {
+        self.step_at(selected, count, previous, press, Instant::now(), focusable)
+    }
+    pub fn step_at(
+        &mut self,
+        selected: usize,
+        count: usize,
+        previous: bool,
+        press: bool,
+        now: Instant,
         focusable: impl Fn(usize) -> bool,
     ) -> usize {
         if count == 0 {
             return selected;
         }
-        let selected = selected.min(count - 1);
-        let first = (0..count).find(|i| focusable(*i));
-        let last = (0..count).rfind(|i| focusable(*i));
-        if fresh {
-            self.direction = Some(previous);
-            self.edge = Some(selected) == if previous { first } else { last };
+        let continuing = self.direction == Some(previous)
+            && self
+                .last
+                .is_some_and(|at| now.saturating_duration_since(at) < HOLD_GAP);
+        if !continuing {
+            self.crossed = false;
         }
-        let wrap = self.direction == Some(previous) && self.edge;
+        self.direction = Some(previous);
+        self.last = Some(now);
+        let wrap = press && !self.crossed;
+        let selected = selected.min(count - 1);
         let mut probe = selected;
         for _ in 0..count {
-            if !wrap && (previous && probe == 0 || !previous && probe + 1 == count) {
-                return selected;
-            }
-            if previous && probe == 0 || !previous && probe + 1 == count {
-                // Crossing consumes this gesture's permission, for either axis.
-                self.edge = false;
+            let edge = previous && probe == 0 || !previous && probe + 1 == count;
+            if edge {
+                if !wrap {
+                    return selected;
+                }
+                // A hold crosses an edge at most once.
+                self.crossed = true;
             }
             probe = if previous {
                 (probe + count - 1) % count
@@ -151,113 +112,88 @@ impl SelectionNavigation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyModifiers;
-    #[test]
-    fn every_axis_moves_immediately_and_consumes_its_single_wrap() {
-        for code in [KeyCode::Up, KeyCode::Down, KeyCode::Left, KeyCode::Right] {
-            let previous = matches!(code, KeyCode::Up | KeyCode::Left);
-            for origin in 0..4 {
-                let mut input = Navigation::default();
-                let mut selection = SelectionNavigation::default();
-                let mut selected = origin;
-                let now = Instant::now();
-                let press = KeyEvent::new(code, KeyModifiers::NONE);
-                let mut repeat = press;
-                repeat.kind = KeyEventKind::Repeat;
-                for i in 0..20 {
-                    let fresh = input.key_at(
-                        if i == 0 { press } else { repeat },
-                        now + Duration::from_millis(i * 30),
-                    );
-                    selected = selection.step(selected, 4, previous, fresh, |_| true);
-                    if i == 0 {
-                        assert_ne!(selected, origin);
-                    }
-                }
-                assert_eq!(selected, if previous { 0 } else { 3 });
-                let mut release = press;
-                release.kind = KeyEventKind::Release;
-                input.key_at(release, now + Duration::from_millis(601));
-                selected = selection.step(
+    fn presses(
+        rows: usize,
+        start: usize,
+        previous: bool,
+        count: usize,
+        gap_ms: u64,
+        press: bool,
+    ) -> Vec<usize> {
+        let mut nav = SelectionNavigation::default();
+        let now = Instant::now();
+        let mut selected = start;
+        (0..count)
+            .map(|i| {
+                selected = nav.step_at(
                     selected,
-                    4,
+                    rows,
                     previous,
-                    input.key_at(press, now + Duration::from_millis(602)),
+                    press || i == 0,
+                    now + Duration::from_millis(i as u64 * gap_ms),
                     |_| true,
                 );
-                assert_eq!(selected, if previous { 3 } else { 0 });
-            }
-        }
-    }
-    #[test]
-    fn delayed_first_repeat_cannot_wrap_from_one_row_before_either_edge() {
-        for code in [KeyCode::Up, KeyCode::Down, KeyCode::Left, KeyCode::Right] {
-            let previous = matches!(code, KeyCode::Up | KeyCode::Left);
-            let mut input = Navigation::default();
-            let mut selection = SelectionNavigation::default();
-            let mut selected = if previous { 1 } else { 2 };
-            let now = Instant::now();
-            let key = KeyEvent::new(code, KeyModifiers::NONE);
-            let mut apply = |events: Vec<(KeyEvent, bool)>| {
-                for (_, fresh) in events {
-                    selected = selection.step(selected, 4, previous, fresh, |_| true);
-                }
                 selected
-            };
-            assert_eq!(
-                apply(input.events_at(key, now)),
-                if previous { 0 } else { 3 }
-            );
-            assert!(
-                input
-                    .events_at(key, now + Duration::from_millis(500))
-                    .is_empty()
-            );
-            let mut unrelated = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
-            unrelated.kind = KeyEventKind::Release;
-            let release = input.events_at(unrelated, now + Duration::from_millis(510));
-            assert_eq!(release.len(), 1);
-            assert!(!release[0].1);
-            for i in 1..60 {
-                assert_eq!(
-                    apply(input.events_at(key, now + Duration::from_millis(500 + i * 30))),
-                    if previous { 0 } else { 3 }
-                );
-            }
-            assert!(input.flush_at(now + Duration::from_secs(3)).is_empty());
-            // A distinct legacy tap still wraps after its short ambiguity window.
-            assert!(
-                !input
-                    .events_at(key, now + Duration::from_secs(4))
-                    .is_empty()
-            );
+            })
+            .collect()
+    }
+    #[test]
+    fn every_separate_or_rapid_press_moves_and_one_wrap_is_allowed() {
+        // Nine rows, Down × 10 from the top: the tenth press wraps to row 0,
+        // whatever the human or Termux gap between presses.
+        for gap in [0, 3, 50, 100, 250, 400] {
+            let path = presses(9, 0, false, 10, gap, true);
+            assert_eq!(path[..8], [1, 2, 3, 4, 5, 6, 7, 8], "gap {gap}");
+            assert_eq!(path[8], 0, "gap {gap} wraps");
+            let path = presses(9, 8, true, 10, gap, true);
+            assert_eq!(path[8], 8, "Up wraps from the top too (gap {gap})");
         }
     }
     #[test]
-    fn legacy_tap_at_the_edge_resolves_while_native_release_rearms_immediately() {
+    fn a_held_arrow_crosses_an_edge_at_most_once() {
+        // Termux hold: legacy presses 20 ms apart starting on the last row.
+        let path = presses(4, 3, false, 20, 20, true);
+        assert_eq!(path[0], 0, "the first press at the edge wraps");
+        assert_eq!(path[3], 3);
+        assert!(path[3..].iter().all(|r| *r == 3), "never spins: {path:?}");
+        let path = presses(4, 0, true, 20, 20, true);
+        assert_eq!(path[0], 3);
+        assert!(path[3..].iter().all(|r| *r == 0), "{path:?}");
+        // After a pause, a new press wraps again.
+        let mut nav = SelectionNavigation::default();
         let now = Instant::now();
-        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
-        let mut input = Navigation::default();
-        assert!(input.events_at(key, now)[0].1);
-        assert!(
-            input
-                .events_at(key, now + Duration::from_millis(200))
-                .is_empty()
-        );
-        assert!(input.flush_at(now + Duration::from_millis(299)).is_empty());
-        assert!(input.flush_at(now + Duration::from_millis(300))[0].1);
-        let mut release = key;
-        release.kind = KeyEventKind::Release;
-        input.events_at(release, now + Duration::from_millis(301));
-        assert!(input.events_at(key, now + Duration::from_millis(302))[0].1);
+        let s = nav.step_at(3, 4, false, true, now, |_| true);
+        let s = nav.step_at(s, 4, false, true, now + Duration::from_millis(20), |_| true);
+        assert_eq!(s, 1);
+        let s = nav.step_at(3, 4, false, true, now + Duration::from_millis(500), |_| {
+            true
+        });
+        assert_eq!(s, 0);
     }
     #[test]
-    fn legacy_quiet_tap_rearms_without_delaying_movement() {
-        let mut input = Navigation::default();
+    fn native_repeats_never_wrap_and_mid_list_presses_are_unaffected() {
+        let path = presses(4, 1, false, 10, 30, false);
+        assert_eq!(path, [2, 3, 3, 3, 3, 3, 3, 3, 3, 3]);
+        let path = presses(6, 2, true, 2, 10, true);
+        assert_eq!(path, [1, 0]);
+        let mut input = Navigation;
+        let key = KeyEvent::new(
+            crossterm::event::KeyCode::Down,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        let mut repeat = key;
+        repeat.kind = KeyEventKind::Repeat;
+        assert_eq!(input.events(key), vec![(key, true)]);
+        assert_eq!(input.events(repeat), vec![(repeat, false)]);
+        assert!(input.flush().is_empty(), "nothing is deferred");
+    }
+    #[test]
+    fn unselectable_rows_are_skipped_including_across_the_wrap() {
+        let mut nav = SelectionNavigation::default();
         let now = Instant::now();
-        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
-        assert!(input.key_at(key, now));
-        assert!(!input.key_at(key, now + Duration::from_millis(30)));
-        assert!(input.key_at(key, now + Duration::from_millis(200)));
+        let s = nav.step_at(2, 4, false, true, now, |i| i != 3);
+        assert_eq!(s, 0);
+        let s = nav.step_at(1, 4, true, true, now + Duration::from_secs(1), |i| i != 0);
+        assert_eq!(s, 3);
     }
 }

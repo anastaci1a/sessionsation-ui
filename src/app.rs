@@ -76,12 +76,39 @@ fn resume_explanation(error: &str) -> String {
         };
     format!("({reason})")
 }
+/// Settings rows: label on the left, a dim value and `›` in one aligned column.
+fn settings_rows(items: Vec<(Row, String)>) -> Vec<Row> {
+    use unicode_width::UnicodeWidthStr;
+    let label = items
+        .iter()
+        .map(|(r, _)| UnicodeWidthStr::width(r.label.as_str()))
+        .max()
+        .unwrap_or(0);
+    let value = items
+        .iter()
+        .map(|(_, v)| UnicodeWidthStr::width(v.as_str()))
+        .max()
+        .unwrap_or(0);
+    items
+        .into_iter()
+        .map(|(mut row, v)| {
+            let pad = value.saturating_sub(UnicodeWidthStr::width(v.as_str()));
+            row.preview = Some(format!("{v}{} ›", " ".repeat(pad)));
+            row.preview_column = Some(2 + label + 4);
+            row.preview_selected_only = false;
+            row.preview_fg = crate::widgets::MUTED;
+            row
+        })
+        .collect()
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Page {
     Home,
     Management,
     Summary,
     Config,
+    Appearance,
+    Directories,
     Roots,
     Accounts,
     Spaces,
@@ -101,10 +128,13 @@ pub enum Effect {
     Api(u64, Vec<String>),
     FocusSession(Value, bool),
     LaunchLogin(Vec<String>),
+    /// Create confirmed settings folders in order (parents first).
+    CreateDirectories(Target, PathBuf, Vec<PathBuf>),
 }
 enum StartConfirmation {
     SharedDirectory(PathBuf),
     UnfinishedHistory,
+    CreateFolders(PathBuf),
 }
 #[derive(Clone)]
 struct Saved {
@@ -142,6 +172,8 @@ pub struct App {
     pub launch_background: bool,
     pub launch_dialog: bool,
     start_confirmation: Option<(crate::dialog::Dialog, StartConfirmation)>,
+    /// Settings folders awaiting confirmation: (dialog, target, chosen path, folders to create).
+    create_confirmation: Option<(crate::dialog::Dialog, Target, PathBuf, Vec<PathBuf>)>,
     pub resume: Option<Value>,
     resume_validation: Option<String>,
     switch: Option<Value>,
@@ -171,7 +203,7 @@ impl App {
             ..Draft::default()
         };
         Self {
-            navigation: crate::widgets::Navigation::default(),
+            navigation: crate::widgets::Navigation,
             manager: crate::management::Manager::with_host(host.clone()),
             page: Page::Home,
             options: Options::default(),
@@ -197,6 +229,7 @@ impl App {
             launch_background: false,
             launch_dialog: false,
             start_confirmation: None,
+            create_confirmation: None,
             resume: None,
             resume_validation: None,
             switch: None,
@@ -393,6 +426,13 @@ impl App {
                     .enumerate()
                     .map(|(i, (label, value))| {
                         let mut row = Row::field(label, value, width);
+                        if i == 3 && matches!(self.draft.directory, Directory::Create { .. }) {
+                            // Same marker as the picker: folders created at launch.
+                            row.preview = Some("(new)".into());
+                            row.preview_fg = crate::widgets::MUTED;
+                            row.preview_gap = 2;
+                            row.preview_selected_only = false;
+                        }
                         row.enabled = i != 3
                             || self.resume.is_none()
                             || self.manager.capabilities["resume"]["directory_selection"] == true;
@@ -400,20 +440,57 @@ impl App {
                     })
                     .collect()
             }
-            Page::Config => vec![
-                Row::yes(format!(
-                    "Default Dir: {}",
-                    if self.prefs.mode == Mode::Global {
-                        "Global"
-                    } else {
-                        "Per-Space"
-                    }
-                )),
-                Row::gate("Global root", self.prefs.mode == Mode::Global)
-                    .with_preview(path(self.prefs.global_root.as_deref()))
-                    .preview_gap(1),
-                Row::gate("Space roots", self.prefs.mode == Mode::PerSpace),
-            ],
+            Page::Config => settings_rows(vec![
+                (
+                    Row::yes("Appearance"),
+                    format!(
+                        "{} · {}",
+                        self.prefs.starfield.label(),
+                        self.prefs.brightness.label()
+                    ),
+                ),
+                (Row::yes("Default directories"), self.mode_label().into()),
+            ]),
+            Page::Appearance => {
+                let mut rows = vec![
+                    Row::yes("Starfield").with_choice(self.prefs.starfield.label()),
+                    Row::yes("Brightness").with_choice(self.prefs.brightness.label()),
+                ];
+                for row in &mut rows {
+                    row.preview_column = Some(2 + "Brightness".len() + 4);
+                }
+                rows
+            }
+            Page::Directories => {
+                let mut rows = vec![Row::yes("Default directory").with_choice(self.mode_label())];
+                rows.extend(settings_rows(vec![
+                    (
+                        Row::gate("Global root", self.prefs.mode == Mode::Global),
+                        self.prefs.global_root.as_deref().map_or_else(
+                            || UNSET.into(),
+                            |p| crate::widgets::ellipsize_start(&p.to_string_lossy(), 40),
+                        ),
+                    ),
+                    (
+                        Row::gate("Space roots", self.prefs.mode == Mode::PerSpace),
+                        match self.prefs.space_roots.len() {
+                            0 => UNSET.into(),
+                            n => format!("{n} set"),
+                        },
+                    ),
+                ]));
+                // The choice and value columns share one start.
+                let column = rows
+                    .iter()
+                    .map(|r| unicode_width::UnicodeWidthStr::width(r.label.as_str()))
+                    .max()
+                    .unwrap_or(0)
+                    + 6;
+                for row in &mut rows {
+                    row.preview_column = Some(column);
+                }
+                rows
+            }
             Page::Roots => self
                 .spaces
                 .iter()
@@ -488,31 +565,45 @@ impl App {
                 valid_name(&self.input.value) && self.listing.creatable,
             )],
             Page::Directory(_) => {
-                std::iter::once(Row::gate("[use this directory]", self.listing.existing))
-                    .chain((self.directory_action_count() == 3).then(|| Row::yes("[leave unset]")))
-                    .chain(std::iter::once(Row::gate(
-                        "<new>/",
-                        self.listing.existing || self.listing.creatable,
-                    )))
-                    .chain(
-                        (self.listing.children.is_empty() && !self.listing_pending)
-                            .then(|| Row::placeholder("(none)")),
-                    )
-                    .chain(self.listing.children.iter().map(|p| {
-                        Row::yes(format!(
-                            "{}/",
-                            p.file_name().unwrap_or_default().to_string_lossy()
-                        ))
-                    }))
-                    .collect()
+                let prefix = self.directory_prefix().chars().count();
+                let new = |row: Row| {
+                    let mut row = row;
+                    row.preview = Some("(new)".into());
+                    row.preview_fg = crate::widgets::MUTED;
+                    row.preview_gap = 2;
+                    row
+                };
+                let mut use_row = Row::gate("Use this folder", self.directory_base().is_some());
+                if self.directory_base().is_some() && !self.listing.existing {
+                    use_row = new(use_row);
+                }
+                let mut rows = vec![use_row, Row::separator()];
+                if let Some(name) = self.directory_new_name() {
+                    rows.push(new(Row::yes(format!("{name}/"))));
+                } else if self.listing.children.is_empty() && !self.listing_pending {
+                    rows.push(Row::placeholder("no folders"));
+                }
+                rows.extend(self.listing.children.iter().map(|p| {
+                    let mut row = Row::yes(format!(
+                        "{}/",
+                        p.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                    row.highlight = prefix;
+                    row
+                }));
+                rows.push(Row::separator());
+                if self.directory_action_count() == 3 {
+                    rows.push(Row::yes("Leave unset"));
+                }
+                rows.push(Row::yes("Cancel"));
+                rows
             }
             Page::Launching => vec![Row::gate("Starting session…", false)],
         };
         if Self::is_popup(&self.page) {
-            if matches!(
-                self.page,
-                Page::Directory(_) | Page::Spaces | Page::Accounts | Page::Roots
-            ) {
+            if matches!(self.page, Page::Directory(_)) {
+                // Its mounted sections are built above.
+            } else if matches!(self.page, Page::Spaces | Page::Accounts | Page::Roots) {
                 rows = crate::popup::with_cancel(rows);
             } else {
                 rows.push(Row::yes("Cancel"));
@@ -577,7 +668,10 @@ impl App {
     }
     fn pop(&mut self) -> Vec<Effect> {
         self.revision += 1;
-        let save = matches!(self.page, Page::Config | Page::Roots);
+        let save = matches!(
+            self.page,
+            Page::Config | Page::Roots | Page::Appearance | Page::Directories
+        );
         if self.page == Page::Accounts {
             self.switch = None;
         }
@@ -717,6 +811,11 @@ impl App {
         self.accounts = accounts;
         self.manager.inventory(self.accounts.clone());
         self.spaces = spaces;
+        self.manager.space_names = self
+            .spaces
+            .iter()
+            .map(|s| (s.workspace_id.clone(), s.label.clone()))
+            .collect();
         {
             let mut focused = self.spaces.iter().filter(|s| s.focused);
             self.manager.focused_space = focused
@@ -809,11 +908,24 @@ impl App {
         {
             return;
         }
+        // Mounted sections keep focus by position from their own edge.
+        let directory = matches!(self.page, Page::Directory(_));
+        let old_len = self.rows().len();
+        let from_end = (directory && self.options.selected + self.directory_tail() >= old_len)
+            .then(|| old_len - self.options.selected);
+        let in_head = directory && self.options.selected < self.directory_children_offset();
         self.listing_pending = false;
         match result {
             Ok(l) => {
                 self.listing = l;
-                if matches!(self.page, Page::Directory(_)) && self.listing.existing {
+                if let Some(from_end) = from_end {
+                    self.options.selected = self.rows().len().saturating_sub(from_end);
+                } else if in_head {
+                } else if directory && !self.listing.existing {
+                    // Typing filters the list: the top match is focused.
+                    self.options.selected = self.directory_children_offset();
+                    self.options.scroll = 0;
+                } else if matches!(self.page, Page::Directory(_)) && self.listing.existing {
                     let child = self
                         .pending_child
                         .take()
@@ -921,6 +1033,38 @@ impl App {
             .map(|i| i + self.picker_base())
             .unwrap_or(self.picker_base())
     }
+    fn mode_label(&self) -> &'static str {
+        if self.prefs.mode == Mode::Global {
+            "Global"
+        } else {
+            "Per Space"
+        }
+    }
+    /// Rows whose value is an interactive `‹ value ›` selector.
+    fn choice_row(&self) -> bool {
+        !self.options.back
+            && match self.page {
+                Page::Appearance => self.options.selected < 2,
+                Page::Directories => self.options.selected == 0,
+                _ => false,
+            }
+    }
+    fn cycle_choice(&mut self, previous: bool) {
+        use crate::preferences::{Brightness, Starfield, cycle};
+        match (&self.page, self.options.selected) {
+            (Page::Appearance, 0) => {
+                self.prefs.starfield = cycle(&Starfield::ALL, self.prefs.starfield, previous)
+            }
+            (Page::Appearance, 1) => {
+                self.prefs.brightness = cycle(&Brightness::ALL, self.prefs.brightness, previous)
+            }
+            (Page::Directories, 0) => {
+                self.prefs.mode = cycle(&[Mode::Global, Mode::PerSpace], self.prefs.mode, previous)
+            }
+            _ => {}
+        }
+        self.dirty = true;
+    }
     fn directory_action_count(&self) -> usize {
         if matches!(
             self.page,
@@ -931,20 +1075,208 @@ impl App {
             2
         }
     }
+    /// Rows above the list: `Use this folder` and its bullet.
     fn directory_children_offset(&self) -> usize {
-        self.directory_action_count()
+        2
+    }
+    /// Mounted rows below the list: a bullet, optional `Leave unset` and Cancel.
+    fn directory_tail(&self) -> usize {
+        if self.directory_action_count() == 3 {
+            3
+        } else {
+            2
+        }
+    }
+    /// The typed last component while it names no existing folder.
+    fn directory_prefix(&self) -> String {
+        if self.listing.existing {
+            return String::new();
+        }
+        self.listing
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+    /// "This folder" is the typed path, existing or to be created.
+    fn directory_base(&self) -> Option<PathBuf> {
+        self.listing
+            .path
+            .clone()
+            .filter(|_| self.listing.existing || self.listing.creatable)
+    }
+    /// A typed name matching no folder becomes a single `name/ (new)` entry.
+    fn directory_new_name(&self) -> Option<String> {
+        (!self.listing.existing
+            && self.listing.creatable
+            && self.listing.children.is_empty()
+            && !self.listing_pending)
+            .then(|| self.directory_prefix())
+            .filter(|n| !n.is_empty())
+    }
+    /// Faint completion of the alphabetically first matching folder.
+    fn directory_ghost(&self) -> String {
+        let prefix = self.directory_prefix();
+        if prefix.is_empty() || self.listing_pending {
+            return String::new();
+        }
+        self.listing
+            .children
+            .first()
+            .and_then(|c| c.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .and_then(|n| {
+                n.strip_prefix(prefix.as_str())
+                    .map(|rest| format!("{rest}/"))
+            })
+            .unwrap_or_default()
+    }
+    /// Browse into a folder: the input ends with `/` so typing filters its children.
+    fn browse(&mut self, path: &Path) -> Vec<Effect> {
+        let mut text = path.to_string_lossy().into_owned();
+        if !text.ends_with('/') {
+            text.push('/');
+        }
+        self.input.value = text;
+        self.input.cursor = self.input.value.len();
+        self.inspect()
     }
     fn directory_parent(&mut self) -> Vec<Effect> {
-        if let Some(path) = self.listing.path.clone()
-            && let Some(parent) = path.parent()
+        let Some(path) = self.listing.path.clone() else {
+            return vec![];
+        };
+        // A typed, unmatched name first falls back to the folder it is typed in.
+        let (current, parent) = if self.listing.existing {
+            (Some(path.clone()), path.parent().map(Path::to_path_buf))
+        } else {
+            (None, path.parent().map(Path::to_path_buf))
+        };
+        let Some(parent) = parent else {
+            return vec![];
+        };
+        if let Some(current) = current {
+            self.history.insert(current.clone(), self.options.selected);
+            self.pending_child = Some(current);
+        }
+        self.browse(&parent)
+    }
+    /// Tab accepts the faint completion; Right enters the selected subfolder, or the
+    /// completion while the top section is focused.
+    fn directory_open(&mut self, tab: bool) -> Vec<Effect> {
+        if self.listing_pending {
+            return vec![];
+        }
+        let selected_child = self
+            .options
+            .selected
+            .checked_sub(self.directory_children_offset())
+            .and_then(|i| self.listing.children.get(i))
+            .cloned()
+            .filter(|_| self.directory_new_name().is_none());
+        let completion = (!self.directory_ghost().is_empty())
+            .then(|| self.listing.children.first().cloned())
+            .flatten();
+        let child = if tab {
+            completion.or(selected_child)
+        } else {
+            selected_child.or(completion.filter(|_| self.options.selected == 0))
+        };
+        let Some(child) = child else {
+            return vec![];
+        };
+        if let Some(path) = &self.listing.path
+            && self.listing.existing
         {
             self.history.insert(path.clone(), self.options.selected);
-            self.pending_child = Some(path.clone());
-            self.input.value = parent.to_string_lossy().into_owned();
-            self.input.cursor = self.input.value.len();
-            return self.inspect();
         }
+        let remembered = self.history.get(&child).copied();
+        self.options.selected = remembered.unwrap_or(self.directory_children_offset());
+        self.options.scroll = 0;
+        self.browse(&child)
+    }
+    /// The shared confirmation listing exactly which folders will be created.
+    pub fn folders_dialog(missing: &[PathBuf]) -> crate::dialog::Dialog {
+        let count = missing.len();
+        let mut body = vec![format!(
+            "Create {count} folder{}?",
+            if count == 1 { "" } else { "s" }
+        )];
+        body.extend(missing.iter().map(|p| format!("{}/", p.display())));
+        let mut dialog = crate::dialog::Dialog::new(
+            if count == 1 {
+                "Create folder"
+            } else {
+                "Create folders"
+            },
+            body,
+            &["Create", "Cancel"],
+        );
+        dialog.selected = 1;
+        dialog
+    }
+    /// Before launching into folders that do not exist yet, confirm them; the
+    /// launch itself creates them, so Cancel leaves nothing behind.
+    fn confirm_folders_or_start(&mut self) -> Vec<Effect> {
+        if let Directory::Create { path, planned } = &self.draft.directory
+            && self.start_ready()
+        {
+            let missing = if planned.is_empty() {
+                vec![path.clone()]
+            } else {
+                planned.clone()
+            };
+            self.start_confirmation = Some((
+                Self::folders_dialog(&missing),
+                StartConfirmation::CreateFolders(path.clone()),
+            ));
+            return vec![];
+        }
+        self.begin_start()
+    }
+    /// Choosing a folder that does not exist yet. New sessions stage it until the
+    /// launch creates it; settings first confirm exactly which folders are created.
+    fn choose_new(&mut self, target: Target) -> Vec<Effect> {
+        let Some(path) = self.listing.path.clone() else {
+            return vec![];
+        };
+        let missing = if self.listing.missing.is_empty() {
+            vec![path.clone()]
+        } else {
+            self.listing.missing.clone()
+        };
+        if target == Target::Draft {
+            return self.choose_directory(
+                target,
+                Directory::Create {
+                    path,
+                    planned: missing,
+                },
+            );
+        }
+        self.create_confirmation = Some((Self::folders_dialog(&missing), target, path, missing));
         vec![]
+    }
+    /// Result of creating confirmed settings folders.
+    pub fn directories_created(
+        &mut self,
+        target: Target,
+        path: PathBuf,
+        result: Result<(), String>,
+    ) -> Vec<Effect> {
+        self.dirty = true;
+        match result {
+            Ok(()) if matches!(self.page, Page::Directory(ref t) if *t == target) => {
+                let mut effects = self.choose_directory(target, Directory::Existing(path));
+                effects.push(Effect::Save);
+                effects
+            }
+            Ok(()) => vec![],
+            Err(e) => {
+                self.error = format!("Folders were not created: {e}");
+                vec![]
+            }
+        }
     }
     fn choose_directory(&mut self, target: Target, directory: Directory) -> Vec<Effect> {
         let Some(path) = directory.path().map(Path::to_path_buf) else {
@@ -1070,7 +1402,7 @@ impl App {
                 ));
                 return vec![];
             }
-            return self.begin_start();
+            return self.confirm_folders_or_start();
         }
         let rows = self.rows();
         if !rows.get(self.options.selected).is_some_and(|r| r.enabled) {
@@ -1103,12 +1435,16 @@ impl App {
                 ),
             },
             Page::Config => match self.options.selected {
+                0 => self.push(Page::Appearance, String::new()),
+                _ => self.push(Page::Directories, String::new()),
+            },
+            Page::Appearance => {
+                self.cycle_choice(false);
+                vec![]
+            }
+            Page::Directories => match self.options.selected {
                 0 => {
-                    self.prefs.mode = if self.prefs.mode == Mode::Global {
-                        Mode::PerSpace
-                    } else {
-                        Mode::Global
-                    };
+                    self.cycle_choice(false);
                     vec![]
                 }
                 1 => self.push(
@@ -1185,39 +1521,35 @@ impl App {
                 self.revalidate()
             }
             Page::Directory(target) => {
-                if self.directory_action_count() == 3 && self.options.selected == 1 {
+                let label = rows
+                    .get(self.options.selected)
+                    .map(|r| r.label.clone())
+                    .unwrap_or_default();
+                if label == "Leave unset"
+                    && self.options.selected + self.directory_tail() >= rows.len()
+                {
                     return self.choose_directory(target, Directory::Unset);
                 }
-                if self.options.selected == self.directory_action_count() - 1 {
-                    let path = self.listing.path.clone().unwrap();
-                    let (parent, name) = if self.listing.existing {
-                        (path, String::new())
-                    } else {
-                        (
-                            path.parent().unwrap().into(),
-                            path.file_name().unwrap().to_string_lossy().into_owned(),
-                        )
-                    };
-                    self.push(Page::NewDirectory(target, parent), name)
-                } else {
-                    let path = if self.options.selected == 0 {
-                        self.listing.path.clone().unwrap()
-                    } else {
-                        self.listing
-                            .resolved
-                            .get(
-                                &self.listing.children
-                                    [self.options.selected - self.directory_children_offset()],
-                            )
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                self.listing.children
-                                    [self.options.selected - self.directory_children_offset()]
-                                .clone()
-                            })
-                    };
-                    self.choose_directory(target, Directory::Existing(path))
+                let new_entry = self.directory_new_name().is_some()
+                    && self.options.selected == self.directory_children_offset();
+                if self.options.selected == 0 || new_entry {
+                    if self.listing.existing {
+                        let path = self.listing.path.clone().unwrap();
+                        return self.choose_directory(target, Directory::Existing(path));
+                    }
+                    return self.choose_new(target);
                 }
+                let Some(child) = self
+                    .options
+                    .selected
+                    .checked_sub(self.directory_children_offset())
+                    .and_then(|i| self.listing.children.get(i))
+                    .cloned()
+                else {
+                    return vec![];
+                };
+                let path = self.listing.resolved.get(&child).cloned().unwrap_or(child);
+                self.choose_directory(target, Directory::Existing(path))
             }
             Page::NewDirectory(target, parent) => {
                 let path = parent.join(&self.input.value);
@@ -1284,8 +1616,10 @@ impl App {
         {
             match dialog.key_with_wrap(key, wrap) {
                 crate::dialog::Event::Choose(0, _) => {
+                    let folders = matches!(confirmation, StartConfirmation::CreateFolders(_));
                     let unchanged = match confirmation {
-                        StartConfirmation::SharedDirectory(directory) => {
+                        StartConfirmation::SharedDirectory(directory)
+                        | StartConfirmation::CreateFolders(directory) => {
                             self.draft.directory.path() == Some(directory.as_path())
                         }
                         StartConfirmation::UnfinishedHistory => {
@@ -1298,13 +1632,31 @@ impl App {
                     };
                     self.start_confirmation = None;
                     if !unchanged {
-                        self.error = "Directory changed; review Start Session again.".into();
+                        self.error = "Directory changed; review Start session again.".into();
                         return vec![];
                     }
-                    return self.begin_start();
+                    if folders {
+                        return self.begin_start();
+                    }
+                    return self.confirm_folders_or_start();
                 }
                 crate::dialog::Event::Dismiss | crate::dialog::Event::Choose(..) => {
                     self.start_confirmation = None
+                }
+                crate::dialog::Event::None => {}
+            }
+            return vec![];
+        }
+        if let Some((dialog, ..)) = &mut self.create_confirmation
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            match dialog.key_with_wrap(key, wrap) {
+                crate::dialog::Event::Choose(0, _) => {
+                    let (_, target, path, missing) = self.create_confirmation.take().unwrap();
+                    return vec![Effect::CreateDirectories(target, path, missing)];
+                }
+                crate::dialog::Event::Dismiss | crate::dialog::Event::Choose(..) => {
+                    self.create_confirmation = None
                 }
                 crate::dialog::Event::None => {}
             }
@@ -1382,6 +1734,40 @@ impl App {
             KeyCode::Enter => self.activate(),
             KeyCode::Char(' ') if !self.is_form() => self.activate(),
             KeyCode::Char(c) if self.is_form() => self.edit(&c.to_string()),
+            KeyCode::Home | KeyCode::End if matches!(self.page, Page::Directory(_)) => {
+                self.options
+                    .boundary_sections(&self.rows(), key.code == KeyCode::End);
+                vec![]
+            }
+            KeyCode::PageUp | KeyCode::PageDown => {
+                self.options.page(&self.rows(), key.code == KeyCode::PageUp);
+                vec![]
+            }
+            KeyCode::Up | KeyCode::Down if matches!(self.page, Page::Directory(_)) => {
+                let tail = self.directory_tail();
+                self.options.step_sections(
+                    &self.rows(),
+                    self.directory_children_offset(),
+                    tail,
+                    key.code == KeyCode::Up,
+                    wrap,
+                );
+                vec![]
+            }
+            KeyCode::Tab if matches!(self.page, Page::Directory(_)) => self.directory_open(true),
+            KeyCode::Right if matches!(self.page, Page::Directory(_)) => {
+                if self.options.back {
+                    self.options.back = false;
+                    return vec![];
+                }
+                self.directory_open(false)
+            }
+            KeyCode::Left if matches!(self.page, Page::Directory(_)) => {
+                if self.listing_pending || self.listing.path.as_deref() == Some(Path::new("/")) {
+                    return vec![];
+                }
+                self.directory_parent()
+            }
             KeyCode::Backspace | KeyCode::Delete | KeyCode::Home | KeyCode::End
                 if self.is_form()
                     && (!matches!(key.code, KeyCode::Home | KeyCode::End)
@@ -1411,44 +1797,9 @@ impl App {
                 );
                 vec![]
             }
-            KeyCode::Right if matches!(self.page, Page::Directory(_)) => {
-                if self.options.back && key.code == KeyCode::Right {
-                    self.options.back = false;
-                    return vec![];
-                }
-                let Some(index) = self
-                    .options
-                    .selected
-                    .checked_sub(self.directory_children_offset())
-                else {
-                    return vec![];
-                };
-                if let Some(child) = self.listing.children.get(index).cloned() {
-                    if let Some(path) = &self.listing.path {
-                        self.history.insert(path.clone(), self.options.selected);
-                    }
-                    self.options.selected = self
-                        .history
-                        .get(&child)
-                        .copied()
-                        .unwrap_or(self.options.selected);
-                    self.input.value = child.to_string_lossy().into_owned();
-                    self.input.cursor = self.input.value.len();
-                    self.inspect()
-                } else {
-                    vec![]
-                }
-            }
-            KeyCode::Left if matches!(self.page, Page::Directory(_)) => {
-                if self.options.selected < self.directory_children_offset()
-                    || self.options.selected
-                        >= self.directory_children_offset() + self.listing.children.len().max(1)
-                    || self.listing_pending
-                    || self.listing.path.as_deref() == Some(Path::new("/"))
-                {
-                    return vec![];
-                }
-                self.directory_parent()
+            KeyCode::Left | KeyCode::Right if self.choice_row() => {
+                self.cycle_choice(key.code == KeyCode::Left);
+                vec![]
             }
             KeyCode::Left | KeyCode::Right if self.is_form() => {
                 self.input.edit(key.code);
@@ -1481,7 +1832,7 @@ impl App {
     fn popup_title(&self) -> &'static str {
         match self.page {
             Page::Roots => "Space roots",
-            Page::Accounts => "Choose Account",
+            Page::Accounts => "Choose account",
             Page::Spaces => "Choose Space",
             Page::Name => "Session name",
             Page::SpaceName => "New Space name",
@@ -1529,6 +1880,9 @@ New directories are created only when the session starts."
     fn popup_field(&self, label: &str) -> crate::dialog::Field {
         let mut field = crate::dialog::Field::new(label, &self.input.value);
         field.input = self.input.clone();
+        if matches!(self.page, Page::Directory(_)) {
+            field.input.ghost = self.directory_ghost();
+        }
         let valid = if matches!(self.page, Page::Directory(_)) {
             self.listing_pending || self.listing.existing || self.listing.creatable
         } else if matches!(self.page, Page::NewDirectory(..)) && self.listing_pending {
@@ -1593,7 +1947,10 @@ New directories are created only when the session starts."
             note_accent: note == "Ready",
             large: editor.is_some(),
             fit_description: matches!(self.page, Page::Accounts | Page::Spaces),
-            browse_hint: editor.is_some() && self.control_tokens().contains(&"◀/▶: Parent/Open"),
+            browse_hint: editor.is_some(),
+            sections: editor
+                .is_some()
+                .then(|| (self.directory_children_offset(), self.directory_tail())),
         };
         if self
             .popup_size
@@ -1619,6 +1976,10 @@ New directories are created only when the session starts."
         field.resize(width, height);
         field.options_top = 3;
         field.background = Some(self.terminal_background);
+        field.set_style(
+            self.prefs.starfield.density(),
+            self.prefs.brightness.scale(),
+        );
         let mut canvas = field.paint(now);
         if Self::is_popup(&self.page) {
             let first = self
@@ -1647,31 +2008,49 @@ New directories are created only when the session starts."
             }
         }
         self.paint_page(&mut canvas, width, height);
+        if let Some((dialog, ..)) = &mut self.create_confirmation {
+            dialog.paint(&mut canvas, &self.manager.palette);
+        }
+        if Self::is_popup(&self.page) && height > 2 {
+            // The footer follows the top popup or dialog, not the page beneath it.
+            for cell in &mut canvas.cells[(height - 2) * width..] {
+                *cell = Cell::default();
+            }
+            crate::widgets::paint_hints(
+                &mut canvas,
+                &crate::widgets::hint_lines(self.control_tokens(), width),
+            );
+        }
         field.apply_masks(&canvas);
         canvas
     }
     fn control_tokens(&self) -> &'static [&'static str] {
-        if matches!(self.page, Page::Directory(_)) {
-            if self.options.back
-                || self
-                    .options
-                    .selected
-                    .checked_sub(self.directory_children_offset())
-                    .and_then(|i| self.listing.children.get(i))
-                    .is_none()
-            {
-                return &["▲/▼: Choose", "Enter: Select", "Esc: Back"];
+        if self.start_confirmation.is_some() || self.create_confirmation.is_some() {
+            &["▲/▼: Choose", "Enter: Select", "Esc: Cancel"]
+        } else if matches!(self.page, Page::Directory(_)) {
+            if self.directory_ghost().is_empty() {
+                return &[
+                    "▲/▼: Choose",
+                    "◀/▶: Parent/Open",
+                    "Enter: Select",
+                    "Esc: Cancel",
+                ];
             }
             &[
                 "▲/▼: Choose",
                 "◀/▶: Parent/Open",
+                "Tab: Complete",
                 "Enter: Select",
-                "Esc: Back",
+                "Esc: Cancel",
             ]
         } else if matches!(self.page, Page::NewDirectory(..)) {
-            &["Enter: Accept", "Esc: Back"]
+            &["Enter: Accept", "Esc: Cancel"]
         } else if self.is_form() {
-            &["Enter: Accept", "Esc: Back", "Ctrl-U: Clear"]
+            &["Enter: Accept", "Esc: Cancel", "Ctrl-U: Clear"]
+        } else if Self::is_popup(&self.page) {
+            &["▲/▼: Choose", "Enter: Select", "Esc: Cancel"]
+        } else if self.launch_dialog {
+            &["Esc: Close"]
         } else if self.page == Page::Home {
             &["▲/▼/◀/▶: Move", "Enter/Space: Select", "Esc: Close"]
         } else if self.page == Page::Launching {
@@ -1705,14 +2084,16 @@ New directories are created only when the session starts."
             Page::Home | Page::Management => management_title.as_str(),
             Page::Summary => {
                 if self.resume.is_some() {
-                    "Resume Session"
+                    "Resume session"
                 } else {
-                    "New Session"
+                    "New session"
                 }
             }
             Page::Config => "Settings",
+            Page::Appearance => "Appearance",
+            Page::Directories => "Default directories",
             Page::Roots => "Space roots",
-            Page::Accounts => "Choose Account",
+            Page::Accounts => "Choose account",
             Page::Spaces => "Choose Space",
             Page::Name => "Session name",
             Page::SpaceName => "New Space name",
@@ -1790,11 +2171,11 @@ New directories are created only when the session starts."
             );
             Row::gate(
                 if self.resume.is_some() {
-                    "Resume Session"
+                    "Resume session"
                 } else if self.shared_directory() {
-                    "Start Session ⚠"
+                    "Start session ⚠"
                 } else {
-                    "Start Session"
+                    "Start session"
                 },
                 enabled,
             )
@@ -2053,133 +2434,6 @@ mod tests {
         }
     }
     #[test]
-    fn directory_navigation_defaults_and_loading_keep_the_frame_and_actions() {
-        let mut a = app();
-        a.page = Page::Directory(Target::Draft);
-        a.input = TextInput::new("/projects".into());
-        a.listing(
-            a.revision,
-            Ok(Listing {
-                path: Some("/projects".into()),
-                existing: true,
-                children: vec!["/projects/child".into()],
-                ..Listing::default()
-            }),
-        );
-        assert_eq!(a.options.selected, a.directory_children_offset());
-        let mut field = Field::new(100, 30, 7);
-        a.paint(&mut field, 0, 100, 30);
-        let size = a.popup_size.as_ref().unwrap().1;
-        a.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        let c = a.paint(&mut field, 20, 100, 30);
-        let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
-        assert!(
-            text.contains("[use this directory]")
-                && text.contains("<new>/")
-                && text.contains("Loading…")
-        );
-        assert!(!text.contains("child/"));
-        let lines: Vec<_> = c
-            .cells
-            .chunks(100)
-            .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
-            .collect();
-        let create = lines.iter().position(|s| s.contains("<new>/")).unwrap();
-        let loading = lines.iter().position(|s| s.contains("Loading…")).unwrap();
-        assert_eq!(loading, create + 2);
-        let cancel = lines.iter().position(|s| s.contains("Cancel")).unwrap();
-        assert!(cancel > loading);
-        assert_eq!(cancel, loading + 2);
-        assert_eq!(a.popup_size.as_ref().unwrap().1.height, size.height);
-        a.listing(
-            a.revision,
-            Ok(Listing {
-                path: Some("/projects/child".into()),
-                existing: true,
-                children: vec![],
-                ..Listing::default()
-            }),
-        );
-        assert!(!a.listing_pending);
-        assert_eq!(a.rows()[a.options.selected].label, "(none)");
-        assert!(a.activate().is_empty());
-        a.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        a.listing(
-            a.revision,
-            Ok(Listing {
-                path: Some("/projects".into()),
-                existing: true,
-                children: vec!["/projects/a".into(), "/projects/child".into()],
-                ..Listing::default()
-            }),
-        );
-        assert_eq!(a.rows()[a.options.selected].label, "child/");
-        a.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        a.history.insert("/projects/child".into(), 1);
-        a.listing(
-            a.revision,
-            Ok(Listing {
-                path: Some("/projects/child".into()),
-                existing: true,
-                children: vec!["/projects/child/inner".into()],
-                ..Listing::default()
-            }),
-        );
-        assert_eq!(a.options.selected, 1);
-    }
-    #[test]
-    fn directory_actions_separate_children_and_empty_directories_have_parent_action() {
-        for target in [Target::Draft, Target::Global] {
-            let mut a = app();
-            a.page = Page::Directory(target);
-            a.input = TextInput::new("/projects/empty".into());
-            a.listing = Listing {
-                path: Some("/projects/empty".into()),
-                existing: true,
-                ..Listing::default()
-            };
-            let parent = a.directory_children_offset();
-            assert_eq!(a.rows()[parent].label, "(none)");
-            assert!(!a.rows()[parent].enabled);
-            assert_eq!(a.rows()[parent - 1].label, "<new>/");
-            assert_eq!(a.rows().last().unwrap().label, "Cancel");
-            assert!(a.rows()[a.rows().len() - 2].separator);
-            a.options.selected = parent;
-            assert!(!a.control_tokens().contains(&"◀/▶: Parent/Open"));
-            assert!(
-                a.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
-                    .is_empty()
-            );
-            assert_eq!(a.input.value, "/projects/empty");
-            assert!(a.activate().is_empty());
-            assert!(
-                matches!(&a.key(KeyEvent::new(KeyCode::Left,KeyModifiers::NONE))[..], [Effect::Inspect(_, p)] if p == "/projects")
-            );
-            assert_eq!(
-                a.pending_child.as_deref(),
-                Some(Path::new("/projects/empty"))
-            );
-            a.listing = Listing {
-                path: Some("/projects".into()),
-                existing: true,
-                children: vec!["/projects/empty".into()],
-                ..Listing::default()
-            };
-            let rows = a.rows();
-            assert_eq!(rows[parent - 1].label, "<new>/");
-            assert_eq!(rows[parent].label, "empty/");
-            a.options.selected = parent - 1;
-            a.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-            assert_eq!(a.options.selected, parent);
-            assert!(a.control_tokens().contains(&"◀/▶: Parent/Open"));
-            a.options.back = true;
-            assert!(!a.control_tokens().contains(&"◀/▶: Parent/Open"));
-            a.listing.path = Some("/".into());
-            a.listing.children.clear();
-            assert!(!a.rows().iter().any(|r| r.label == "Go to Parent"));
-        }
-    }
-    #[test]
     fn editor_popup_keeps_summary_and_native_cursor_then_restores_selection() {
         let mut a = app();
         a.page = Page::Summary;
@@ -2258,6 +2512,22 @@ mod tests {
                     .all(|c| !c.bold && c.fg == Cell::default().fg)
             );
         }
+    }
+    #[test]
+    fn rapid_legacy_presses_are_never_dropped_and_wrap_at_the_edge() {
+        // Diagnosed on 8216b1a: quick re-presses at the last row were read as a
+        // hold and silently ignored. Every press now moves (or wraps once).
+        let mut app = app();
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let rows = app.manager.rows().iter().filter(|r| !r.separator).count();
+        for _ in 0..rows {
+            assert!(app.key(down).is_empty());
+        }
+        assert_eq!(app.manager.options.selected, 0, "the last press wrapped");
+        assert!(app.flush_navigation().is_empty(), "nothing was deferred");
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        app.key(up);
+        assert_eq!(app.manager.options.selected, app.manager.rows().len() - 1);
     }
     #[test]
     fn repeated_arrows_stop_and_a_released_press_wraps() {
@@ -2346,7 +2616,7 @@ mod tests {
         )
     }
     #[test]
-    fn topbar_roots_and_summary_share_angle_bracket_unset_placeholders() {
+    fn topbar_roots_and_summary_share_dim_not_set_placeholders() {
         let mut a = app();
         a.prefs.global_root = Some("/global-projects".into());
         a.prefs
@@ -2376,21 +2646,32 @@ mod tests {
                 .iter()
                 .map(|c| c.glyph.as_str())
                 .collect::<String>()
-                .contains("<unset>")
+                .contains("not set")
         );
         a.page = Page::Summary;
         a.draft = Draft::default();
-        assert!(a.rows().iter().all(|row| row.label.ends_with("<unset>")));
+        // Unset fields show a dim placeholder in the value column, not in the label.
+        for row in a.rows().iter().take(4) {
+            assert_eq!(row.preview.as_deref(), Some("not set"));
+            assert_eq!(row.preview_fg, crate::widgets::MUTED);
+            assert!(row.label.ends_with(':'));
+        }
         a.prefs.global_root = None;
-        a.page = Page::Config;
-        assert_eq!(a.rows()[1].preview.as_deref(), Some("<unset>"));
+        a.page = Page::Directories;
+        assert!(
+            a.rows()[1]
+                .preview
+                .as_deref()
+                .unwrap()
+                .starts_with("not set")
+        );
         a.page = Page::Roots;
         a.spaces = vec![Workspace {
             workspace_id: "missing".into(),
             label: "No root".into(),
             focused: false,
         }];
-        assert_eq!(a.rows()[0].preview.as_deref(), Some("<unset>"));
+        assert_eq!(a.rows()[0].preview.as_deref(), Some("not set"));
     }
     #[test]
     fn shared_directory_warns_on_hover_and_requires_confirmation_without_mutation() {
@@ -2416,7 +2697,7 @@ mod tests {
             a.options.selected = selected;
             let c = a.paint(&mut Field::new(120, 30, 1), 0, 120, 30);
             let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
-            assert!(text.contains("Start Session ⚠"));
+            assert!(text.contains("Start session ⚠"));
             assert_eq!(text.contains("(existing session in dir)"), selected == 4);
         }
         assert!(a.activate().is_empty());
@@ -2469,9 +2750,9 @@ mod tests {
             assert_eq!(rows[0].preview_position(inner, left).unwrap(), left + 10);
             assert_eq!(
                 rows[0].preview_position(inner, left).unwrap()
-                    + rows[0].preview.as_ref().unwrap().len(),
+                    + rows[0].preview.as_ref().unwrap().chars().count(),
                 rows[1].preview_position(inner, left).unwrap()
-                    + rows[1].preview.as_ref().unwrap().len()
+                    + rows[1].preview.as_ref().unwrap().chars().count()
             );
         }
         a.accounts = (0..30)
@@ -2691,37 +2972,362 @@ mod tests {
         a.inventory(vec![account(false, false, 110)], vec![], 108);
         assert!(a.draft.account.is_none());
     }
-    #[test]
-    fn directory_right_and_tab_do_not_browse_from_action_rows() {
+    fn picker(target: Target, children: usize) -> App {
         let mut a = app();
-        a.page = Page::Directory(Target::Draft);
-        a.input = TextInput::new("/tmp".into());
+        a.page = Page::Directory(target);
+        a.input = TextInput::new("/projects/".into());
         a.listing = Listing {
-            path: Some("/tmp".into()),
+            path: Some("/projects".into()),
             existing: true,
-            children: vec!["/tmp/child".into()],
+            children: (0..children)
+                .map(|i| format!("/projects/project{i:02}").into())
+                .collect(),
             ..Listing::default()
         };
-        for row in [0, 1] {
-            for code in [KeyCode::Right, KeyCode::Tab] {
-                a.options.selected = row;
-                assert!(a.key(KeyEvent::new(code, KeyModifiers::NONE)).is_empty());
-                assert_eq!(a.input.value, "/tmp");
-                assert_eq!(a.options.selected, row);
-            }
-        }
-        a.options.selected = a.directory_children_offset();
+        a
+    }
+    fn screen(c: &crate::render::Canvas) -> Vec<String> {
+        c.cells
+            .chunks(c.width)
+            .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
+            .collect()
+    }
+    fn key(a: &mut App, code: KeyCode) -> Vec<Effect> {
+        a.key_with_wrap(KeyEvent::new(code, KeyModifiers::NONE), true)
+    }
+    #[test]
+    fn picker_mounts_use_this_folder_above_and_cancel_below_a_scrolling_list() {
+        let mut a = picker(Target::Draft, 36);
+        let rows = a.rows();
+        assert_eq!(rows[0].label, "Use this folder");
+        assert!(rows[1].separator);
+        assert_eq!(rows[2].label, "project00/");
+        assert!(rows[rows.len() - 2].separator);
+        assert_eq!(rows.last().unwrap().label, "Cancel");
         assert!(
-            a.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-                .is_empty()
+            !rows
+                .iter()
+                .any(|r| r.label.contains("<new>") || r.label.contains('['))
         );
-        assert_eq!(a.input.value, "/tmp");
+        let mut field = Field::new(80, 26, 1);
+        let paint = |a: &mut App, field: &mut Field| screen(&a.paint(field, 0, 80, 26));
+        a.options.selected = 2;
+        let top = paint(&mut a, &mut field);
+        let use_row = top
+            .iter()
+            .position(|l| l.contains("Use this folder"))
+            .unwrap();
+        assert!(top[use_row + 2].contains("project00/"));
+        let cancel = top.iter().position(|l| l.contains("Cancel")).unwrap();
+        // Up from the first list item enters the top section without scrolling.
+        key(&mut a, KeyCode::End);
+        assert_eq!(a.options.selected, a.rows().len() - 1);
+        let after_end = paint(&mut a, &mut field);
         assert!(
-            matches!(&a.key(KeyEvent::new(KeyCode::Right,KeyModifiers::NONE))[..],[Effect::Inspect(_,p)] if p=="/tmp/child")
+            after_end[use_row + 2].contains("project00/"),
+            "End keeps the list"
+        );
+        assert_eq!(
+            after_end.iter().position(|l| l.contains("Cancel")),
+            Some(cancel)
+        );
+        // Up from the bottom section re-enters the list at its last item.
+        key(&mut a, KeyCode::Up);
+        assert_eq!(a.rows()[a.options.selected].label, "project35/");
+        let bottom = paint(&mut a, &mut field);
+        assert!(bottom.iter().any(|l| l.contains("project35/")));
+        assert!(
+            bottom[use_row].contains("Use this folder"),
+            "top stays mounted"
+        );
+        let scroll = a.options.scroll;
+        key(&mut a, KeyCode::Down);
+        assert_eq!(a.rows()[a.options.selected].label, "Cancel");
+        assert_eq!(
+            a.options.scroll, scroll,
+            "entering the bottom never scrolls"
+        );
+        key(&mut a, KeyCode::Home);
+        assert_eq!(a.options.selected, 0);
+        assert_eq!(a.options.scroll, scroll, "Home keeps the list position too");
+        key(&mut a, KeyCode::Down);
+        assert_eq!(a.options.selected, 2, "re-enters at the list's first item");
+        key(&mut a, KeyCode::PageDown);
+        assert_eq!(a.options.selected, 2 + a.options.capacity - 1, "one page");
+        key(&mut a, KeyCode::PageUp);
+        assert!(a.options.selected <= 4);
+    }
+    #[test]
+    fn typed_prefix_filters_highlights_and_ghosts_the_first_match() {
+        let mut a = picker(Target::Draft, 0);
+        a.input = TextInput::new("/projects/fo".into());
+        a.listing = Listing {
+            path: Some("/projects/fo".into()),
+            existing: false,
+            creatable: true,
+            children: vec!["/projects/fob".into(), "/projects/foo".into()],
+            missing: vec!["/projects/fo".into()],
+            ..Listing::default()
+        };
+        let rows = a.rows();
+        assert_eq!(rows[2].label, "fob/");
+        assert_eq!(rows[2].highlight, 2);
+        assert_eq!(a.directory_ghost(), "b/");
+        assert!(a.control_tokens().contains(&"Tab: Complete"));
+        a.options.selected = 0;
+        let c = a.paint(&mut Field::new(80, 26, 1), 0, 80, 26);
+        let lines = screen(&c);
+        assert!(
+            lines.iter().any(|l| l.contains("/projects/fob/")),
+            "ghost completes: {lines:#?}"
+        );
+        let y = lines.iter().position(|l| l.contains("foo/")).unwrap();
+        let x = lines[y].chars().position(|ch| ch == 'f').unwrap();
+        let (prefix, rest) = (&c.cells[y * 80 + x], &c.cells[y * 80 + x + 2]);
+        assert_ne!(prefix.fg, rest.fg, "typed prefix is brighter");
+        let ghost_y = lines
+            .iter()
+            .position(|l| l.contains("/projects/fob/"))
+            .unwrap();
+        let gx = lines[ghost_y].find("fob/").unwrap() + 2;
+        let gx = lines[ghost_y][..gx].chars().count();
+        assert_eq!(c.cells[ghost_y * 80 + gx].fg, a.manager.palette.muted);
+        assert!(
+            matches!(&key(&mut a, KeyCode::Tab)[..], [Effect::Inspect(_, p)] if p == "/projects/fob/")
         );
     }
     #[test]
-    fn default_directory_actions_clear_only_the_selected_root() {
+    fn unmatched_name_is_one_new_entry_staged_until_launch() {
+        let mut a = picker(Target::Draft, 0);
+        a.input = TextInput::new("/projects/newname".into());
+        a.listing = Listing {
+            path: Some("/projects/newname".into()),
+            existing: false,
+            creatable: true,
+            missing: vec!["/projects/newname".into()],
+            ..Listing::default()
+        };
+        let rows = a.rows();
+        assert_eq!(rows[2].label, "newname/");
+        assert_eq!(rows[2].preview.as_deref(), Some("(new)"));
+        assert_eq!(rows[2].preview_fg, crate::widgets::MUTED);
+        assert_eq!(rows[0].preview.as_deref(), Some("(new)"));
+        a.stack.push(Saved {
+            page: Page::Summary,
+            options: Options::default(),
+            text: String::new(),
+            listing: Listing::default(),
+            listing_pending: false,
+            popup_size: None,
+        });
+        a.options.selected = 2;
+        let effects = a.activate();
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::CreateDirectories(..)))
+        );
+        assert!(
+            a.create_confirmation.is_none(),
+            "new sessions stage, never create"
+        );
+        assert_eq!(
+            a.draft.directory,
+            Directory::Create {
+                path: "/projects/newname".into(),
+                planned: vec!["/projects/newname".into()],
+            }
+        );
+        assert_eq!(a.page, Page::Summary);
+        // The form marks the staged folder like the picker does.
+        let dir = &a.rows()[3];
+        assert_eq!(dir.preview.as_deref(), Some("(new)"));
+        assert!(!dir.preview_selected_only);
+    }
+    #[test]
+    fn left_is_parent_on_every_row_and_right_enters_subfolders() {
+        let rows = picker(Target::Global, 3).rows().len();
+        for row in [0, 2, rows - 2, rows - 1] {
+            let mut a = picker(Target::Global, 3);
+            a.options.selected = row;
+            assert!(
+                matches!(&key(&mut a, KeyCode::Left)[..], [Effect::Inspect(_, p)] if p == "/"),
+                "row {row}"
+            );
+        }
+        let mut a = picker(Target::Global, 3);
+        a.options.selected = 0;
+        assert!(
+            key(&mut a, KeyCode::Right).is_empty(),
+            "no completion to accept"
+        );
+        a.options.selected = 3;
+        assert!(
+            matches!(&key(&mut a, KeyCode::Right)[..], [Effect::Inspect(_, p)] if p == "/projects/project01/")
+        );
+    }
+    #[test]
+    fn settings_folders_are_created_only_after_a_stacked_confirmation() {
+        let mut a = picker(Target::Global, 0);
+        a.stack.push(Saved {
+            page: Page::Directories,
+            options: Options::default(),
+            text: String::new(),
+            listing: Listing::default(),
+            listing_pending: false,
+            popup_size: None,
+        });
+        a.input = TextInput::new("/projects/new-a/new-b".into());
+        a.listing = Listing {
+            path: Some("/projects/new-a/new-b".into()),
+            existing: false,
+            creatable: true,
+            missing: vec!["/projects/new-a".into(), "/projects/new-a/new-b".into()],
+            ..Listing::default()
+        };
+        a.options.selected = 0;
+        assert!(a.activate().is_empty());
+        let d = &a.create_confirmation.as_ref().unwrap().0;
+        assert_eq!(
+            d.body,
+            [
+                "Create 2 folders?",
+                "/projects/new-a/",
+                "/projects/new-a/new-b/"
+            ]
+        );
+        // Stacked over the still-open picker.
+        let lines = screen(&a.paint(&mut Field::new(90, 28, 1), 0, 90, 28));
+        assert!(lines.iter().any(|l| l.contains("Create 2 folders?")));
+        assert!(lines.iter().any(|l| l.contains("Start directory")));
+        assert!(a.control_tokens().contains(&"Esc: Cancel"));
+        // Cancel closes only the confirmation; the picker is untouched.
+        assert!(key(&mut a, KeyCode::Esc).is_empty());
+        assert!(a.create_confirmation.is_none());
+        assert_eq!(a.page, Page::Directory(Target::Global));
+        assert_eq!(a.input.value, "/projects/new-a/new-b");
+        assert_eq!(a.options.selected, 0);
+        assert!(a.prefs.global_root.is_none());
+        // Create emits exactly those folders, then saves and closes the picker.
+        a.activate();
+        a.paint(&mut Field::new(90, 28, 1), 0, 90, 28);
+        key(&mut a, KeyCode::Up);
+        let effects = key(&mut a, KeyCode::Enter);
+        let [Effect::CreateDirectories(Target::Global, path, missing)] = &effects[..] else {
+            panic!("{effects:?}")
+        };
+        assert_eq!(missing.len(), 2);
+        let effects = a.directories_created(Target::Global, path.clone(), Ok(()));
+        assert!(effects.iter().any(|e| matches!(e, Effect::Save)));
+        assert_eq!(
+            a.prefs.global_root.as_deref(),
+            Some(Path::new("/projects/new-a/new-b"))
+        );
+        assert_eq!(a.page, Page::Directories);
+        // Existing folders need no confirmation.
+        let mut b = picker(Target::Global, 0);
+        b.options.selected = 0;
+        b.activate();
+        assert!(b.create_confirmation.is_none());
+        assert_eq!(b.prefs.global_root.as_deref(), Some(Path::new("/projects")));
+    }
+    #[test]
+    fn new_session_start_confirms_staged_folders_before_launching() {
+        let mut a = app();
+        a.page = Page::Summary;
+        a.launch_supported = true;
+        a.manager.sessions_known = true;
+        a.draft = Draft {
+            account: Some("codex:personal".into()),
+            space: Some(Space::Existing {
+                id: "s".into(),
+                label: "Space".into(),
+            }),
+            name: "Another".into(),
+            directory: Directory::Create {
+                path: "/projects/new-a".into(),
+                planned: vec!["/projects/new-a".into()],
+            },
+            name_valid: true,
+            directory_valid: true,
+            revision: 1,
+        };
+        a.options.selected = 4;
+        assert!(
+            a.activate().is_empty(),
+            "nothing launches before confirming"
+        );
+        let (d, _) = a.start_confirmation.as_ref().unwrap();
+        assert_eq!(d.body, ["Create 1 folder?", "/projects/new-a/"]);
+        assert!(key(&mut a, KeyCode::Esc).is_empty());
+        assert!(a.request.is_none() && a.start_confirmation.is_none());
+        a.activate();
+        a.paint(&mut Field::new(90, 28, 1), 0, 90, 28);
+        key(&mut a, KeyCode::Up);
+        assert!(
+            matches!(key(&mut a, KeyCode::Enter).as_slice(), [Effect::Start(r)]
+            if r["directory"]["create"] == json!(["/projects/new-a"]))
+        );
+    }
+    #[test]
+    fn settings_are_submenus_with_aligned_values_and_cycling_choices() {
+        use crate::preferences::{Brightness, Starfield};
+        let mut a = app();
+        a.page = Page::Config;
+        let rows = a.rows();
+        assert_eq!(rows[0].label, "Appearance");
+        assert_eq!(rows[0].preview.as_deref(), Some("Normal · Normal ›"));
+        assert_eq!(rows[1].label, "Default directories");
+        assert_eq!(rows[0].preview_column, rows[1].preview_column);
+        assert_eq!(rows[1].preview_fg, crate::widgets::MUTED);
+        a.options.selected = 0;
+        a.activate();
+        assert_eq!(a.page, Page::Appearance);
+        let rows = a.rows();
+        assert_eq!(rows[0].preview.as_deref(), Some("‹ Normal ›"));
+        assert!(rows[0].preview_choice && rows[1].preview_choice);
+        key(&mut a, KeyCode::Right);
+        assert_eq!(a.prefs.starfield, Starfield::Lively);
+        key(&mut a, KeyCode::Right);
+        assert_eq!(a.prefs.starfield, Starfield::Off);
+        assert!(!a.options.back, "Left/Right cycle instead of going back");
+        key(&mut a, KeyCode::Down);
+        key(&mut a, KeyCode::Left);
+        assert_eq!(a.prefs.brightness, Brightness::Dim);
+        // Off paints no stars at all; leaving the page saves.
+        let c = a.paint(&mut Field::new(80, 24, 1967), 4000, 80, 24);
+        assert!(
+            !c.cells
+                .iter()
+                .any(|c| matches!(c.glyph.as_str(), "*" | "+" | "."))
+        );
+        assert!(matches!(
+            key(&mut a, KeyCode::Esc).first(),
+            Some(Effect::Save)
+        ));
+        assert_eq!(a.page, Page::Config);
+        a.options.selected = 1;
+        a.activate();
+        assert_eq!(a.page, Page::Directories);
+        assert_eq!(a.rows()[0].preview.as_deref(), Some("‹ Global ›"));
+        key(&mut a, KeyCode::Right);
+        assert_eq!(a.prefs.mode, Mode::PerSpace);
+        // Persisted beside the other preferences.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("preferences.json");
+        a.prefs.save(&path).unwrap();
+        let loaded = Preferences::load(&path).unwrap();
+        assert_eq!(loaded.starfield, Starfield::Off);
+        assert_eq!(loaded.brightness, Brightness::Dim);
+        // Older files without the fields keep the defaults.
+        std::fs::write(&path, r#"{"version":1,"mode":"global","global_root":null,"space_roots":{},"last_account":null}"#).unwrap();
+        assert_eq!(
+            Preferences::load(&path).unwrap().starfield,
+            Starfield::Normal
+        );
+    }
+    #[test]
+    fn leave_unset_clears_only_the_selected_root() {
         for target in [Target::Global, Target::Space("w1".into())] {
             let mut a = app();
             let space_key = Preferences::key(&a.instance, "w1");
@@ -2729,12 +3335,6 @@ mod tests {
             a.prefs
                 .space_roots
                 .insert(space_key.clone(), "/tmp/space".into());
-            a.prefs
-                .root_plans
-                .insert("global".into(), vec!["/tmp/global".into()]);
-            a.prefs
-                .root_plans
-                .insert(space_key.clone(), vec!["/tmp/space".into()]);
             a.push(Page::Directory(target.clone()), "/tmp".into());
             a.listing = Listing {
                 path: Some("/tmp".into()),
@@ -2742,32 +3342,17 @@ mod tests {
                 children: vec!["/tmp/child".into()],
                 ..Listing::default()
             };
-            assert_eq!(a.rows()[0].label, "[use this directory]");
-            assert_eq!(a.rows()[1].label, "[leave unset]");
-            assert_eq!(a.rows()[2].label, "<new>/");
-            for row in 0..3 {
-                a.options.selected = row;
-                a.options.back = false;
-                assert!(
-                    a.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
-                        .is_empty()
-                );
-                assert_eq!(a.input.value, "/tmp");
-                a.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-                assert!(!a.options.back);
-            }
-            a.options.back = false;
-            a.options.selected = 1;
+            let rows = a.rows();
+            assert_eq!(rows[rows.len() - 2].label, "Leave unset");
+            a.options.selected = rows.len() - 2;
             a.activate();
             match target {
                 Target::Global => {
                     assert!(a.prefs.global_root.is_none());
-                    assert!(!a.prefs.root_plans.contains_key("global"));
                     assert!(a.prefs.space_roots.contains_key(&space_key));
                 }
                 Target::Space(_) => {
                     assert!(!a.prefs.space_roots.contains_key(&space_key));
-                    assert!(!a.prefs.root_plans.contains_key(&space_key));
                     assert!(a.prefs.global_root.is_some());
                 }
                 _ => unreachable!(),
@@ -2777,26 +3362,25 @@ mod tests {
     #[test]
     fn unavailable_options_can_be_hovered_but_not_activated() {
         let mut a = app();
-        a.page = Page::Config;
+        a.page = Page::Directories;
         a.prefs.mode = Mode::PerSpace;
         a.options.selected = 0;
         a.options.step(&a.rows(), false, false);
         assert_eq!(a.options.selected, 1);
         assert!(!a.rows()[1].enabled);
         assert!(a.activate().is_empty());
-        assert_eq!(a.page, Page::Config);
-        assert!(a.rows()[0].label.starts_with("Default Dir:"));
+        assert_eq!(a.page, Page::Directories);
+        assert_eq!(a.rows()[0].label, "Default directory");
     }
     #[test]
     fn root_paths_use_bare_gray_selected_previews_with_one_space_and_global_fit() {
         let mut a = app();
         a.prefs.global_root = Some("/projects/global".into());
-        a.page = Page::Config;
+        a.page = Page::Directories;
         let row = a.rows().remove(1);
-        assert_eq!(row.preview.as_deref(), Some("/projects/global"));
-        assert_eq!(row.preview_gap, 1);
-        assert_eq!(row.preview_fg, crate::widgets::SECONDARY);
-        assert!(row.preview_selected_only);
+        assert_eq!(row.preview.as_deref(), Some("/projects/global ›"));
+        assert_eq!(row.preview_fg, crate::widgets::MUTED);
+        assert!(!row.preview_selected_only);
         a.page = Page::Roots;
         a.spaces = vec![
             Workspace {
@@ -3029,9 +3613,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             assert!(starts.iter().all(|x| *x == starts[0]));
-            assert!(a.rows().iter().all(|r| r.label.as_bytes()[8] == b' '));
             assert!(row(7).contains('•'));
-            assert!(row(8).contains("Start Session"));
+            assert!(row(8).contains("Start session"));
         }
         a.page = Page::Home;
         a.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));

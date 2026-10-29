@@ -88,7 +88,7 @@ blank bullet spacer. Choice pickers end with Cancel after exactly one bullet
 spacer; it follows the last choice directly rather than the bottom of the frame.
 Choice lists scroll together. The directory picker alone mounts Cancel and its
 bullet spacer at the list’s bottom; all actions above it scroll away. Directory actions
-use `[use this directory]`, `[leave unset]` and `<new>/`; Space creation uses
+use the mounted `Use this folder` row and typed-name entries; Space creation uses
 `[create new space]`. Space creation is the first row,
 with Space choices immediately after it. Account selection opens on
 the current selection (including a prefilled default), or the first account when
@@ -163,7 +163,7 @@ Session Details, Rename Session (Sessionsation name; the native title follows at
 the next launch or resume) and, when stopped, Start Session. Everything else is
 omitted. Stale or unknown sessions explain why they cannot be started.
 
-Home orders New Session, Manage Sessions, Add Account, a dot separator and
+Home orders New session, Manage sessions, Add account, a dot separator and
 Settings, followed by every account in backend order. There is no separate accounts
 page: the list scrolls when it does not fit and bars shrink (down to 6 cells) on
 narrow screens. Columns are fixed per list: selection lane, provider symbol, names
@@ -176,7 +176,10 @@ Up/Down move it, Enter saves with `account reorder <provider:name> --position <i
 while an account is focused.
 Entering a page from its parent always starts at the first selectable row; Back/Esc
 restores the parent's previous selection and scroll. Refreshed lists retain focus by
-stable identity. Close on Home detaches the viewer without stopping agents.
+stable identity. Close on Home detaches the viewer without stopping agents; Esc
+on Home needs a second press within one second (the footer says "Esc again to
+close"). Footers follow the top layer: "Esc: Back" in menus, "Esc: Cancel" in
+dialogs and pickers, "Enter/Esc: Close" in information dialogs.
 
 On Home, the name selector uses the outline `▷` (same width as `▶`; the right-side `◀` stays filled). While a name is selected, other account names
 use the darker bullet hue. Focus on any account name or usage/status also dims
@@ -196,14 +199,21 @@ text statuses use the darker bullet hue, like the other dimmed usage bars. Enter
 required, Restore for Deregistered, or usage details otherwise. These dialogs retain
 the account and right-side focus when closed; mutations require confirmation.
 
-Bars show remaining allowance for the periods the backend reports: 5h/weekly or
+Bars show remaining allowance (`61% left 5h`) for the periods the backend reports: 5h/weekly or
 weekly only. Bold lines with half-cell endcaps deplete into visible gray; custom limits appear
-inside the bar. Thresholds at the extreme ends use `├`/`┝` or `┤`/`┥`,
+inside the bar as `┿`, explained by a dim legend in account Details. A missing
+window keeps its row as a dashed track with `?% left`. The observation age
+(`(42m ago)`) hangs right of the centred block, once per account; if any cannot
+fit inline, every account shows it under its name. It stays dark grey unless the
+usage itself is focused. Account Details show both meanings (`61% left · 39% used`)
+and the backend-published account home as Directory when present. Session details
+share one layout: Account, Status, Directory, Last active and Created, then a dim
+Identifiers group. Thresholds at the extreme ends use `├`/`┝` or `┤`/`┥`,
 matching the adjacent stroke weight. Percentages span the actual center-to-center
 line length (one cell less than the rendered width). Percentages precede period labels in aligned columns. Missing
 observations show Disabled, Login required or Usage unavailable as appropriate;
 stale observations are marked. New/resume account pickers use standard bullets
-with white/gray names and an aligned `x% 5h / x% wk` block one space after the longest name, omitting the short period and
+with white/gray names and an aligned `x% 5h · x% wk` block one space after the longest name, omitting the short period and
 slash for weekly-only accounts. Every account’s status stays visible on the right of its row, independently of selection. Optional usage gives way when width is constrained. Ready uses the popup accent, unbolded; other statuses remain unbolded gray. Account names accept at most 30 ASCII characters;
 typing and paste stop at the limit.
 Duplicate names immediately invalidate the editor and disable confirmation.
@@ -277,10 +287,8 @@ New Session remains on the home menu. Archive, Restore and permanent Delete call
 the public CLI with stable identity, generation and request ID after confirmation.
 Delete requires typing the displayed session name. Archive storage and restoration
 belong to the backend; restoration does not start an agent or send a message.
-Archived session IDs appear in parentheses beside the hovered name, in normal
-unbolded deselected gray. Inline/below placement is decided for the whole list,
-including offscreen rows; if any ID cannot fit inline, the selected ID appears
-centered below instead.
+Archived sessions show only their names; two archives with the same name gain
+a short ID suffix (`codex-root · 7792`). Full IDs live in Session details.
 
 Session Details opens from cached state immediately and refreshes on the one-second
 read-only state poll, retaining the last details during discovery failures. It shows
@@ -303,12 +311,14 @@ Operations shows progress, fresh confirmation prompts and supported recovery.
 Hover details are selected-only and disappear on Back/Close. Fit is decided for
 the whole list: if any detail cannot fit inline, the selected detail moves below
 the options or pagination, centered, unbolded, with one blank line above and below.
-Long detached text is ellipsized to one line. Paths in Settings and Space roots use
-this same rule. Only the selected operation shows its gray ID. If any does not fit beside the row,
-it is centered below the list (below the visible-range counter while scrolling),
-with one blank line above and at least one before the bottom controls. The list
-and counter move upward to reserve that space; if width/height cannot fit it,
-the ID stays hidden.
+Long detached text is ellipsized to one line. Space roots use this same rule.
+Operations has a filter row (`Show  ‹ All ›`, cycled with Left/Right: All, In
+progress, Failed, Completed) above day groups (`• Today`, `• Yesterday`, `• Mon Oct 26`;
+undated legacy records last). Each row shows relative creation time, the subject
+(provider symbol and session or account), a plain kind (Move to Space, Delete
+account, Resume…) and a dim status; failures carry their reason inline. IDs are
+shown only in the operation's details, in a dim Identifiers group; details are
+titled by kind.
 It also lists original New/Resume receipts after reopening, without resending them.
 Operations are newest-first by creation time; unknown legacy creation dates sort
 last. Status updates retain the selected ID. New/Resume launches display complete
@@ -328,18 +338,20 @@ It still checks membership in the intended HERDR pane/socket and rechecks the
 generation before focusing. Older backends retain the discovery-based check;
 neither path launches or submits input to an agent.
 
-Manage Sessions sorts busy, idle, then inactive sessions, newest access first
-within each group. A blank-line bullet separator divides active and inactive
-sessions only when both groups exist. Refreshes retain selection by stable ID. It keeps busy activity visible with the reference ten-frame Braille
-spinner, advancing every 100 ms after one space following the account. The timer
-follows after another space when it fits inline, otherwise uses the shared hover
-panel. Read-only state refreshes once per second, one request at a time; idle, exit,
-unknown activity or discovery failure removes the spinner. Active session account tags use the normal bullet hue on row hover and the dimmer
-hue otherwise and bold on row selection. Inactive rows omit account tags and put
-a normal deselected-gray, unbolded asterisk at the start of the account column. Their `(inactive)`
-preview has a separate list-wide fit calculation from active timers: it can appear
-inline farther left, otherwise below the list. Only an inline parenthetical replaces
-the asterisk. Back hides previews. Timers use normal deselected gray.
+Manage sessions sorts busy, idle, then inactive sessions, newest access first
+within each group, with a bullet separator between active and inactive groups.
+Every row has the name, a state marker (the provider's spinner while busy, `●`
+while running idle, nothing for saved history) and a dim provider symbol and
+account (`liq-glass-lead  ⠙  ⏣ gate1`). Name width scales with the popup (about
+30% of its width, 12–40 cells); unselected long names end in `…`, and the selected
+one scrolls left (pause, scroll, pause, loop) to reveal the rest. A session with a
+pending or recently failed operation shows a badge after the account (`◜ moving to
+work` animates while active, `✗ move failed`); Right moves focus onto the badge,
+Enter opens that operation's progress or details over the list, and Left returns.
+The selected row's timer or state (`stale`) hangs right when no badge is shown.
+"Showing saved sessions; refreshing…" appears only on this list and only until
+fresh state arrives. Unavailable actions stay visible, greyed, with a short dim
+reason aligned in one column (`End session  · not supported for Claude Code`).
 
 Errors and status notices use a centered bottom line, separated from controls by
 one blank line. Menus reserve the status lane before calculating scroll capacity.
@@ -349,17 +361,11 @@ without an automatic retry.
 Menu bottom controls and pagination share the reference soft accent and sweep
 (55% brightness, regular weight). Popup controls use that same light colored
 accent, including directory navigation, pagination and dialog scroll hints. Each
-control line is centered independently inside its surface. Held arrows wrap once per hold, only if that hold began at the corresponding edge (Up at the
-top, Down at the bottom). Holds begun elsewhere stop at the edge; release and
-press again there to wrap. Home, management menus, directory pickers and dialog
-buttons share this selection-navigation implementation. Terminals
-without repeat/release events use a 150 ms quiet gap plus a 100 ms lookahead
-for an ambiguous delayed first repeat (up to 1.2 seconds). A following repeat
-continues the original hold; a distinct tap resolves when that short window ends.
-Native repeat/release events provide exact boundaries without this lookahead.
-Legacy byte streams cannot report physical release directly. Unrelated releases
-never rearm a held arrow. The same navigation core handles either axis; existing
-Left/Right menu actions are unchanged. The first press always moves immediately; repeat timing comes from the
+control line is centered independently inside its surface. Every key press is delivered at once; nothing is deferred. A press at an edge wraps.
+A hold (the same direction within 150 ms, including Termux's legacy press stream)
+crosses an edge at most once and never spins around; native repeat events never
+wrap. Home, management menus, directory pickers and dialog buttons share this
+selection-navigation implementation. The first press always moves immediately; repeat timing comes from the
 terminal; only ambiguous legacy follow-up events use the lookahead. Home/End jump to the first/last list option
 (including directory lists); text editors retain cursor Home/End. These shortcuts
 do not add footer hints.
@@ -395,8 +401,10 @@ gray, and appear as bare paths one space after the option text when inline.
 Open **New Session**, edit Account, Space, Name and Directory in any order, then
 select Start Session directly below the fields and separator. The top bar shows the
 configured global or selected-Space project root, depending on the default-directory
-mode. Unset values throughout the UI use `<unset>`, including the top bar,
-session fields and root previews.
+mode. Unset values throughout the UI use a dim `not set` placeholder, including
+the top bar, session fields and root previews. A staged new folder is marked
+`(new)` beside Dir, and Start first confirms exactly which folders the launch
+will create (Create/Cancel); Cancel creates and launches nothing.
 
 The public CLI session catalog refreshes asynchronously while creating a session.
 When another active or inactive session has the same directory, Start Session shows
@@ -414,22 +422,18 @@ a directory or stage a named child. Existing automatic paths require explicit
 selection. Directory Enter
 selects the current option. In an unfamiliar directory, focus starts on the first
 subdirectory, or the non-activating `(none)` placeholder when empty; revisiting restores its selection.
-[use this directory], [leave unset] (for defaults) and <new>/ start the scrolling
-list, immediately followed by subdirectories without a bullet spacer. Cancel and
-its one bullet spacer stay attached to the visible list. Scrolling lists put the
-centered range counter on that same spacer row, followed immediately by Cancel.
-Short lists place the spacer and Cancel directly after the last item, with no
-unused gap; the footer remains visible while the list scrolls.
-Left on `(none)` navigates to the parent; Enter does nothing. Actions can scroll
-out of view at every terminal size. Directory popup dimensions stay fixed through
-browsing and path editing, with equal outer padding above and below. Wraparound
-and Home/End move the list viewport to the matching end. Pending navigation clears
-old child rows and shows Loading… below the list. Right browses child rows only;
-Left returns to their parent and does nothing on action rows or Cancel.
-Only child rows show the Parent/Open hint. Tab and Ctrl-U have no directory-picker
-action. Typing and paste edit the path. Create stages intent and never calls mkdir.
-Configuration uses the same picker; [use this directory] applies a directory and
-Cancel/Esc returns without applying the edited field.
+`Use this folder` is mounted above the list and Cancel (with `Leave unset` for
+defaults) below it; neither section moves the list, which keeps its own scroll
+position. Up from the bottom section re-enters the list at its last item, Down
+from the top section at its first. Home/End/PageUp/PageDown work in every
+scrolling list. Typing filters the listed folders by the typed name: matched
+characters are brighter and a faint ghost completes the first match (Tab accepts).
+A typed name that matches nothing becomes one `name/  (new)` entry; nested missing
+folders are listed by the confirmation. Left opens the parent from every row;
+Right enters the selected subfolder. A new-session choice is only staged; the
+launch creates it. In Settings, choosing a folder that does not exist opens a
+confirmation stacked over the picker listing every folder to create; Cancel
+returns to the picker unchanged, Create makes them, saves and closes the picker.
 Missing per-Space roots remain unset, without a global fallback. Last-account prefill
 initially requires fresh usage within existing limits. Once selected, the account remains
 visible during refreshes and stale usage; only confirmed unavailability clears it.
@@ -439,9 +443,11 @@ account does not rewrite its limits.
 On full-screen menus, the Back arrow is beside the top visible option. Left selects and expands it only
 when the expanded label retains a left padding cell;
 Right returns to the option. On the main page its expanded label is **Close**.
-Settings’ **Default Dir:** chooses global or per-Space defaults. In either default-directory
-picker, Leave unset clears that default and its pending creation plan. Left/Right
-do nothing on its top actions.
+Settings rows show a dim value and `›` in one column. **Appearance** sets the
+star field (`‹ Off/Calm/Normal/Lively ›`) and brightness (`‹ Dim/Normal/Bright ›`),
+cycled with Left/Right and saved in `preferences.json`. **Default directories**
+chooses global or per-Space defaults (`‹ Global ›`) and holds the roots. Leave
+unset clears that default and its pending creation plan.
 The session-directory picker retains its two top actions. Configuration uses short
 labels; path previews follow the shared hover-only, list-wide fit rule.
 

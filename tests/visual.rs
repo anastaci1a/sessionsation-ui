@@ -99,6 +99,13 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("operations-wide", 120, 24),
         ("operations-compact", 50, 20),
         ("operations-tiny", 40, 10),
+        ("sessions-badges", 100, 20),
+        ("session-details", 90, 26),
+        ("account-details", 90, 30),
+        ("appearance", 80, 20),
+        ("directory-filter", 80, 26),
+        ("directory-new", 80, 26),
+        ("directory-confirm", 80, 26),
     ] {
         let mut m = Manager::default();
         m.inventory(accounts.clone());
@@ -190,9 +197,39 @@ fn management_geometry_usage_markers_and_picker_columns() {
             "operations-wide" | "operations-compact" | "operations-tiny" => {
                 m.page = Page::Operations;
                 m.operations = vec![
-                    serde_json::json!({"id":"11111111-1111-4111-8111-111111111111","kind":"account_delete","phase":"preserving_history"}),
-                    serde_json::json!({"id":"22222222-2222-4222-8222-222222222222","kind":"switch","phase":"complete"}),
+                    serde_json::json!({"id":"11111111-1111-4111-8111-111111111111","kind":"account_delete","account_id":"codex:fixture1","phase":"preserving_history","created_at":40}),
+                    serde_json::json!({"id":"22222222-2222-4222-8222-222222222222","kind":"account","source_account_id":"codex:fixture0","phase":"complete","created_at":90}),
+                    serde_json::json!({"id":"33333333-3333-4333-8333-333333333333","kind":"move_space","phase":"failed","detail":"The destination Space no longer exists.","created_at":-90000}),
                 ];
+            }
+            "sessions-badges" => {
+                m.page = Page::Sessions;
+                m.sessions_known = true;
+                m.space_names.insert("w2".into(), "work".into());
+                m.sessions = vec![
+                    serde_json::json!({"name":"liq-glass-lead","id":"a","account_id":"codex:gate1","availability":"running","activity":"busy","active_since":1,"pending_operation_id":"op1"}),
+                    serde_json::json!({"name":"docs","id":"c","provider":"claude","account_id":"claude:main","availability":"running","native_status":"idle","activity":"idle"}),
+                    serde_json::json!({"name":"an-unusually-long-saved-session-name","id":"b","account_id":"codex:work","availability":"saved"}),
+                ];
+                m.operations = vec![
+                    serde_json::json!({"id":"op1","kind":"move_space","session_id":"a","phase":"dispatching","space_id":"w2","created_at":90}),
+                    serde_json::json!({"id":"op2","kind":"archive_session","session_id":"b","phase":"failed","created_at":95}),
+                ];
+                m.badge_focus = true;
+            }
+            "session-details" => {
+                m.page = Page::Session("a".into());
+                m.sessions = vec![
+                    serde_json::json!({"name":"liq-glass-lead","id":"11111111-1111-4111-8111-111111111111","account_id":"codex:gate1","availability":"running","activity":"busy","directory":"/projects/liquid-glass","last_accessed":40,"conversation_created_at":"1969-12-30T00:00:00Z","conversation_id":"22222222-2222-4222-8222-222222222222","history_file_bytes":2400000,"attachment":{"host":"herdr","pid":4242},"generation":"g"}),
+                ];
+                m.page = Page::Session("11111111-1111-4111-8111-111111111111".into());
+                m.options.selected = 1;
+                m.key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
+            }
+            "account-details" => {
+                m.page = Page::Account("codex:fixture0".into());
+                m.options.selected = 0;
+                m.key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
             }
             "compact" => {
                 m.page = Page::Home;
@@ -268,6 +305,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
             _ => {}
         }
         if name.starts_with("settings-")
+            || name == "appearance"
             || name == "roots-compact"
             || name.starts_with("directory-")
         {
@@ -289,6 +327,10 @@ fn management_geometry_usage_markers_and_picker_columns() {
             );
             app.page = AppPage::Config;
             app.options.selected = 1;
+            if name == "appearance" {
+                app.page = AppPage::Appearance;
+                app.options.selected = 0;
+            }
             if name == "roots-compact" {
                 app.page = AppPage::Roots;
                 app.options.selected = 0;
@@ -326,9 +368,37 @@ fn management_geometry_usage_markers_and_picker_columns() {
                         .collect(),
                     ..Listing::default()
                 };
-                app.options.selected = app.rows().len() - 3;
+                app.options.selected = app.rows().len() - 4;
                 if name == "directory-loading" {
                     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+                }
+                if name == "directory-filter" {
+                    app.input = TextInput::new("/projects/project1".into());
+                    app.listing = Listing {
+                        path: Some("/projects/project1".into()),
+                        existing: false,
+                        creatable: true,
+                        children: (10..14)
+                            .map(|i| format!("/projects/project{i:02}").into())
+                            .collect(),
+                        missing: vec!["/projects/project1".into()],
+                        ..Listing::default()
+                    };
+                    app.options.selected = 2;
+                }
+                if name == "directory-new" || name == "directory-confirm" {
+                    app.input = TextInput::new("/projects/new-a/new-b".into());
+                    app.listing = Listing {
+                        path: Some("/projects/new-a/new-b".into()),
+                        existing: false,
+                        creatable: true,
+                        missing: vec!["/projects/new-a".into(), "/projects/new-a/new-b".into()],
+                        ..Listing::default()
+                    };
+                    app.options.selected = 0;
+                    if name == "directory-confirm" {
+                        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    }
                 }
             }
             c = app.paint(&mut f, 4060, width, height);

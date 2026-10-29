@@ -11,6 +11,8 @@ pub struct Listing {
     pub resolved: BTreeMap<PathBuf, PathBuf>,
     pub existing: bool,
     pub creatable: bool,
+    /// Folders a choice of `path` would create, parents first (empty when it exists).
+    pub missing: Vec<PathBuf>,
     pub error: Option<String>,
 }
 pub fn expand(input: &str, env: &BTreeMap<String, String>) -> String {
@@ -71,15 +73,36 @@ pub fn inspect(input: &str, initial: &Path, env: &BTreeMap<String, String>) -> R
     } else {
         initial.join(expanded)
     };
+    // Missing folders from the nearest existing ancestor down to the typed path.
+    let mut missing = Vec::new();
     let (path, existing) = match std::fs::canonicalize(&path) {
         Ok(p) if p.is_dir() => (p, true),
-        _ => {
+        Ok(_) => {
             let parent = path.parent().context("No parent directory")?;
             let parent = std::fs::canonicalize(parent)?;
             (
                 parent.join(path.file_name().context("Invalid directory")?),
                 false,
             )
+        }
+        Err(_) => {
+            let mut names = Vec::new();
+            let mut cursor = path.as_path();
+            let base = loop {
+                names.push(cursor.file_name().context("Invalid directory")?.to_owned());
+                cursor = cursor.parent().context("No parent directory")?;
+                match std::fs::canonicalize(cursor) {
+                    Ok(p) if p.is_dir() => break p,
+                    Ok(_) => anyhow::bail!("Not a directory: {}", cursor.display()),
+                    Err(_) => {}
+                }
+            };
+            let mut full = base;
+            for name in names.iter().rev() {
+                full = full.join(name);
+                missing.push(full.clone());
+            }
+            (full, false)
         }
     };
     let base = if existing {
@@ -94,14 +117,16 @@ pub fn inspect(input: &str, initial: &Path, env: &BTreeMap<String, String>) -> R
     };
     let mut children = Vec::new();
     let mut resolved = BTreeMap::new();
-    for entry in std::fs::read_dir(base)? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with(&prefix)
-            && entry.path().is_dir()
-            && let Ok(real) = std::fs::canonicalize(entry.path())
-        {
-            resolved.insert(entry.path(), real);
-            children.push(entry.path());
+    if missing.len() <= 1 {
+        for entry in std::fs::read_dir(base)? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().starts_with(&prefix)
+                && entry.path().is_dir()
+                && let Ok(real) = std::fs::canonicalize(entry.path())
+            {
+                resolved.insert(entry.path(), real);
+                children.push(entry.path());
+            }
         }
     }
     children.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
@@ -114,6 +139,7 @@ pub fn inspect(input: &str, initial: &Path, env: &BTreeMap<String, String>) -> R
         resolved,
         existing,
         creatable,
+        missing,
         error: None,
     })
 }

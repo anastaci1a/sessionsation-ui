@@ -424,9 +424,16 @@ pub struct Field {
     foreground: Vec<bool>,
     pub options_top: usize,
     pub background: Option<[u8; 3]>,
+    /// Star density and twinkle rate in per mille (0 = no stars).
+    density_scale: i64,
+    /// Star brightness in per mille.
+    pub brightness_scale: i64,
 }
 impl Field {
     pub fn new(w: usize, h: usize, seed: u64) -> Self {
+        Self::with_density(w, h, seed, 1000)
+    }
+    fn with_density(w: usize, h: usize, seed: u64, density: i64) -> Self {
         let mut field = Self {
             w,
             h,
@@ -447,6 +454,8 @@ impl Field {
             foreground: vec![false; w * h],
             options_top: 3,
             background: None,
+            density_scale: density,
+            brightness_scale: 1000,
         };
         let mut distance = 0;
         for p in 0..=1000 {
@@ -467,7 +476,20 @@ impl Field {
     }
     fn density(&self, y: usize) -> i64 {
         let depth = (y.saturating_sub(2) * 1000 / self.h.saturating_sub(3).max(1)) as i64;
-        1000 + 5000 * depth * depth / 1_000_000
+        (1000 + 5000 * depth * depth / 1_000_000) * self.density_scale / 1000
+    }
+    /// Appearance settings: density changes regenerate the field; brightness is live.
+    pub fn set_style(&mut self, density: i64, brightness: i64) {
+        self.brightness_scale = brightness;
+        if density != self.density_scale {
+            let (w, h, seed) = (self.w, self.h, self.seed);
+            let background = self.background;
+            let top = self.options_top;
+            *self = Self::with_density(w, h, seed, density);
+            self.brightness_scale = brightness;
+            self.background = background;
+            self.options_top = top;
+        }
     }
     fn star(&mut self, birth: Option<u64>) -> Star {
         let palette = self.rng.range(3) as usize;
@@ -489,7 +511,9 @@ impl Field {
     }
     pub fn resize(&mut self, w: usize, h: usize) {
         if (w, h) != (self.w, self.h) {
-            *self = Self::new(w, h, self.seed);
+            let brightness = self.brightness_scale;
+            *self = Self::with_density(w, h, self.seed, self.density_scale);
+            self.brightness_scale = brightness;
         }
     }
     pub fn apply_masks(&mut self, canvas: &Canvas) {
@@ -561,13 +585,16 @@ impl Field {
             }
             if horizon {
                 let excess = (2..self.h)
-                    .map(|y| (self.density(y) - 1000) as u64)
+                    .map(|y| (self.density(y) - self.density_scale).max(0) as u64)
                     .sum::<u64>()
                     * self.w as u64;
                 self.next_horizon = now
                     + (50_000_000 * ((self.h - 2) * self.w) as u64 / (250 * excess.max(1))).max(1);
             }
-            if (baseline || horizon) && self.rng.range(1000) < weight as u64 {
+            if (baseline || horizon)
+                && self.density_scale > 0
+                && self.rng.range(1000) < (weight * self.density_scale / 1000) as u64
+            {
                 let start = 2 * self.w + self.rng.range(((self.h - 2) * self.w) as u64) as usize;
                 for n in 0..(self.h - 2) * self.w {
                     let index = 2 * self.w + (start - 2 * self.w + n) % ((self.h - 2) * self.w);
@@ -575,7 +602,8 @@ impl Field {
                         continue;
                     }
                     if !baseline
-                        && self.rng.range(5000) >= (self.density(index / self.w) - 1000) as u64
+                        && self.rng.range(5000)
+                            >= (self.density(index / self.w) - self.density_scale).max(0) as u64
                     {
                         continue;
                     }
@@ -666,6 +694,7 @@ impl Field {
                     / self.h.saturating_sub(self.options_top).max(1) as i64)
                     * 10
             };
+            let fade = (fade * self.brightness_scale / 1000).min(1000);
             let peak = (10000 * (self.h - y) as i64 / (7 * self.h.saturating_sub(2).max(1)) as i64)
                 .clamp(4, 1000);
             let brightness = if white > 0 {

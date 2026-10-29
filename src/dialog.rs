@@ -167,6 +167,8 @@ pub struct Dialog {
     pub size: Option<crate::popup::Size>,
     pub minimum_height: usize,
     pub minimum_width: usize,
+    /// Body lines from this index on are a dim secondary group (identifiers, legends).
+    pub dim_from: Option<usize>,
     navigation: crate::widgets::SelectionNavigation,
 }
 pub enum Event {
@@ -191,6 +193,7 @@ impl Dialog {
             size: None,
             minimum_height: 0,
             minimum_width: 0,
+            dim_from: None,
             navigation: crate::widgets::SelectionNavigation::default(),
         }
     }
@@ -349,28 +352,33 @@ impl Dialog {
             .filter(|s| s.viewport == (canvas.width, canvas.height))
             .map_or(desired_width, |s| s.width);
         let max_height = canvas.height.saturating_sub(4);
-        let mut lines: Vec<_> = self
+        let dim_from = self.dim_from.unwrap_or(usize::MAX);
+        let mut lines: Vec<(String, bool)> = self
             .body
             .iter()
-            .flat_map(|l| wrap(&crate::messages::describe(l), width.saturating_sub(4)))
+            .enumerate()
+            .flat_map(|(i, l)| {
+                wrap(&crate::messages::describe(l), width.saturating_sub(4))
+                    .into_iter()
+                    .map(move |w| (w, i >= dim_from))
+            })
             .collect();
         if let Some(status) = &self.status {
-            lines.extend(wrap(
-                &crate::messages::describe(status),
-                width.saturating_sub(4),
-            ));
+            lines.extend(
+                wrap(&crate::messages::describe(status), width.saturating_sub(4))
+                    .into_iter()
+                    .map(|w| (w, false)),
+            );
         }
-        let mut normalized = Vec::new();
+        let mut normalized: Vec<(String, bool)> = Vec::new();
         for line in lines {
-            if !line.trim().is_empty()
-                || normalized
-                    .last()
-                    .is_some_and(|l: &String| !l.trim().is_empty())
+            if !line.0.trim().is_empty()
+                || normalized.last().is_some_and(|l| !l.0.trim().is_empty())
             {
                 normalized.push(line);
             }
         }
-        while normalized.last().is_some_and(|l| l.trim().is_empty()) {
+        while normalized.last().is_some_and(|l| l.0.trim().is_empty()) {
             normalized.pop();
         }
         let lines = normalized;
@@ -430,8 +438,16 @@ impl Dialog {
             height,
         }
         .frame(canvas, &self.title, palette);
-        for (i, line) in lines.iter().skip(self.offset).take(body_height).enumerate() {
-            canvas.text(x + 2, y + 1 + i, line, style.clone(), false);
+        for (i, (line, dim)) in lines.iter().skip(self.offset).take(body_height).enumerate() {
+            let style = if *dim {
+                Cell {
+                    fg: palette.muted,
+                    ..style.clone()
+                }
+            } else {
+                style.clone()
+            };
+            canvas.text(x + 2, y + 1 + i, line, style, false);
         }
         if !compact {
             let mut row = y
@@ -472,7 +488,7 @@ impl Dialog {
         let hint = if self.wrapped > self.visible {
             "PgUp/PgDn: Scroll"
         } else {
-            "Esc: Back"
+            "Esc: Cancel"
         };
         if scroll_hint && !compact && (extra > 0 || !self.buttons.is_empty()) {
             crate::widgets::paint_centered_hint(
