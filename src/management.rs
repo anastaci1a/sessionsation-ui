@@ -386,7 +386,13 @@ fn usage_lines(a: &Account, now: i64) -> Vec<String> {
     if let Some(then) = crate::usage::observed_at(a, now) {
         facts.push(("Observed", relative(now, Some(then))));
     }
-    for (window, label) in [("short", "5h window"), ("weekly", "Weekly")] {
+    // Gemini has no usage windows to list, not even as unsupported.
+    let windows: &[(&str, &str)] = if a.provider() == "gemini" {
+        &[]
+    } else {
+        &[("short", "5h window"), ("weekly", "Weekly")]
+    };
+    for &(window, label) in windows {
         let w = &a.usage[window];
         let used = w["used_percent"].as_f64().filter(|n| n.is_finite());
         facts.push((
@@ -1214,7 +1220,10 @@ impl Manager {
                     Row::separator(),
                 ];
                 if logged_in {
-                    rows.push(self.limits_account_row(key, removed));
+                    // Gemini publishes no usage, so it has no Limits at all.
+                    if provider != "gemini" {
+                        rows.push(self.limits_account_row(key, removed));
+                    }
                     // Older backends omit the capability: hide Log out entirely.
                     if self.provider_cap(&provider, "account_logout")
                         || self.provider_denies(&provider, "account_logout")
@@ -1723,6 +1732,34 @@ impl Manager {
         } else {
             self.request_full_state()
         }
+    }
+    /// Paint the saved account list on the first frame. Usage is marked stale so
+    /// the existing age styling shows when it was observed, and nothing is
+    /// selectable; the first real inventory replaces it.
+    pub fn show_cached_accounts(&mut self, accounts: &Value) {
+        if self.inventory_known {
+            return;
+        }
+        let accounts: Vec<Account> = accounts
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|a| serde_json::from_value::<Account>(a.clone()).ok())
+            .map(|mut a| {
+                a.selectable = false;
+                a.prefill = Value::Null;
+                a.details.insert("usage_fresh".into(), json!(false));
+                if matches!(crate::usage::usage_state(&a), Some("fresh" | "partial")) {
+                    a.details.insert("usage_state".into(), json!("stale"));
+                    if a.usage.is_object() {
+                        a.usage["state"] = json!("stale");
+                    }
+                }
+                a
+            })
+            .collect();
+        self.inventory(accounts);
+        self.inventory_known = false;
     }
     /// Paint the saved session list immediately. Capabilities and generations are
     /// dropped, so no session action can be enabled from it.
@@ -4693,6 +4730,25 @@ mod tests {
         );
     }
     #[test]
+    fn cached_accounts_show_at_once_as_stale_and_never_selectable() {
+        let mut m = Manager::default();
+        let cached = json!([{"id":"claude:a","selectable":true,"prefill":{"eligible":true},
+            "usage":{"state":"fresh","short_percent":40},"usage_fresh":true}]);
+        m.show_cached_accounts(&cached);
+        assert!(
+            !m.inventory_known,
+            "still waiting for the authoritative list"
+        );
+        assert_eq!(m.accounts.len(), 1);
+        assert!(!m.accounts[0].selectable && m.accounts[0].prefill.is_null());
+        assert_eq!(crate::usage::usage_state(&m.accounts[0]), Some("stale"));
+        assert_eq!(m.accounts[0].details["usage_fresh"], json!(false));
+        m.inventory(vec![]);
+        assert!(m.inventory_known && m.accounts.is_empty());
+        m.show_cached_accounts(&cached);
+        assert!(m.accounts.is_empty(), "a real inventory is never replaced");
+    }
+    #[test]
     fn session_details_open_cached_and_update_without_generation_bound_reads() {
         let mut m = setup();
         m.sessions =
@@ -6375,12 +6431,7 @@ mod tests {
         assert!(u.status_only());
         m.go(Page::Account("gemini:gem-main".into()));
         let rows = m.rows();
-        let limits = rows.iter().find(|r| r.label == "Limits").unwrap();
-        assert!(!limits.enabled);
-        assert_eq!(
-            limits.preview.as_deref(),
-            Some("· Gemini CLI exposes no usage limits")
-        );
+        assert!(!rows.iter().any(|r| r.label == "Limits"));
         let lines = usage_lines(&m.accounts[3], 0);
         assert_eq!(fact(&lines, "Provider").as_deref(), Some("Gemini CLI"));
         assert_eq!(fact(&lines, "Status").as_deref(), Some("Usage unsupported"));
@@ -6389,10 +6440,7 @@ mod tests {
                 .unwrap()
                 .contains("gemini-cli-unsupported")
         );
-        assert_eq!(
-            fact(&lines, "5h window").as_deref(),
-            Some("usage unsupported")
-        );
+        assert!(fact(&lines, "5h window").is_none() && fact(&lines, "Weekly").is_none());
         assert!(!lines.join("\n").contains('%'));
     }
     #[test]

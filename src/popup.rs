@@ -178,7 +178,7 @@ impl Choices<'_> {
         }
         if let Some(row) = self.rows.get(selected) {
             required = required.max(UnicodeWidthStr::width(row.label.as_str()) + 4);
-            if row.preview_selected_only && row.preview.is_some() {
+            if row.preview_selected_only && !row.preview_info && row.preview.is_some() {
                 required = required.max(Self::row_end(row, usize::MAX / 2) + 4);
             }
         }

@@ -2,7 +2,7 @@ use crate::{
     client::{Account, Workspace},
     directory::Listing,
     draft::{Directory, Draft, Space, valid_name},
-    preferences::{Mode, Preferences},
+    preferences::{Brightness, Mode, Preferences, Starfield, choice_arrow},
     render::{Accent, Canvas, Cell, Field},
     widgets::{NAME_MAX_CHARS, Options, Row, TextInput, UNSET},
 };
@@ -19,6 +19,9 @@ pub enum Target {
     Global,
     Space(String),
 }
+
+/// Default directory modes, top (most specific) to bottom.
+const MODES: [Mode; 2] = [Mode::PerSpace, Mode::Global];
 
 fn resume_invalid(error: &str) -> bool {
     [
@@ -432,6 +435,7 @@ impl App {
                         if i == 3 && matches!(self.draft.directory, Directory::Create { .. }) {
                             // Same marker as the picker: folders created at launch.
                             row.preview = Some("(new)".into());
+                            row.preview_info = true;
                             row.preview_fg = crate::widgets::MUTED;
                             row.preview_gap = 2;
                             row.preview_selected_only = false;
@@ -445,7 +449,7 @@ impl App {
             }
             Page::Config => settings_rows(vec![
                 (
-                    Row::yes("Appearance"),
+                    Row::yes("Stars"),
                     format!(
                         "{} · {}",
                         self.prefs.starfield.label(),
@@ -455,23 +459,26 @@ impl App {
                 (Row::yes("Default directories"), self.mode_label().into()),
             ]),
             Page::Appearance => {
-                let mut rows = vec![
+                let rows = vec![
                     Row::yes("Starfield")
-                        .with_choice(self.prefs.starfield.label())
+                        .with_picker(
+                            self.prefs.starfield.label(),
+                            choice_arrow(&Starfield::ALL, self.prefs.starfield),
+                        )
                         .grabbed(self.picker.is_some() && self.options.selected == 0),
                     Row::yes("Brightness")
-                        .with_choice(self.prefs.brightness.label())
+                        .with_picker(
+                            self.prefs.brightness.label(),
+                            choice_arrow(&Brightness::ALL, self.prefs.brightness),
+                        )
                         .grabbed(self.picker.is_some() && self.options.selected == 1),
                 ];
-                for row in &mut rows {
-                    row.preview_column = Some(2 + "Brightness".len() + 4);
-                }
                 rows
             }
             Page::Directories => {
                 let mut rows = vec![
                     Row::yes("Default directory")
-                        .with_choice(self.mode_label())
+                        .with_picker(self.mode_label(), choice_arrow(&MODES, self.prefs.mode))
                         .grabbed(self.picker.is_some()),
                 ];
                 rows.extend(settings_rows(vec![
@@ -497,7 +504,7 @@ impl App {
                     .max()
                     .unwrap_or(0)
                     + 6;
-                for row in &mut rows {
+                for row in rows.iter_mut().skip(1) {
                     row.preview_column = Some(column);
                 }
                 rows
@@ -580,6 +587,7 @@ impl App {
                 let new = |row: Row| {
                     let mut row = row;
                     row.preview = Some("(new)".into());
+                    row.preview_info = true;
                     row.preview_fg = crate::widgets::MUTED;
                     row.preview_gap = 2;
                     row
@@ -1080,17 +1088,16 @@ impl App {
         vec![]
     }
     fn cycle_choice(&mut self, previous: bool) {
-        use crate::preferences::{Brightness, Starfield, cycle};
+        use crate::preferences::step;
+        let up = previous;
         match (&self.page, self.options.selected) {
             (Page::Appearance, 0) => {
-                self.prefs.starfield = cycle(&Starfield::ALL, self.prefs.starfield, previous)
+                self.prefs.starfield = step(&Starfield::ALL, self.prefs.starfield, up)
             }
             (Page::Appearance, 1) => {
-                self.prefs.brightness = cycle(&Brightness::ALL, self.prefs.brightness, previous)
+                self.prefs.brightness = step(&Brightness::ALL, self.prefs.brightness, up)
             }
-            (Page::Directories, 0) => {
-                self.prefs.mode = cycle(&[Mode::Global, Mode::PerSpace], self.prefs.mode, previous)
-            }
+            (Page::Directories, 0) => self.prefs.mode = step(&MODES, self.prefs.mode, up),
             _ => {}
         }
         self.dirty = true;
@@ -2125,7 +2132,7 @@ New directories are created only when the session starts."
                 }
             }
             Page::Config => "Settings",
-            Page::Appearance => "Appearance",
+            Page::Appearance => "Stars",
             Page::Directories => "Default directories",
             Page::Roots => "Space roots",
             Page::Accounts => "Choose account",
@@ -3327,7 +3334,10 @@ mod tests {
         );
         key(&mut a, KeyCode::Down);
         key(&mut a, KeyCode::Down);
+        key(&mut a, KeyCode::Down);
         assert_eq!(a.prefs.starfield, Starfield::Off);
+        key(&mut a, KeyCode::Down);
+        assert_eq!(a.prefs.starfield, Starfield::Off, "no wrap at the bottom");
         assert_eq!(
             a.options.selected, 0,
             "Up/Down change the value, not the row"
@@ -3343,15 +3353,16 @@ mod tests {
             "picker Esc does not leave the page"
         );
         assert!(!a.rows()[0].preview_grabbed);
-        // The grabbed row paints `▲ value ▼` and the cursor sits on the value.
+        // The arrow shows in both modes; no cursor bullet is drawn by the value.
         key(&mut a, KeyCode::Right);
         let c = a.paint(&mut Field::new(80, 24, 1), 4000, 80, 24);
         let text: String = c.cells.iter().map(|c| c.glyph.as_str()).collect();
-        assert!(text.contains("▲ Normal ▼"));
+        assert!(text.contains("Starfield ⬍ Normal"), "{text}");
+        assert!(!text.contains("● Normal"));
         key(&mut a, KeyCode::Esc);
         let c = a.paint(&mut Field::new(80, 24, 1), 4000, 80, 24);
         let text: String = c.cells.iter().map(|c| c.glyph.as_str()).collect();
-        assert!(text.contains("‹ Normal ›") && !text.contains("▲ Normal"));
+        assert!(text.contains("Starfield ⬍ Normal") && !text.contains("‹ Normal ›"));
     }
     #[test]
     fn settings_are_submenus_with_aligned_values_and_cycling_choices() {
@@ -3359,7 +3370,7 @@ mod tests {
         let mut a = app();
         a.page = Page::Config;
         let rows = a.rows();
-        assert_eq!(rows[0].label, "Appearance");
+        assert_eq!(rows[0].label, "Stars");
         assert_eq!(rows[0].preview.as_deref(), Some("Normal · Normal ›"));
         assert_eq!(rows[1].label, "Default directories");
         assert_eq!(rows[0].preview_column, rows[1].preview_column);
@@ -3368,20 +3379,26 @@ mod tests {
         a.activate();
         assert_eq!(a.page, Page::Appearance);
         let rows = a.rows();
-        assert_eq!(rows[0].preview.as_deref(), Some("‹ Normal ›"));
+        assert_eq!(rows[0].preview.as_deref(), Some("⬍ Normal"));
         assert!(rows[0].preview_choice && rows[1].preview_choice);
         key(&mut a, KeyCode::Right);
         assert!(a.picker.is_some(), "Right enters the picker");
-        key(&mut a, KeyCode::Down);
-        assert_eq!(a.prefs.starfield, Starfield::Lively);
-        key(&mut a, KeyCode::Down);
+        key(&mut a, KeyCode::Up);
+        assert_eq!(a.prefs.starfield, Starfield::Dense);
+        assert_eq!(a.rows()[0].preview.as_deref(), Some("⬇ Dense"));
+        key(&mut a, KeyCode::Up);
+        assert_eq!(a.prefs.starfield, Starfield::Dense, "no wrap at the top");
+        for _ in 0..3 {
+            key(&mut a, KeyCode::Down);
+        }
         assert_eq!(a.prefs.starfield, Starfield::Off);
+        assert_eq!(a.rows()[0].preview.as_deref(), Some("⬆ Off"));
         key(&mut a, KeyCode::Left);
         assert!(a.picker.is_none() && !a.options.back, "Left commits");
         assert_eq!(a.prefs.starfield, Starfield::Off);
         key(&mut a, KeyCode::Down);
         key(&mut a, KeyCode::Enter);
-        key(&mut a, KeyCode::Up);
+        key(&mut a, KeyCode::Down);
         assert_eq!(a.prefs.brightness, Brightness::Dim);
         key(&mut a, KeyCode::Char(' '));
         assert!(a.picker.is_none());
@@ -3400,9 +3417,11 @@ mod tests {
         a.options.selected = 1;
         a.activate();
         assert_eq!(a.page, Page::Directories);
-        assert_eq!(a.rows()[0].preview.as_deref(), Some("‹ Global ›"));
+        assert_eq!(a.rows()[0].preview.as_deref(), Some("⬆ Global"));
         key(&mut a, KeyCode::Right);
         key(&mut a, KeyCode::Down);
+        assert_eq!(a.prefs.mode, Mode::Global, "no wrap at the bottom");
+        key(&mut a, KeyCode::Up);
         key(&mut a, KeyCode::Enter);
         assert_eq!(a.prefs.mode, Mode::PerSpace);
         // Persisted beside the other preferences.

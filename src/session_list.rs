@@ -924,14 +924,24 @@ mod tests {
             actions(&tmux, true)[0].0.preview.as_deref(),
             Some("· in tmux")
         );
-        let mut c = Canvas::new(80, 30);
         let rows: Vec<Row> = actions(&tmux, true).into_iter().map(|(r, _)| r).collect();
+        let mut c = Canvas::new(130, 30);
         Options {
             selected: 1,
             ..Options::default()
         }
         .paint_menu(&mut c, &rows, 3, 26, 29);
         assert!(text(&c, 3).contains("· in tmux"), "visible without hover");
+        // Too narrow beside the centred labels: none is drawn inline and the
+        // selected row's reason moves below the list.
+        let mut c = Canvas::new(80, 30);
+        Options {
+            selected: 0,
+            ..Options::default()
+        }
+        .paint_menu(&mut c, &rows, 3, 26, 29);
+        assert!(!text(&c, 3).contains("in tmux"));
+        assert!((4..30).any(|y| text(&c, y).contains("· in tmux")));
     }
     #[test]
     fn sentence_case_menus_and_archive_before_delete() {
@@ -1184,6 +1194,38 @@ mod tests {
                     < a.iter().map(|n| u32::from(*n)).sum::<u32>(),
                 "x={x} {a:?} {b:?}"
             );
+        }
+    }
+    #[test]
+    fn account_cells_use_the_sweep_colour_at_their_own_x_for_every_row_state() {
+        let sessions = sessions();
+        let mut field = crate::render::Field::new(100, 20, 1967);
+        for (selected, back, level) in [(1, false, 1000), (0, false, 600), (1, true, 600)] {
+            let mut c = field.paint(5000);
+            let mut o = Options {
+                selected,
+                back,
+                ..Options::default()
+            };
+            paint(&mut c, &mut o, &sessions, true, 18, 62, 19);
+            let theme = c.theme.clone().unwrap();
+            let line = text(&c, 4);
+            let name = line.chars().position(|g| g == 'd').unwrap();
+            let icon = line.chars().position(|g| g == '✻').unwrap();
+            let span = icon - 1 - name + 2 + 2 + 4;
+            for x in (name..name + 4)
+                .chain(icon..icon + 1)
+                .chain(icon + 2..icon + 6)
+            {
+                let want = theme
+                    .idle_sweep(x - name, span)
+                    .map(|v| (i64::from(v) * level / 1000) as u8);
+                assert_eq!(
+                    tint_of(&c, 4, x),
+                    want,
+                    "x={x} selected={selected} back={back}"
+                );
+            }
         }
     }
     #[test]

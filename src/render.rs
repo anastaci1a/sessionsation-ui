@@ -39,6 +39,8 @@ pub struct Canvas {
     /// Star-field cells not covered by any text; only these may be paced.
     ambient: Vec<bool>,
 }
+/// Period of the selected picker arrow's pulse, in milliseconds.
+pub const ARROW_PULSE_MS: u64 = 1000;
 /// Star-field cell updates written per frame. The periodic sweep changes most
 /// stars at once (about 30 kB per frame at 180x30); a slow terminal link (SSH)
 /// then backs up behind HERDR's client, which stops reading keys until the burst
@@ -361,6 +363,13 @@ impl Theme {
             ),
             850,
         )
+    }
+    /// Selected picker arrow: a sinusoidal pulse between the light grey and
+    /// white, once per [`ARROW_PULSE_MS`], interpolated in RGB.
+    pub fn arrow_pulse(&self) -> [u8; 3] {
+        let phase = (self.now % ARROW_PULSE_MS) as f64 / ARROW_PULSE_MS as f64;
+        let p = ((1.0 - (phase * std::f64::consts::TAU).cos()) / 2.0 * 1000.0).round() as i64;
+        mix(crate::widgets::SECONDARY, [255; 3], p)
     }
     pub fn bar(&self, secondary: bool) -> [u8; 3] {
         let p = if self.now < 4000 {
@@ -795,6 +804,30 @@ mod tests {
     /// 24 kB) for half a second. Over a ~300-500 kB/s SSH link HERDR's client
     /// blocked on that output and held keys for 200-800 ms. The model link below
     /// drains 250 kB/s; paced frames must never queue a key change behind it.
+    #[test]
+    fn selected_picker_arrow_pulses_between_light_grey_and_white_and_is_bold() {
+        let mut field = Field::new(40, 5, 7);
+        let mut seen = std::collections::BTreeSet::new();
+        for now in (0..ARROW_PULSE_MS * 2).step_by(25) {
+            let mut c = field.paint(now);
+            let mut row = crate::widgets::Row::yes("Setting").with_picker("Dense", "⬍");
+            row.preview_selected_only = false;
+            let mut options = crate::widgets::Options::default();
+            options.paint_menu(&mut c, &[row], 1, 4, 4);
+            let cell = c.cells.iter().find(|c| c.glyph == "⬍").unwrap();
+            assert!(cell.bold, "now={now}");
+            assert!(
+                cell.fg.iter().all(|v| (188..=255).contains(v)) && cell.fg[0] == cell.fg[2],
+                "now={now} {:?}",
+                cell.fg
+            );
+            seen.insert(cell.fg[0]);
+        }
+        assert!(
+            seen.contains(&188) && seen.contains(&255) && seen.len() > 10,
+            "{seen:?}"
+        );
+    }
     #[test]
     fn star_sweep_is_paced_so_a_slow_link_never_queues_key_changes() {
         fn worst_backlog_ms(paced: bool) -> u64 {

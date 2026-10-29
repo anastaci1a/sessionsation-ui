@@ -22,28 +22,33 @@ pub enum Mode {
 #[serde(rename_all = "snake_case")]
 pub enum Starfield {
     Off,
-    Calm,
+    // Stored under the pre-rename names so older builds still read the file;
+    // the new names are accepted too.
+    #[serde(rename = "calm", alias = "sparse")]
+    Sparse,
     #[default]
     Normal,
-    Lively,
+    #[serde(rename = "lively", alias = "dense")]
+    Dense,
 }
 impl Starfield {
-    pub const ALL: [Self; 4] = [Self::Off, Self::Calm, Self::Normal, Self::Lively];
+    /// Top (maximum) to bottom (minimum).
+    pub const ALL: [Self; 4] = [Self::Dense, Self::Normal, Self::Sparse, Self::Off];
     pub fn label(self) -> &'static str {
         match self {
             Self::Off => "Off",
-            Self::Calm => "Calm",
+            Self::Sparse => "Sparse",
             Self::Normal => "Normal",
-            Self::Lively => "Lively",
+            Self::Dense => "Dense",
         }
     }
     /// Star density and twinkle rate in per mille.
     pub fn density(self) -> i64 {
         match self {
             Self::Off => 0,
-            Self::Calm => 450,
+            Self::Sparse => 450,
             Self::Normal => 1000,
-            Self::Lively => 1700,
+            Self::Dense => 1700,
         }
     }
 }
@@ -57,7 +62,8 @@ pub enum Brightness {
     Bright,
 }
 impl Brightness {
-    pub const ALL: [Self; 3] = [Self::Dim, Self::Normal, Self::Bright];
+    /// Top (maximum) to bottom (minimum).
+    pub const ALL: [Self; 3] = [Self::Bright, Self::Normal, Self::Dim];
     pub fn label(self) -> &'static str {
         match self {
             Self::Dim => "Dim",
@@ -73,15 +79,23 @@ impl Brightness {
         }
     }
 }
-/// Next or previous value of a short cycle, wrapping.
-pub fn cycle<T: Copy + PartialEq>(all: &[T], current: T, previous: bool) -> T {
+/// The value one step up (toward the top of `all`) or down; it stops at the ends.
+pub fn step<T: Copy + PartialEq>(all: &[T], current: T, up: bool) -> T {
     let i = all.iter().position(|v| *v == current).unwrap_or(0);
-    let n = all.len();
-    all[if previous {
-        (i + n - 1) % n
+    all[if up {
+        i.saturating_sub(1)
     } else {
-        (i + 1) % n
+        (i + 1).min(all.len() - 1)
     }]
+}
+/// Arrow for the value in `all`: down-only at the top, up-only at the bottom.
+pub fn choice_arrow<T: Copy + PartialEq>(all: &[T], current: T) -> &'static str {
+    let i = all.iter().position(|v| *v == current).unwrap_or(0);
+    match (i == 0, i + 1 == all.len()) {
+        (true, false) => "⬇",
+        (false, true) => "⬆",
+        _ => "⬍",
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -227,5 +241,33 @@ mod tests {
         );
         assert!(!root.exists());
         assert!(!p.root("server", Some(&space)).unwrap().exists());
+    }
+}
+#[cfg(test)]
+mod arrow_tests {
+    use super::*;
+    #[test]
+    fn steps_stop_at_the_ends_and_arrows_follow_position() {
+        let all = Starfield::ALL;
+        assert_eq!(step(&all, Starfield::Dense, true), Starfield::Dense);
+        assert_eq!(step(&all, Starfield::Off, false), Starfield::Off);
+        assert_eq!(step(&all, Starfield::Normal, true), Starfield::Dense);
+        assert_eq!(choice_arrow(&all, Starfield::Dense), "⬇");
+        assert_eq!(choice_arrow(&all, Starfield::Normal), "⬍");
+        assert_eq!(choice_arrow(&all, Starfield::Off), "⬆");
+        for g in ["⬍", "⬇", "⬆"] {
+            assert_eq!(unicode_width::UnicodeWidthStr::width(g), 1, "{g}");
+        }
+    }
+    #[test]
+    fn old_starfield_names_load_as_the_nearest_new_value() {
+        let load =
+            |name: &str| -> Starfield { serde_json::from_str(&format!("\"{name}\"")).unwrap() };
+        assert_eq!(load("calm"), Starfield::Sparse);
+        assert_eq!(load("lively"), Starfield::Dense);
+        assert_eq!(load("sparse"), Starfield::Sparse);
+        assert_eq!(load("dense"), Starfield::Dense);
+        assert_eq!(load("off"), Starfield::Off);
+        assert_eq!(load("normal"), Starfield::Normal);
     }
 }

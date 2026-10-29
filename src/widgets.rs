@@ -186,7 +186,12 @@ pub struct Row {
     field_padding: Option<std::ops::Range<usize>>,
     /// The preview is an interactive `‹ value ›` selector cycled with Left/Right.
     pub preview_choice: bool,
-    /// The choice is grabbed (picker mode): drawn `▲ value ▼` with the cursor on it.
+    /// The preview is grey afterthought text (a reason, a note): it never takes part
+    /// in centering or width, and moves below the list when it does not fit.
+    pub preview_info: bool,
+    /// The choice preview is `<arrow> value`; the arrow shows the directions left.
+    pub preview_arrows: bool,
+    /// The choice is grabbed (picker mode): the value is bold.
     pub preview_grabbed: bool,
     /// Leading label characters drawn in the bright text colour (typed prefix).
     pub highlight: usize,
@@ -236,6 +241,8 @@ impl Row {
             preview_group: 0,
             field_padding: None,
             preview_choice: false,
+            preview_info: false,
+            preview_arrows: false,
             preview_grabbed: false,
             highlight: 0,
         }
@@ -243,6 +250,7 @@ impl Row {
     pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
         self.preview = Some(preview.into());
         self.preview_selected_only = true;
+        self.preview_info = true;
         self
     }
     /// Persistent trailing status, independent of selection and optional previews.
@@ -254,6 +262,7 @@ impl Row {
         let end = self
             .preview_position(usize::MAX / 2, 0)
             .zip(self.preview.as_deref())
+            .filter(|_| !self.preview_info)
             .map_or(2 + UnicodeWidthStr::width(self.label.as_str()), |(x, s)| {
                 x + UnicodeWidthStr::width(s)
             });
@@ -342,6 +351,7 @@ impl Row {
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
         self.preview = Some(format!("· {}", reason.into()));
         self.preview_selected_only = false;
+        self.preview_info = true;
         self.preview_fg = MUTED;
         self.preview_gap = 2;
         self
@@ -353,6 +363,15 @@ impl Row {
         self.preview_selected_only = false;
         self.preview_choice = true;
         self.preview_gap = 2;
+        self
+    }
+    /// A picker choice drawn `<arrow> value`; `arrow` is one of `⬍ ⬇ ⬆`.
+    pub fn with_picker(mut self, value: impl AsRef<str>, arrow: &str) -> Self {
+        self.preview = Some(format!("{arrow} {}", value.as_ref()));
+        self.preview_selected_only = false;
+        self.preview_choice = true;
+        self.preview_arrows = true;
+        self.preview_gap = 1;
         self
     }
     /// Mark a choice row as grabbed by its picker.
@@ -386,6 +405,8 @@ impl Row {
             preview_group: 0,
             field_padding: None,
             preview_choice: false,
+            preview_info: false,
+            preview_arrows: false,
             preview_grabbed: false,
             highlight: 0,
         }
@@ -404,7 +425,6 @@ impl Row {
     ) {
         // A grabbed picker moves the row cursor onto the value.
         let grabbed = self.preview_grabbed && selected && !back;
-        let selected = selected && !grabbed;
         if let Some((status, accent)) = &self.status {
             let status_width = UnicodeWidthStr::width(status.as_str());
             let start = self
@@ -585,17 +605,6 @@ impl Row {
             && (!self.preview_selected_only || (selected && !back))
             && let Some(start) = self.preview_position(canvas.width, x)
         {
-            if grabbed {
-                canvas.accent_text(
-                    start.saturating_sub(2),
-                    y,
-                    "●",
-                    Accent {
-                        bold: true,
-                        ..Accent::default()
-                    },
-                );
-            }
             self.paint_preview(canvas, start, y, preview, selected && !back, grabbed);
         }
     }
@@ -621,6 +630,34 @@ impl Row {
                 bold: grabbed,
                 ..Cell::default()
             };
+            if self.preview_arrows {
+                let (glyph, inner) = preview.split_once(' ').unwrap_or((preview, ""));
+                let arrow = if selected {
+                    Cell {
+                        fg: canvas
+                            .theme
+                            .as_ref()
+                            .map_or(SECONDARY, |theme| theme.arrow_pulse()),
+                        bold: true,
+                        ..Cell::default()
+                    }
+                } else {
+                    arrow
+                };
+                canvas.widget_text(x, y, glyph, arrow, false);
+                canvas.widget_text(
+                    x + 1 + UnicodeWidthStr::width(glyph),
+                    y,
+                    inner,
+                    Cell {
+                        fg: if selected { SELECTED } else { SECONDARY },
+                        bold: grabbed,
+                        ..Cell::default()
+                    },
+                    false,
+                );
+                return;
+            }
             let inner = preview
                 .trim_start_matches("‹ ")
                 .trim_end_matches(" ›")
@@ -958,10 +995,13 @@ impl Options {
         let longest = rows
             .iter()
             .map(|r| {
-                r.preview_column.zip(r.preview.as_deref()).map_or(
-                    UnicodeWidthStr::width(r.label.as_str()),
-                    |(col, preview)| col.saturating_sub(2) + UnicodeWidthStr::width(preview),
-                )
+                r.preview_column
+                    .zip(r.preview.as_deref())
+                    .filter(|_| !r.preview_info)
+                    .map_or(
+                        UnicodeWidthStr::width(r.label.as_str()),
+                        |(col, preview)| col.saturating_sub(2) + UnicodeWidthStr::width(preview),
+                    )
             })
             .max()
             .unwrap_or(0)
@@ -991,17 +1031,28 @@ impl Options {
         }
         groups
     }
+    /// Always-visible reasons are all-or-nothing: when any does not fit beside
+    /// its label, none is drawn and the selected one is shown below the list.
+    fn reasons_detached(width: usize, rows: &[Row]) -> bool {
+        let left = Self::left(width, rows);
+        rows.iter().any(|r| {
+            r.has_reason() && r.preview.is_some() && r.preview_position(width, left).is_none()
+        })
+    }
     pub fn previews_detached(width: usize, rows: &[Row]) -> bool {
-        Self::preview_groups(width, rows)
-            .iter()
-            .any(|detached| *detached)
+        Self::reasons_detached(width, rows)
+            || Self::preview_groups(width, rows)
+                .iter()
+                .any(|detached| *detached)
     }
     fn preview_group_detached(width: usize, rows: &[Row], group: u8) -> bool {
         Self::preview_groups(width, rows)[group as usize]
     }
     pub fn selected_preview_detached(&self, width: usize, rows: &[Row]) -> bool {
-        rows.get(self.selected)
-            .is_some_and(|r| Self::preview_group_detached(width, rows, r.preview_group))
+        rows.get(self.selected).is_some_and(|r| {
+            Self::preview_group_detached(width, rows, r.preview_group)
+                || r.has_reason() && Self::reasons_detached(width, rows)
+        })
     }
     /// One fit decision for the whole list, independent of selection and scrolling.
     pub fn paint_menu(
@@ -1035,7 +1086,7 @@ impl Options {
             && !self.back
             && result.1 > 0
             && let Some(row) = rows.get(self.selected)
-            && row.preview_selected_only
+            && (row.preview_selected_only || row.has_reason())
             && let Some(preview) = row.preview.as_deref()
         {
             let y = if rows.len() > result.1 {
@@ -1086,6 +1137,7 @@ impl Options {
         self.capacity = capacity;
         let left = Self::left(canvas.width, rows);
         let detached_groups = Self::preview_groups(canvas.width, rows);
+        let reasons_detached = Self::reasons_detached(canvas.width, rows);
         for (i, row) in rows.iter().enumerate().skip(self.scroll).take(capacity) {
             row.paint_with_preview(
                 canvas,
@@ -1093,7 +1145,11 @@ impl Options {
                 top + i - self.scroll,
                 i == self.selected && !self.back,
                 self.back,
-                !detached_groups[row.preview_group as usize] || !row.preview_selected_only,
+                if row.has_reason() {
+                    !reasons_detached
+                } else {
+                    !detached_groups[row.preview_group as usize] || !row.preview_selected_only
+                },
             );
         }
         (left, capacity)
@@ -1266,6 +1322,34 @@ impl Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grey_info_text_never_moves_or_widens_menu_items() {
+        let long = "no usage limits are published for this provider, so there is nothing to set";
+        let plain = || vec![Row::yes("Details"), Row::gate("Limits", false)];
+        let with = |text: &str| {
+            vec![
+                Row::yes("Details"),
+                Row::gate("Limits", false).with_reason(text),
+            ]
+        };
+        for width in [60usize, 100, 160] {
+            let x_of = |rows: Vec<Row>| {
+                let mut canvas = Canvas::new(width, 16);
+                let (left, _) = Options::default().paint_menu(&mut canvas, &rows, 1, 12, 14);
+                let line: Vec<_> = (0..width)
+                    .map(|x| canvas.cells[2 * width + x].glyph.clone())
+                    .collect();
+                (left, line.iter().position(|g| g == "L"))
+            };
+            assert_eq!(x_of(plain()), x_of(with(long)), "width {width}");
+            assert_eq!(x_of(plain()), x_of(with("short")), "width {width}");
+            assert_eq!(
+                Row::gate("Limits", false).with_reason(long).content_end(),
+                2 + 6
+            );
+        }
+    }
 
     #[test]
     fn overflowing_input_shows_an_ellipsis_and_keeps_the_full_value() {
