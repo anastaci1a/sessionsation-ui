@@ -73,6 +73,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("sessions-wide", 110, 24),
         ("sessions-claude-busy", 80, 20),
         ("sessions-gemini-busy", 80, 20),
+        ("sessions-antigravity-busy", 80, 20),
         ("archives-wide", 110, 24),
         ("archives-compact", 40, 18),
         ("sessions-loading", 60, 18),
@@ -91,12 +92,16 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("gemini-session", 80, 24),
         ("gemini-account", 80, 24),
         ("providers-gemini", 70, 16),
+        ("antigravity-session", 80, 24),
+        ("antigravity-account", 80, 24),
+        ("providers-antigravity", 70, 16),
         ("add-to-herdr", 80, 24),
         ("modal", 60, 24),
         ("login-codex", 70, 20),
         ("login-codex-link", 40, 16),
         ("login-claude-wait", 70, 20),
         ("login-gemini-wait", 70, 20),
+        ("login-antigravity-wait", 70, 20),
         ("operations-wide", 120, 24),
         ("operations-compact", 50, 20),
         ("operations-tiny", 40, 10),
@@ -166,6 +171,45 @@ fn management_geometry_usage_markers_and_picker_columns() {
                     serde_json::json!({"name":"Gemini busy","id":"g","provider":"gemini","account_id":"gemini:main","availability":"running","native_status":"busy","activity":"busy"}),
                     serde_json::json!({"name":"Gemini idle","id":"h","provider":"gemini","account_id":"gemini:main","availability":"running","activity":"idle"}),
                 ];
+            }
+            "sessions-antigravity-busy" => {
+                m.page = Page::Sessions;
+                m.sessions_known = true;
+                m.sessions = vec![
+                    serde_json::json!({"name":"Codex busy","id":"a","account_id":"codex:personal","availability":"running","activity":"busy","active_since":1}),
+                    serde_json::json!({"name":"Antigravity busy","id":"p","provider":"antigravity","account_id":"antigravity:main","availability":"running","native_status":"busy","activity":"busy"}),
+                    serde_json::json!({"name":"Antigravity idle","id":"q","provider":"antigravity","account_id":"antigravity:main","availability":"running","activity":"idle"}),
+                ];
+            }
+            "antigravity-session" => {
+                m.page = Page::Session("p".into());
+                m.sessions = vec![
+                    serde_json::json!({"id":"p","name":"Antigravity work","provider":"antigravity","account_id":"antigravity:agy-main","availability":"running","attachment":{"host":"herdr","pid":7},"capabilities":{"focus":true,"rename":true,"resume":false,"add_to_herdr":false,"submit":true,"queue":true,"steer":true,"archive":false,"delete":false},"capability_reasons":{"add_to_herdr":"unsupported","archive":"unsupported","delete":"unsupported"}}),
+                ];
+                m.options.selected = 0;
+            }
+            "antigravity-account" => {
+                m.inventory(vec![antigravity_account()]);
+                m.capabilities = antigravity_caps();
+                m.page = Page::Account("antigravity:agy-main".into());
+                m.options.selected = 1;
+            }
+            "providers-antigravity" => {
+                let mut all = accounts.clone();
+                all.push(antigravity_account());
+                m.inventory(all);
+                m.page = Page::Home;
+                m.options.selected = 6;
+            }
+            "login-antigravity-wait" => {
+                m.dialog = Some(Dialog::new(
+                    "Complete provider login",
+                    vec![
+                        "Complete the Antigravity CLI login in the opened pane…".into(),
+                        "This popup closes once the login pane opens; the pane reports the result. Cancel only stops waiting; it does not cancel the login.".into(),
+                    ],
+                    &["Cancel"],
+                ))
             }
             "gemini-session" => {
                 m.page = Page::Session("g".into());
@@ -491,4 +535,10 @@ fn gemini_account() -> sessionsation_ui::client::Account {
 }
 fn gemini_caps() -> serde_json::Value {
     serde_json::json!({"providers":[{"id":"gemini","implemented":true,"enrollment":true,"account_limits":false,"usage":false,"usage_state":"unsupported","operations":{"account_limits":{"supported":false,"reason":"Gemini CLI exposes no usage limits"}}}]})
+}
+fn antigravity_account() -> sessionsation_ui::client::Account {
+    serde_json::from_value(serde_json::json!({"id":"antigravity:agy-main","provider":"antigravity","selectable":true,"enabled":true,"usage_fresh":false,"usage_state":"unsupported","usage_source":"antigravity-unsupported","usage":{"state":"unsupported","source":"antigravity-unsupported","observed_at":null,"short":null,"weekly":null}})).unwrap()
+}
+fn antigravity_caps() -> serde_json::Value {
+    serde_json::json!({"providers":[{"id":"antigravity","implemented":true,"enrollment":true,"account_limits":false,"account_logout":false,"usage":false,"usage_state":"unsupported","operations":{"account_limits":{"supported":false,"reason":"Antigravity CLI exposes no usage limits"}}}]})
 }

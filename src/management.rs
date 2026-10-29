@@ -504,8 +504,8 @@ fn usage_lines(a: &Account, now: i64) -> Vec<String> {
     if let Some(then) = crate::usage::observed_at(a, now) {
         facts.push(("Observed", relative(now, Some(then))));
     }
-    // Gemini has no usage windows to list, not even as unsupported.
-    let windows: &[(&str, &str)] = if a.provider() == "gemini" {
+    // Gemini and Antigravity have no usage windows to list, not even as unsupported.
+    let windows: &[(&str, &str)] = if matches!(a.provider(), "gemini" | "antigravity") {
         &[]
     } else {
         &[("short", "5h window"), ("weekly", "Weekly")]
@@ -1013,7 +1013,7 @@ impl Manager {
     }
     /// Providers the backend reports as implemented and that this UI has a flow for.
     fn add_providers(&self) -> Vec<&'static str> {
-        ["codex", "claude", "gemini"]
+        ["codex", "claude", "gemini", "antigravity"]
             .into_iter()
             .filter(|id| {
                 self.capabilities["providers"].as_array().is_some_and(|ps| {
@@ -1597,8 +1597,8 @@ impl Manager {
                     Row::separator(),
                 ];
                 if logged_in {
-                    // Gemini publishes no usage, so it has no Limits at all.
-                    if provider != "gemini" {
+                    // Gemini and Antigravity publish no usage, so they have no Limits at all.
+                    if !matches!(provider.as_str(), "gemini" | "antigravity") {
                         rows.push(self.limits_account_row(key, removed));
                     }
                     // Older backends omit the capability: hide Log out entirely.
@@ -3098,7 +3098,7 @@ impl Manager {
         let mut body = vec![format!(
             "{label} account name: 1–{NAME_MAX_CHARS} letters, digits, hyphens or underscores."
         )];
-        if matches!(provider, "claude" | "gemini") {
+        if matches!(provider, "claude" | "gemini" | "antigravity") {
             body.push(format!(
                 "Login runs {label}'s own interactive sign-in in a terminal."
             ));
@@ -3689,6 +3689,8 @@ impl Manager {
                     vec![if claude {
                         if crate::session_list::is_gemini(&s) {
                             "Changes the Sessionsation name only. Gemini CLI has no native rename."
+                        } else if crate::session_list::is_antigravity(&s) {
+                            "Changes the Sessionsation name only."
                         } else {
                             "Changes the Sessionsation name only. Claude Code's own title is applied the next time this session is launched or resumed."
                         }
@@ -4628,7 +4630,10 @@ impl Manager {
                 if !semantics.is_empty() {
                     body.extend(semantics);
                     body.push("The upstream provider account is unchanged.".into());
-                } else if matches!(self.provider_of(&key).as_str(), "claude" | "gemini") {
+                } else if matches!(
+                    self.provider_of(&key).as_str(),
+                    "claude" | "gemini" | "antigravity"
+                ) {
                     body.push("A managed account home is removed and its conversation history is preserved. An adopted external directory is left in place. The upstream provider account is unchanged.".into());
                 } else {
                     body.push("All saved and archived conversations will be preserved outside the account directory. The upstream provider account is unchanged.".into());
@@ -8263,6 +8268,90 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             m.dialog.as_ref().unwrap().body[0],
             "Complete the Gemini CLI login in the opened pane…"
         );
+    }
+    fn antigravity(name: &str) -> Account {
+        serde_json::from_value(json!({"id":format!("antigravity:{name}"),"provider":"antigravity","selectable":true,"enabled":true,"usage_fresh":false,"usage_state":"unsupported","usage_source":"antigravity-unsupported","usage":{"state":"unsupported","source":"antigravity-unsupported","observed_at":null,"short":null,"weekly":null}})).unwrap()
+    }
+    fn quad_providers() -> Manager {
+        let mut m = triple_providers();
+        let mut all = m.accounts.clone();
+        all.push(antigravity("agy-main"));
+        m.inventory(all);
+        m.capabilities["providers"].as_array_mut().unwrap().push(json!({"id":"antigravity","implemented":true,"enrollment":true,"account_limits":false,"account_logout":false,"usage":false,"usage_state":"unsupported","operations":{"account_limits":{"supported":false,"reason":"Antigravity CLI exposes no usage limits"}}}));
+        m
+    }
+    #[test]
+    fn antigravity_is_a_fourth_provider_in_add_filters_tags_and_limits() {
+        let mut m = quad_providers();
+        m.add();
+        let d = m.dialog.as_ref().unwrap();
+        let buttons: Vec<_> = d.buttons.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(
+            buttons,
+            [
+                "Codex",
+                "Claude Code",
+                "Gemini CLI",
+                "Antigravity CLI",
+                "",
+                "Cancel"
+            ]
+        );
+        m.submit(3, vec![]);
+        let d = m.dialog.as_ref().unwrap();
+        assert!(d.body[0].starts_with("Antigravity CLI account name"));
+        assert!(d.body[1].contains("Antigravity CLI's own interactive sign-in"));
+        let sent = m.submit(0, vec!["agy-two".into()]);
+        assert!(
+            matches!(&sent[..], [Intent::Api(_, args)] if args == &strings(&["account", "add", "antigravity:agy-two"]))
+        );
+        let u = Usage::account(&antigravity("agy-main"));
+        assert_eq!(u.status, "Usage unsupported");
+        assert!(u.status_only());
+        m.go(Page::Account("antigravity:agy-main".into()));
+        let rows = m.rows();
+        let labels: Vec<_> = rows.iter().map(|r| r.label.as_str()).collect();
+        // No Limits, auth-mode, API-key or live-steering items for Antigravity.
+        for hidden in [
+            "Limits",
+            "Live steering",
+            "Account auth",
+            "API key",
+            "Auth mode",
+        ] {
+            assert!(!labels.contains(&hidden), "{hidden} in {labels:?}");
+        }
+        // Logout is unsupported: never an enabled row.
+        assert!(rows.iter().all(|r| r.label != "Log out" || !r.enabled));
+        let acct = m
+            .accounts
+            .iter()
+            .find(|a| a.id == "antigravity:agy-main")
+            .unwrap();
+        let lines = usage_lines(acct, 0);
+        assert_eq!(fact(&lines, "Provider").as_deref(), Some("Antigravity CLI"));
+        assert_eq!(fact(&lines, "Status").as_deref(), Some("Usage unsupported"));
+        assert!(fact(&lines, "Auth").is_none() && fact(&lines, "API key").is_none());
+        assert!(fact(&lines, "5h window").is_none() && fact(&lines, "Weekly").is_none());
+        assert!(!lines.join("\n").contains('%'));
+    }
+    #[test]
+    fn antigravity_login_plan_uses_the_pane_flow_without_an_auth_step() {
+        let mut m = quad_providers();
+        m.add_for("antigravity");
+        let sent = m.submit(0, vec!["new".into()]);
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        let out = m.response(token, Ok(json!({"login":{"action":"exec","argv":["sessionsation","account","login","antigravity:new"],"credentials_in_client":false},"auth":{"logged_in":false}})));
+        assert!(
+            matches!(&out[..], [Intent::LaunchLogin(argv)] if argv == &strings(&["sessionsation","account","login","antigravity:new"]))
+        );
+        assert_eq!(
+            m.dialog.as_ref().unwrap().body[0],
+            "Complete the Antigravity CLI login in the opened pane…"
+        );
+        assert!(!matches!(m.form, Form::GeminiAuth(..) | Form::GeminiKey(_)));
     }
     const GEMINI_REASON: &str =
         "retired by Google for personal accounts — use Antigravity, API key or Workspace";

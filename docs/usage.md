@@ -109,11 +109,13 @@ there is no matching selection; refreshed lists retain the hovered account by ID
 - The popup uses public backend API v1 only: accounts/usage/limits, new/resume,
   session details/rename, supported switch/restart/stop, HERDR Space moves, archive/restore/delete,
   and operation progress. Final checks and destructive confirmations belong to CLI.
-- Claude Code and Gemini CLI sessions offer what each session's backend capabilities
+- Claude Code, Gemini CLI and Antigravity CLI sessions offer what each session's backend capabilities
   allow: focus, rename, start, and (contract revision 17) archive, restore and delete of
   stopped conversations. Rows they cannot use stay greyed with the session's backend
   reason (`exit the agent first`, `hosted worker running`) or `not supported for
-  Claude Code`/`Gemini CLI` when the provider has no such control.
+  Claude Code`/`Gemini CLI`/`Antigravity CLI` when the provider has no such control
+  (Antigravity has no archive, restore, delete, stop, restart, account switch, Space move or
+  Add to HERDR; new, resume and rename are supported).
   Cross-provider conversion is outside this version.
 - Active Codex sessions support Change working directory and Move project folder
   when the backend advertises those capabilities. Enter a destination, review the
@@ -166,7 +168,7 @@ URL and code. Claude Code returns an interactive login plan; the UI shows the
 exact command to run in a terminal and never runs it or handles tokens. Account
 names are unique per provider (the same name may exist under several providers;
 UI state is keyed by the provider-qualified ID). Every account is preceded by a
-provider symbol: Codex ⏣, Claude Code ✻, Gemini CLI ✦ (one cell wide; mapping in
+provider symbol: Codex ⏣, Claude Code ✻, Gemini CLI ✦, Antigravity CLI ◬ (U+25EC, one cell wide; mapping in
 `usage::provider_symbol`). Resume and Switch account lock the
 account step to the session's provider. Usage details name the source, semantics,
 age and reset time; a missing or unusable window is shown as unavailable or unknown,
@@ -323,6 +325,14 @@ reason) or saved-but-unverified (with its code). Account Details show `Auth` (Go
 API key) and, for API key, whether a key is saved. A backend without `auth_modes`
 keeps the plain Login confirmation.
 
+Antigravity CLI (`agy`, provider `antigravity`, contract revision 24) is added like Gemini
+but has no sign-in modes: its `capabilities.providers` entry has no `auth_modes` or
+`auth_command`, so there is no API-key, Account auth or live-steering item, and
+`account_logout` is false (log out with `/logout` inside agy). Add and Log in run the
+backend's interactive login plan in a visible pane exactly as for Gemini; agy then shows
+its Google OAuth URL and waits for the pasted code. Usage is unsupported and shown as a
+status, never as 0%, and no Limits row or usage windows are listed.
+
 Delete opens an intent preview without scanning account files. The CLI checks
 activity, preserves history and deletes data only after confirmation. Active
 sessions block deletion. Progress offers Continue in background, which detaches
@@ -401,6 +411,11 @@ check the selected catalog generation and process epoch without full discovery.
 It still checks membership in the intended HERDR pane/socket and rechecks the
 generation before focusing. Older backends retain the discovery-based check;
 neither path launches or submits input to an agent.
+
+Settings > Spinners has one row per provider (Claude, Codex, Gemini, Antigravity). The
+**Antigravity spinner** row offers Native (default: agy's own 8-frame Braille cycle
+`⣾ ⣽ ⣻ ⢿ ⡿ ⣟ ⣯ ⣷`, 80 ms), Pulse (`· ▵ ▴ ◬ ▴ ▵`), Tilt (`◬ ◭ ◬ ◮`) and Glow (the static
+`◬` with a colour pulse); every glyph is one cell wide.
 
 Manage sessions sorts busy, idle, then inactive sessions, newest access first
 within each group, with a bullet separator between active and inactive groups.
@@ -559,7 +574,7 @@ unset clears that default and its pending creation plan.
 **Permissions** holds the **New session permissions** selector: **YOLO** (top, the
 default) starts new
 and resumed sessions without approval prompts (Codex approval `never` with full
-access, Claude `--dangerously-skip-permissions`, Gemini `--approval-mode yolo`);
+access, Claude `--dangerously-skip-permissions`, Gemini `--approval-mode yolo`, Antigravity `--dangerously-skip-permissions`);
 **Default** keeps each provider's own prompts. It is sent as the launch request's
 `permissions` only to a backend that negotiates it (contract revision 19); an older
 backend uses its own default.

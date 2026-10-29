@@ -1,5 +1,7 @@
 //! Session rows: name, state marker, dim provider/account column and operation badge.
-use crate::preferences::{ClaudeSpinner, CodexSpinner, GeminiSpinner, Spinners};
+use crate::preferences::{
+    AntigravitySpinner, ClaudeSpinner, CodexSpinner, GeminiSpinner, Spinners,
+};
 use crate::widgets::RowMode;
 use crate::{
     render::{Accent, Canvas, Cell},
@@ -226,9 +228,15 @@ pub fn is_gemini(s: &Value) -> bool {
             .as_str()
             .is_some_and(|id| id.starts_with("gemini:"))
 }
-/// Claude Code and Gemini CLI sessions share one capability-gated action set.
+pub fn is_antigravity(s: &Value) -> bool {
+    s["provider"] == "antigravity"
+        || s["account_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("antigravity:"))
+}
+/// Claude Code, Gemini CLI and Antigravity CLI sessions share one capability-gated action set.
 pub fn is_native_provider(s: &Value) -> bool {
-    is_claude(s) || is_gemini(s)
+    is_claude(s) || is_gemini(s) || is_antigravity(s)
 }
 pub fn is_claude(s: &Value) -> bool {
     s["provider"] == "claude"
@@ -511,9 +519,19 @@ pub const GEMINI_CONCAVE_BLINK_FRAMES: [&str; 4] = ["✦", "⟡", "✧", "⟡"];
 pub const GEMINI_CONCAVE_BLINK_MS: u64 = THEMED_FRAME_MS;
 /// Gemini "classic": Gemini CLI's own Braille spinner at 80 ms.
 pub const GEMINI_CLASSIC_MS: u64 = 80;
+/// Antigravity "native": the agy TUI's own eight-frame Braille cycle.
+pub const ANTIGRAVITY_NATIVE_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+pub const ANTIGRAVITY_NATIVE_MS: u64 = 80;
+/// Antigravity "pulse": a triangle that grows and shrinks.
+pub const ANTIGRAVITY_PULSE_FRAMES: [&str; 6] = ["·", "▵", "▴", "◬", "▴", "▵"];
+pub const ANTIGRAVITY_PULSE_MS: u64 = THEMED_FRAME_MS;
+/// Antigravity "tilt": the dotted triangle fills its left and right halves in turn.
+pub const ANTIGRAVITY_TILT_FRAMES: [&str; 4] = ["◬", "◭", "◬", "◮"];
+pub const ANTIGRAVITY_TILT_MS: u64 = THEMED_FRAME_MS;
 /// "Glow": a static glyph whose colour pulses like the picker arrow.
 pub const CODEX_GLOW_GLYPH: &str = "⏣";
 pub const GEMINI_GLOW_GLYPH: &str = "✦";
+pub const ANTIGRAVITY_GLOW_GLYPH: &str = "◬";
 pub const CLAUDE_GLOW_GLYPH: &str = "✻";
 
 fn cycle(frames: &'static [&'static str], ms: u64, now_ms: u64) -> &'static str {
@@ -545,6 +563,17 @@ pub fn gemini_frame(kind: GeminiSpinner, now_ms: u64) -> &'static str {
         GeminiSpinner::Glow => GEMINI_GLOW_GLYPH,
     }
 }
+/// The busy frame of the chosen Antigravity spinner (Glow is its static glyph).
+pub fn antigravity_frame(kind: AntigravitySpinner, now_ms: u64) -> &'static str {
+    match kind {
+        AntigravitySpinner::Native => {
+            cycle(&ANTIGRAVITY_NATIVE_FRAMES, ANTIGRAVITY_NATIVE_MS, now_ms)
+        }
+        AntigravitySpinner::Pulse => cycle(&ANTIGRAVITY_PULSE_FRAMES, ANTIGRAVITY_PULSE_MS, now_ms),
+        AntigravitySpinner::Tilt => cycle(&ANTIGRAVITY_TILT_FRAMES, ANTIGRAVITY_TILT_MS, now_ms),
+        AntigravitySpinner::Glow => ANTIGRAVITY_GLOW_GLYPH,
+    }
+}
 /// The busy frame of the chosen Claude spinner (Glow is its static glyph).
 pub fn claude_frame(kind: ClaudeSpinner, now_ms: u64) -> &'static str {
     match kind {
@@ -556,7 +585,9 @@ pub fn claude_frame(kind: ClaudeSpinner, now_ms: u64) -> &'static str {
 /// Whether the busy row's chosen spinner is a static glyph with a colour pulse.
 pub fn row_glows(session: &Value, spinners: Spinners) -> bool {
     busy(session)
-        && if is_gemini(session) {
+        && if is_antigravity(session) {
+            spinners.antigravity == AntigravitySpinner::Glow
+        } else if is_gemini(session) {
             spinners.gemini == GeminiSpinner::Glow
         } else if is_claude(session) {
             spinners.claude == ClaudeSpinner::Glow
@@ -568,7 +599,9 @@ pub fn row_glows(session: &Value, spinners: Spinners) -> bool {
 /// a turn runs, otherwise it is the static provider symbol.
 pub fn row_icon(session: &Value, now_ms: u64, spinners: Spinners) -> &'static str {
     if busy(session) {
-        if is_gemini(session) {
+        if is_antigravity(session) {
+            antigravity_frame(spinners.antigravity, now_ms)
+        } else if is_gemini(session) {
             gemini_frame(spinners.gemini, now_ms)
         } else if is_claude(session) {
             claude_frame(spinners.claude, now_ms)
@@ -1326,6 +1359,21 @@ mod tests {
             row.0.preview.as_deref(),
             Some("· not supported for Gemini CLI")
         );
+        let agy = json!({"provider":"antigravity","availability":"stopped","capabilities":{"resume":true}});
+        let rows = actions(&agy, true);
+        for l in [
+            "Archive session",
+            "Delete session",
+            "End session",
+            "Switch account",
+        ] {
+            let r = find(&rows, l);
+            assert!(!r.0.enabled && r.1 == Action::Unavailable, "{l}");
+            assert_eq!(
+                r.0.preview.as_deref(),
+                Some("· not supported for Antigravity CLI")
+            );
+        }
         // Archived native sessions offer Restore and Delete like Codex.
         let mut archived = claude("archived", false);
         archived["capabilities"] = json!({"restore":true,"delete":true});
@@ -1713,7 +1761,9 @@ mod tests {
     }
     #[test]
     fn row_icon_frames_follow_the_provider_and_chosen_spinner_while_busy() {
-        use crate::preferences::{ClaudeSpinner as C, CodexSpinner as X, GeminiSpinner as G};
+        use crate::preferences::{
+            AntigravitySpinner as A, ClaudeSpinner as C, CodexSpinner as X, GeminiSpinner as G,
+        };
         let busy = |p: &str| json!({"account_id":format!("{p}:a"),"availability":"running","activity":"busy"});
         let idle = |p: &str| json!({"account_id":format!("{p}:a"),"availability":"running","activity":"idle"});
         let d = Spinners::default();
@@ -1721,6 +1771,7 @@ mod tests {
             claude,
             codex,
             gemini,
+            antigravity: Default::default(),
         };
         assert_eq!(row_icon(&busy("claude"), 0, d), "·");
         assert_eq!(row_icon(&busy("claude"), 1000, d), "✽");
@@ -1734,6 +1785,28 @@ mod tests {
         assert_eq!(gemini, ["⋅", "✧", "⟡", "✦", "⟡", "✧", "⋅"]);
         assert_eq!(row_icon(&idle("claude"), 1000, d), "✻");
         assert_eq!(row_icon(&idle("gemini"), 80, d), "✦");
+        assert_eq!(row_icon(&idle("antigravity"), 80, d), "◬");
+        let agy: Vec<_> = (0..9)
+            .map(|i| row_icon(&busy("antigravity"), i * 80, d))
+            .collect();
+        assert_eq!(agy, ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷", "⣾"]);
+        let agy_with = |kind, n| -> Vec<&str> {
+            (0..n)
+                .map(|i| {
+                    row_icon(
+                        &busy("antigravity"),
+                        i * 120,
+                        Spinners {
+                            antigravity: kind,
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(agy_with(A::Pulse, 6), ["·", "▵", "▴", "◬", "▴", "▵"]);
+        assert_eq!(agy_with(A::Tilt, 4), ["◬", "◭", "◬", "◮"]);
+        assert_eq!(agy_with(A::Glow, 3), ["◬", "◬", "◬"]);
         assert_eq!(row_icon(&idle("codex"), 100, d), "⏣");
         // Every option selects its own frames.
         let frames = |kind, n| -> Vec<&str> {
@@ -1772,8 +1845,9 @@ mod tests {
         assert_eq!(claude(C::Glow, 0), "✻");
         assert_eq!(claude(C::Glow, 777), "✻");
         // Only busy Glow rows get the colour pulse.
-        let glow = with(C::Glow, X::Glow, G::Glow);
-        for p in ["claude", "codex", "gemini"] {
+        let mut glow = with(C::Glow, X::Glow, G::Glow);
+        glow.antigravity = A::Glow;
+        for p in ["claude", "codex", "gemini", "antigravity"] {
             assert!(row_glows(&busy(p), glow) && !row_glows(&idle(p), glow));
             assert!(!row_glows(&busy(p), d));
         }
@@ -1791,10 +1865,18 @@ mod tests {
             &GEMINI_MORPH_FRAMES,
             &GEMINI_CONCAVE_BLINK_FRAMES,
             &BRAILLE_FRAMES,
+            &ANTIGRAVITY_NATIVE_FRAMES,
+            &ANTIGRAVITY_PULSE_FRAMES,
+            &ANTIGRAVITY_TILT_FRAMES,
             &["·", "✢", "*", "✶", "✻", "✽"],
         ]
         .concat();
-        glyphs.extend([CODEX_GLOW_GLYPH, GEMINI_GLOW_GLYPH, CLAUDE_GLOW_GLYPH]);
+        glyphs.extend([
+            CODEX_GLOW_GLYPH,
+            GEMINI_GLOW_GLYPH,
+            ANTIGRAVITY_GLOW_GLYPH,
+            CLAUDE_GLOW_GLYPH,
+        ]);
         for g in glyphs {
             assert_eq!(UnicodeWidthStr::width(g), 1, "{g}");
             if std::env::var_os("SPINNER_WIDTH_REPORT").is_some() {

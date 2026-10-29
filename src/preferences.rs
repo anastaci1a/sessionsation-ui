@@ -161,6 +161,27 @@ impl GeminiSpinner {
         }
     }
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AntigravitySpinner {
+    /// The agy TUI's own eight-frame Braille cycle.
+    #[default]
+    Native,
+    Pulse,
+    Tilt,
+    Glow,
+}
+impl AntigravitySpinner {
+    pub const ALL: [Self; 4] = [Self::Native, Self::Pulse, Self::Tilt, Self::Glow];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Native => "Native",
+            Self::Pulse => "Pulse",
+            Self::Tilt => "Tilt",
+            Self::Glow => "Glow",
+        }
+    }
+}
 /// Permissions of sessions the popup starts (Settings > New session permissions).
 /// YOLO (top, default) runs providers without approval prompts; Default keeps the
 /// providers' own prompts. Sent as the launch request's `permissions` field.
@@ -193,6 +214,7 @@ pub struct Spinners {
     pub claude: ClaudeSpinner,
     pub codex: CodexSpinner,
     pub gemini: GeminiSpinner,
+    pub antigravity: AntigravitySpinner,
 }
 /// The value one step up (toward the top of `all`) or down; it stops at the ends.
 pub fn step<T: Copy + PartialEq>(all: &[T], current: T, up: bool) -> T {
@@ -234,6 +256,8 @@ pub struct Preferences {
     #[serde(default, deserialize_with = "lenient")]
     pub gemini_spinner: GeminiSpinner,
     #[serde(default, deserialize_with = "lenient")]
+    pub antigravity_spinner: AntigravitySpinner,
+    #[serde(default, deserialize_with = "lenient")]
     pub new_session_permissions: NewSessionPermissions,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -261,6 +285,7 @@ impl Default for Preferences {
             claude_spinner: ClaudeSpinner::default(),
             codex_spinner: CodexSpinner::default(),
             gemini_spinner: GeminiSpinner::default(),
+            antigravity_spinner: AntigravitySpinner::default(),
             new_session_permissions: NewSessionPermissions::default(),
             extra: serde_json::Map::new(),
         }
@@ -272,6 +297,7 @@ impl Preferences {
             claude: self.claude_spinner,
             codex: self.codex_spinner,
             gemini: self.gemini_spinner,
+            antigravity: self.antigravity_spinner,
         }
     }
     pub fn key(instance: &str, workspace: &str) -> String {
@@ -429,6 +455,7 @@ mod spinner_tests {
             claude_spinner: ClaudeSpinner::Glow,
             codex_spinner: CodexSpinner::Benzene,
             gemini_spinner: GeminiSpinner::ConcaveBlink,
+            antigravity_spinner: AntigravitySpinner::Tilt,
             ..Default::default()
         };
         p.save(&path).unwrap();
@@ -441,6 +468,7 @@ mod spinner_tests {
         assert_eq!(old.spinners(), Spinners::default());
         assert_eq!(old.codex_spinner, CodexSpinner::FillPulse);
         assert_eq!(old.gemini_spinner, GeminiSpinner::Twinkle);
+        assert_eq!(old.antigravity_spinner, AntigravitySpinner::Native);
         assert_eq!(old.claude_spinner, ClaudeSpinner::Claude);
         assert_eq!(old.new_session_permissions, NewSessionPermissions::Yolo);
     }

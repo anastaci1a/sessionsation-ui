@@ -495,6 +495,7 @@ pub fn provider_symbol(provider: &str) -> &'static str {
     match provider {
         "claude" => "✻",
         "gemini" => "✦",
+        "antigravity" => "◬",
         _ => "⏣",
     }
 }
@@ -1470,8 +1471,8 @@ mod tests {
     }
     #[test]
     fn provider_symbols_are_one_cell_wide_and_distinct() {
-        let all = ["codex", "claude", "gemini"].map(provider_symbol);
-        assert_eq!(all, ["⏣", "✻", "✦"]);
+        let all = ["codex", "claude", "gemini", "antigravity"].map(provider_symbol);
+        assert_eq!(all, ["⏣", "✻", "✦", "◬"]);
         for symbol in all {
             assert_eq!(UnicodeWidthStr::width(symbol), 1, "{symbol}");
         }
@@ -1832,6 +1833,14 @@ mod picker_tests {
     }
     fn claude_account(usage: serde_json::Value) -> Account {
         serde_json::from_value(json!({"id":"claude:claude-main","provider":"claude","selectable":true,"usage_fresh":true,"enabled":true,"usage":usage})).unwrap()
+    }
+    #[test]
+    fn antigravity_unsupported_usage_is_a_status_never_zero_percent() {
+        let a: Account = serde_json::from_value(json!({"id":"antigravity:agy","provider":"antigravity","selectable":true,"enabled":true,"usage_fresh":false,"usage_state":"unsupported","usage":{"state":"unsupported","observed_at":null,"short":null,"weekly":null}})).unwrap();
+        let u = Usage::account(&a);
+        assert_eq!(u.status, "Usage unsupported");
+        assert!(u.status_only());
+        assert_eq!(a.provider(), "antigravity");
     }
     #[test]
     fn unsupported_usage_is_a_status_never_zero_percent() {

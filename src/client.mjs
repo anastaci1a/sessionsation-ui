@@ -51,7 +51,7 @@ export function executePlan(plan, {exec=process.execve, chdir=process.chdir, env
 }
 export const targetArgs = s => ['--session',s.id,'--expected-generation',s.generation];
 export const display = value => String(value??'').replace(/[\x00-\x1f\x7f-\x9f]/g,'');
-export const PROVIDER_LABELS={codex:'Codex',claude:'Claude Code',gemini:'Gemini CLI'};
+export const PROVIDER_LABELS={codex:'Codex',claude:'Claude Code',gemini:'Gemini CLI',antigravity:'Antigravity CLI'};
 export const providerOf=a=>a?.provider??String(a?.id??'').split(':')[0]??'codex';
 export const providerLabel=p=>PROVIDER_LABELS[p]??display(p);
 /** Providers the backend implements and this client has a flow for. */

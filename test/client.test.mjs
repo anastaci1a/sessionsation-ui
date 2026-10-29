@@ -77,8 +77,8 @@ test('New account menu uses account list without global session discovery',async
   assert.match(output,/FAST_NEW_HANDOFF/);
 });
 test('provider picker lists only implemented providers this client has a flow for',()=>{
-  const caps={providers:[{id:'codex',implemented:true},{id:'claude',implemented:true},{id:'future',implemented:true},{id:'other',implemented:false}]};
-  assert.deepEqual(addableProviders(caps),['codex','claude']);
+  const caps={providers:[{id:'codex',implemented:true},{id:'claude',implemented:true},{id:'antigravity',implemented:true},{id:'future',implemented:true},{id:'other',implemented:false}]};
+  assert.deepEqual(addableProviders(caps),['codex','claude','antigravity']);
   assert.deepEqual(addableProviders({}),[]);
   assert.equal(providerLabel('claude'),'Claude Code'); assert.equal(providerLabel('codex'),'Codex');
 });
@@ -88,6 +88,8 @@ test('unified account list filters by provider and tags each account',()=>{
   assert.deepEqual(filterAccounts(accounts,'codex').map(a=>a.id),['codex:a','codex:b']);
   assert.equal(filterAccounts(accounts,null).length,3);
   assert.match(accountLabel({id:'claude:claude-main',usage:{}}),/\[Claude Code\]/);
+  assert.equal(accountLabel({id:'antigravity:agy-main',usage_state:'unsupported',usage:{state:'unsupported',observed_at:null,short:null,weekly:null}}),'antigravity:agy-main [Antigravity CLI] usage unsupported');
+  assert.deepEqual(filterAccounts([{id:'antigravity:a',provider:'antigravity'},{id:'gemini:g'}],'antigravity').map(a=>a.id),['antigravity:a']);
 });
 test('usage summary never turns missing, partial or unusable data into 0%',()=>{
   const win=(d,p)=>({duration_minutes:d,used_percent:p});
@@ -97,6 +99,7 @@ test('usage summary never turns missing, partial or unusable data into 0%',()=>{
   for (const state of ['missing','no_windows','error']) assert.equal(usageSummary({usage:{state,observed_at:1,short:win(300,0),weekly:null}}),'usage unavailable');
   assert.equal(usageSummary({usage:{state:'unsupported',observed_at:null,short:null,weekly:null}}),'usage unsupported');
   assert.equal(providerLabel('gemini'),'Gemini CLI');
+  assert.equal(providerLabel('antigravity'),'Antigravity CLI');
   assert.equal(usageSummary({usage:{observed_at:null,short:null,weekly:null}}),'usage unavailable');
   assert.equal(usageSummary({usage:{observed_at:1,short:win(300,Number.NaN),weekly:win(10080,150)}}),'5h unknown / wk unknown');
 });
