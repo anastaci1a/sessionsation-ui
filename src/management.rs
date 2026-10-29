@@ -2475,8 +2475,14 @@ impl Manager {
                 vec![]
             }
             KeyCode::Up | KeyCode::Down => {
-                self.options
-                    .step_with_wrap(&self.rows(), false, key.code == KeyCode::Up, wrap);
+                let before = self.options.selected;
+                let up = key.code == KeyCode::Up;
+                self.options.step_with_wrap(&self.rows(), false, up, wrap);
+                // Wrapping jumps the Home account list to the matching end at once.
+                let selected = self.options.selected;
+                if self.page == Page::Home && selected != before && (selected > before) == up {
+                    self.account_scroll = if up { self.accounts.len() } else { 0 };
+                }
                 self.badge_focus = false;
                 self.apply_home_column();
                 vec![]
@@ -5856,6 +5862,49 @@ mod tests {
         m.paint(&mut c, 19);
         assert_eq!(m.account_scroll, 0);
         assert!(!m.rows().iter().any(|r| r.label == "Manage Accounts"));
+    }
+    #[test]
+    fn home_list_wrap_jumps_the_scroll_to_the_matching_end() {
+        let mut m = setup();
+        m.inventory((0..30).map(account).collect());
+        let layout = crate::usage::AccountsLayout::fit(&m.accounts, 60);
+        let press = |m: &mut Manager, code| {
+            m.key(KeyEvent::new(code, KeyModifiers::NONE));
+        };
+        let paint = |m: &mut Manager| {
+            let mut c = Canvas::new(60, 24);
+            m.paint(&mut c, 23);
+            c
+        };
+        let row = |c: &Canvas, y: usize| -> String {
+            c.cells[y * 60..(y + 1) * 60]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect()
+        };
+        m.options.selected = 5 + 29;
+        let c = paint(&mut m);
+        let end = m.account_scroll;
+        assert!(end > 0);
+        assert!(screen_text(&c).contains("account29"));
+        // The top `…`, under the options: one blank row on each side, at the names.
+        assert_eq!(c.cells[9 * 60 + layout.name_x].glyph, "…");
+        assert_eq!(row(&c, 9).trim(), "…");
+        assert!(row(&c, 8).trim().is_empty() && row(&c, 10).trim().is_empty());
+        // Down from the last account wraps to the top option: the list is at its top at once.
+        press(&mut m, KeyCode::Down);
+        assert_eq!(m.options.selected, 0);
+        assert_eq!(m.account_scroll, 0);
+        let c = paint(&mut m);
+        assert_eq!(m.account_scroll, 0);
+        assert!(screen_text(&c).contains("account0"));
+        assert_ne!(c.cells[9 * 60 + layout.name_x].glyph, "…");
+        // Up from the top option wraps to the last account: the list is at its end at once.
+        press(&mut m, KeyCode::Up);
+        assert_eq!(m.options.selected, 5 + 29);
+        assert!(m.account_scroll >= end);
+        paint(&mut m);
+        assert_eq!(m.account_scroll, end);
     }
     #[test]
     fn page_selection_resets_on_entry_and_is_restored_on_return() {

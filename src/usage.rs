@@ -577,7 +577,56 @@ impl AccountsLayout {
             usage.height()
         }
     }
-    /// First account to draw so `selected` is visible in `rows` terminal rows.
+    /// Terminal rows each account takes, with the blank after it.
+    fn heights(&self, accounts: &[Account]) -> Vec<usize> {
+        accounts
+            .iter()
+            .map(|a| self.row_height(&Usage::account(a)) + 1)
+            .collect()
+    }
+    /// `…` rows need room for one on each side of the tallest account; shorter
+    /// areas (such as a single row) scroll plainly without them.
+    fn ellipses(heights: &[usize], rows: usize) -> bool {
+        heights
+            .iter()
+            .max()
+            .is_some_and(|h| h + 2 * ELLIPSIS_ROWS <= rows + 1)
+    }
+    /// What `rows` terminal rows show from account `first` on: a `…` row stands
+    /// for the accounts above it, and for those below when they do not all fit.
+    pub fn window(&self, accounts: &[Account], first: usize, rows: usize) -> ListWindow {
+        Self::window_of(&self.heights(accounts), first, rows)
+    }
+    fn window_of(heights: &[usize], first: usize, rows: usize) -> ListWindow {
+        let count = heights.len();
+        let first = first.min(count.saturating_sub(1));
+        let ellipses = Self::ellipses(heights, rows);
+        // The blank after the last row may fall on the row below the area.
+        let room = rows + 1;
+        let mut used = usize::from(ellipses && first > 0) * ELLIPSIS_ROWS;
+        let rest: usize = heights[first..].iter().sum();
+        let reserve = if ellipses && used + rest > room {
+            ELLIPSIS_ROWS
+        } else {
+            0
+        };
+        let mut end = first;
+        while end < count && used + heights[end] + reserve <= room {
+            used += heights[end];
+            end += 1;
+        }
+        ListWindow {
+            first,
+            end,
+            above: ellipses && first > 0,
+            below: ellipses && end < count,
+        }
+    }
+    /// First account to draw so `selected` is visible in `rows` terminal rows,
+    /// moving the scroll as little as possible. A `…` row hides two or more
+    /// accounts; a single hidden account is shown instead. From [`MARGIN_ROWS`]
+    /// visible rows, the cursor keeps one account between itself and a `…` row,
+    /// so the list scrolls one account before reaching it.
     pub fn scroll(
         &self,
         accounts: &[Account],
@@ -585,18 +634,51 @@ impl AccountsLayout {
         selected: Option<usize>,
         rows: usize,
     ) -> usize {
-        let heights: Vec<usize> = accounts
-            .iter()
-            .map(|a| self.row_height(&Usage::account(a)) + 1)
-            .collect();
-        let mut first = first.min(accounts.len().saturating_sub(1));
-        let Some(sel) = selected.filter(|s| *s < accounts.len()) else {
+        let heights = self.heights(accounts);
+        let count = accounts.len();
+        let first = first.min(count.saturating_sub(1));
+        let selected = selected.filter(|s| *s < count);
+        if !Self::ellipses(&heights, rows) {
+            let Some(sel) = selected else {
+                return first;
+            };
+            let mut first = first.min(sel);
+            // Rows needed to show first..=sel (the last account has no trailing blank).
+            while first < sel && heights[first..=sel].iter().sum::<usize>() - 1 > rows {
+                first += 1;
+            }
             return first;
-        };
-        first = first.min(sel);
-        // Rows needed to show first..=sel (the last account has no trailing blank).
-        while first < sel && heights[first..=sel].iter().sum::<usize>() - 1 > rows {
-            first += 1;
+        }
+        let windows: Vec<ListWindow> = (0..count)
+            .map(|first| Self::window_of(&heights, first, rows))
+            .collect();
+        // Strictest first; the relaxed passes only serve accounts taller than a `…` row.
+        for (margin, single) in [(true, false), (true, true), (false, false), (false, true)] {
+            let valid: Vec<&ListWindow> = windows
+                .iter()
+                .filter(|w| single || w.first != 1 && !(w.below && w.end + 1 == count))
+                .filter(|w| {
+                    selected.is_none_or(|s| {
+                        (w.first..w.end).contains(&s)
+                            && !(margin
+                                && w.rows() >= MARGIN_ROWS
+                                && (w.above && s == w.first || w.below && s + 1 == w.end))
+                    })
+                })
+                .collect();
+            let Some(best) = valid
+                .iter()
+                .min_by_key(|w| (w.first.abs_diff(first), w.first))
+            else {
+                continue;
+            };
+            // A window reaching the last account starts as early as it can.
+            return valid
+                .iter()
+                .filter(|w| best.end == count && w.end == count)
+                .map(|w| w.first)
+                .min()
+                .unwrap_or(best.first);
         }
         first
     }
@@ -624,8 +706,28 @@ impl AccountsLayout {
     ) {
         let cursor_off = back || selected.is_none_or(|i| i >= accounts.len());
         let name_focus = !cursor_off && !usage_focus;
+        let window = self.window(accounts, first, bottom.saturating_sub(top));
+        // `…` rows take the names' hue at their position, at the level of a name
+        // without the cursor (never dimmed by usage focus); they are not selectable.
+        let ellipsis = Accent {
+            brightness: if cursor_off || moving.is_some() || name_focus {
+                600
+            } else {
+                1000
+            },
+            ..Accent::default()
+        };
         let mut y = top;
-        for (index, account) in accounts.iter().enumerate().skip(first) {
+        if window.above {
+            canvas.accent_text(self.name_x, y, "…", ellipsis);
+            y += ELLIPSIS_ROWS;
+        }
+        for (index, account) in accounts
+            .iter()
+            .enumerate()
+            .take(window.end)
+            .skip(window.first)
+        {
             let mut usage = Usage::account(account);
             usage.age_inline = !self.age_below;
             let height = self.row_height(&usage);
@@ -725,8 +827,31 @@ impl AccountsLayout {
             }
             y += height + 1;
         }
+        if window.below {
+            canvas.accent_text(self.name_x, y, "…", ellipsis);
+        }
     }
 }
+/// Accounts one home list scroll position shows, and whether a `…` row marks
+/// hidden accounts above or below them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListWindow {
+    pub first: usize,
+    /// One past the last visible account.
+    pub end: usize,
+    pub above: bool,
+    pub below: bool,
+}
+impl ListWindow {
+    /// Visible rows: accounts and `…` rows.
+    pub fn rows(&self) -> usize {
+        self.end - self.first + usize::from(self.above) + usize::from(self.below)
+    }
+}
+/// Terminal rows of a `…` row with its blank line.
+const ELLIPSIS_ROWS: usize = 2;
+/// From this many visible rows, the cursor keeps an account between itself and a `…` row.
+const MARGIN_ROWS: usize = 5;
 /// `text` padded with spaces to `width` cells.
 fn pad(text: &str, width: usize) -> String {
     let used = unicode_width::UnicodeWidthStr::width(text);
@@ -1412,6 +1537,198 @@ mod tests {
                 }
                 y += u.height() + 1;
             }
+        }
+    }
+    /// One-row accounts `a0`, `a1`, ...: each account or `…` row is one row
+    /// plus its blank, so N visible rows take 2N - 1 terminal rows.
+    fn one_row_accounts(count: usize) -> Vec<Account> {
+        (0..count)
+            .map(|i| {
+                serde_json::from_value(
+                    json!({"id":format!("codex:a{i}"),"selectable":true,"enabled":true}),
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+    /// What `rows` terminal rows show from `first`: names, `…`, or "" for a blank.
+    fn shown(l: &AccountsLayout, accounts: &[Account], first: usize, rows: usize) -> Vec<String> {
+        let mut c = Canvas::new(60, rows + 3);
+        l.paint(
+            &mut c,
+            accounts,
+            1,
+            1 + rows,
+            first,
+            None,
+            false,
+            false,
+            None,
+        );
+        let text = |y: usize| -> String {
+            c.cells[y * 60..(y + 1) * 60]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect()
+        };
+        // At least one blank row always follows the list, `…` included.
+        assert!(text(1 + rows).trim().is_empty());
+        (1..1 + rows)
+            .map(|y| {
+                let name: String = c.cells[y * 60 + l.name_x..y * 60 + l.name_x + l.name_width]
+                    .iter()
+                    .map(|c| c.glyph.as_str())
+                    .collect();
+                name.trim().to_owned()
+            })
+            .collect()
+    }
+    /// Visible rows separated by single blank rows.
+    fn spaced(items: &[&str]) -> Vec<String> {
+        let mut out: Vec<String> = items
+            .iter()
+            .flat_map(|s| [s.to_string(), String::new()])
+            .collect();
+        out.pop();
+        out
+    }
+    #[test]
+    fn home_list_scrolls_one_account_early_past_ellipsis_rows_hiding_two_or_more() {
+        let accounts = one_row_accounts(6);
+        let l = AccountsLayout::fit(&accounts, 60);
+        // Five visible rows, six accounts: four accounts, then `…` for two.
+        let area = 9;
+        let mut first = 0;
+        let mut expect = |sel: usize, scroll: usize, items: &[&str]| {
+            first = l.scroll(&accounts, first, Some(sel), area);
+            assert_eq!(first, scroll, "cursor on a{sel}");
+            assert_eq!(shown(&l, &accounts, first, area), spaced(items), "a{sel}");
+        };
+        let top = ["a0", "a1", "a2", "a3", "…"];
+        let end = ["…", "a2", "a3", "a4", "a5"];
+        expect(0, 0, &top);
+        expect(1, 0, &top);
+        // The third row is the last before the margin: still no scroll.
+        expect(2, 0, &top);
+        // Down from it: the list advances and the cursor (a3) stays on the third
+        // row; the bottom `…` gives way to the last accounts and a top `…` hides two.
+        expect(3, 2, &end);
+        expect(4, 2, &end);
+        expect(5, 2, &end);
+        expect(4, 2, &end);
+        expect(3, 2, &end);
+        // The reverse upward: from the second account below the top `…`.
+        expect(2, 0, &top);
+        expect(0, 0, &top);
+        // Exactly one hidden account is shown instead of a `…` row.
+        assert_eq!(l.scroll(&accounts, 1, None, area), 0);
+        for sel in 0..6 {
+            for from in 0..6 {
+                let w = l.window(&accounts, l.scroll(&accounts, from, Some(sel), area), area);
+                assert!(w.first != 1 && w.end + 1 != 6, "{sel} from {from}: {w:?}");
+            }
+        }
+        // Wrapping lands at the extremes at once: the end window for the last account.
+        assert_eq!(l.scroll(&accounts, 6, Some(5), area), 2);
+        assert_eq!(l.scroll(&accounts, 0, Some(5), area), 2);
+        assert_eq!(l.scroll(&accounts, 2, Some(0), area), 0);
+        // A spare terminal row leaves two blanks under the bottom `…`, never none.
+        let mut spare = spaced(&top);
+        spare.push(String::new());
+        assert_eq!(shown(&l, &accounts, 0, area + 1), spare);
+    }
+    #[test]
+    fn short_home_lists_drop_the_margin_and_one_row_scrolls_plainly() {
+        let accounts = one_row_accounts(6);
+        let l = AccountsLayout::fit(&accounts, 60);
+        // Four visible rows: the cursor may sit right next to a `…` row.
+        let area = 7;
+        let mut first = 0;
+        let mut expect = |sel: usize, scroll: usize, items: &[&str]| {
+            first = l.scroll(&accounts, first, Some(sel), area);
+            assert_eq!(first, scroll, "cursor on a{sel}");
+            assert_eq!(shown(&l, &accounts, first, area), spaced(items), "a{sel}");
+        };
+        expect(0, 0, &["a0", "a1", "a2", "…"]);
+        expect(2, 0, &["a0", "a1", "a2", "…"]);
+        expect(3, 2, &["…", "a2", "a3", "…"]);
+        expect(4, 3, &["…", "a3", "a4", "a5"]);
+        expect(3, 3, &["…", "a3", "a4", "a5"]);
+        expect(2, 2, &["…", "a2", "a3", "…"]);
+        expect(1, 0, &["a0", "a1", "a2", "…"]);
+        // One row (or too few for a `…` row on each side of an account): no `…`
+        // rows; the list scrolls plainly to keep the cursor's account visible.
+        assert_eq!(l.scroll(&accounts, 0, Some(3), 1), 3);
+        assert_eq!(shown(&l, &accounts, 3, 1), ["a3"]);
+        assert_eq!(l.scroll(&accounts, 3, Some(0), 1), 0);
+        assert_eq!(shown(&l, &accounts, 0, 3), spaced(&["a0", "a1"]));
+    }
+    #[test]
+    fn ellipsis_rows_align_with_names_and_use_the_name_hue_for_each_state() {
+        let accounts = one_row_accounts(9);
+        let l = AccountsLayout::fit(&accounts, 60);
+        let mut field = crate::render::Field::new(60, 12, 1967);
+        let base = field.paint(4200);
+        let theme = base.theme.clone().unwrap();
+        // From a3 in nine rows: `…` (row 1), a3, a4, a5, `…` (row 9).
+        assert_eq!(
+            l.window(&accounts, 3, 9),
+            ListWindow {
+                first: 3,
+                end: 6,
+                above: true,
+                below: true
+            }
+        );
+        for (selected, back, usage_focus, moving, brightness) in [
+            (Some(4), false, false, None, 600),
+            // Usage focus keeps the brighter level.
+            (Some(4), false, true, None, 1000),
+            (None, false, false, None, 600),
+            (Some(4), true, false, None, 600),
+            (Some(4), false, false, Some(4), 600),
+        ] {
+            let mut c = base.clone();
+            l.paint(
+                &mut c,
+                &accounts,
+                1,
+                10,
+                3,
+                selected,
+                back,
+                usage_focus,
+                moving,
+            );
+            let level = |y: usize| {
+                theme.accent(
+                    l.name_x,
+                    y,
+                    &Accent {
+                        brightness,
+                        ..Accent::default()
+                    },
+                )
+            };
+            for y in [1, 9] {
+                let cell = &c.cells[y * 60 + l.name_x];
+                assert_eq!(cell.glyph, "…");
+                assert_eq!((cell.fg, cell.bold), (level(y).fg, level(y).bold), "{y}");
+                // Left of the name column (cursor lane, icon) and the rest stay as they were.
+                for x in (0..60).filter(|&x| x != l.name_x) {
+                    assert_eq!(c.cells[y * 60 + x], base.cells[y * 60 + x], "{x},{y}");
+                }
+                // Exactly one blank row on each side inside the list.
+                let blank = if y == 1 { 2 } else { 8 };
+                assert_eq!(
+                    c.cells[blank * 60..(blank + 1) * 60],
+                    base.cells[blank * 60..(blank + 1) * 60]
+                );
+            }
+            // The same level as a name the cursor is not on (a5, row 7).
+            let name = &c.cells[7 * 60 + l.name_x];
+            assert_eq!(name.glyph, "a");
+            assert_eq!(name.fg, level(7).fg);
         }
     }
     #[test]

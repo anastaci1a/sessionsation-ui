@@ -172,7 +172,15 @@ omitted. Stale or unknown sessions explain why they cannot be started.
 Home orders New session, Manage sessions, Add account, a dot separator and
 Settings, followed by every account in backend order. There is no separate accounts
 page: the list scrolls when it does not fit and bars shrink (down to 6 cells) on
-narrow screens. Columns are fixed per list: selection lane, provider symbol, names
+narrow screens. A `…` row at the name column, with one blank row above and below
+(at least one below at the bottom), marks two or more accounts hidden above or below;
+a single hidden account is shown instead. It takes the names’ hue at its position at
+the level of a name without the cursor, but stays at the bright level during usage
+focus, and is never selectable. From five visible rows (`…` rows included), the list
+scrolls one account early so an account always separates the cursor from a `…` row
+ahead of it; shorter lists may put the cursor next to one. Lists too short for a `…`
+row on each side of an account (such as one row) scroll plainly without them.
+Wrapping past either end jumps the list to that end at once. Columns are fixed per list: selection lane, provider symbol, names
 padded to one width, then identical-length bars and a shared percentage column.
 A status shown instead of bars is lowercase, in parentheses and starts one column right of the bar start (never centred;
 longer text grows right). Enter opens the account's own action page. With the backend capability
