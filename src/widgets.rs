@@ -195,6 +195,21 @@ pub struct Row {
     pub preview_grabbed: bool,
     /// Leading label characters drawn in the bright text colour (typed prefix).
     pub highlight: usize,
+    /// Lighter grey for a plain preview while its row is hovered or focused.
+    pub preview_focus_fg: Option<[u8; 3]>,
+    /// Right-side selection mode (grabbed selector or focused badge): how this row
+    /// is styled while the mode is active.
+    pub mode: RowMode,
+}
+/// A row's part in a right-side selection mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RowMode {
+    #[default]
+    Normal,
+    /// The row that owns the grabbed selector or focused badge.
+    Active,
+    /// Every other row: names and values drop to the darker grey.
+    Other,
 }
 impl Row {
     pub fn field(label: &str, value: impl std::fmt::Display, label_width: usize) -> Self {
@@ -245,6 +260,8 @@ impl Row {
             preview_arrows: false,
             preview_grabbed: false,
             highlight: 0,
+            preview_focus_fg: None,
+            mode: RowMode::Normal,
         }
     }
     pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
@@ -382,7 +399,10 @@ impl Row {
     pub fn has_reason(&self) -> bool {
         !self.preview_selected_only
             && !self.right_preview
-            && self.preview.as_deref().is_some_and(|p| p.starts_with("· "))
+            && !self.preview_choice
+            && self.preview.is_some()
+            && (self.preview_focus_fg.is_some()
+                || self.preview.as_deref().is_some_and(|p| p.starts_with("· ")))
     }
     pub fn separator() -> Self {
         Self {
@@ -409,6 +429,8 @@ impl Row {
             preview_arrows: false,
             preview_grabbed: false,
             highlight: 0,
+            preview_focus_fg: None,
+            mode: RowMode::Normal,
         }
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, selected: bool, back: bool) {
@@ -533,7 +555,11 @@ impl Row {
                 "○"
             },
             Accent {
-                brightness: if self.enabled && !back { 1000 } else { 600 },
+                brightness: if self.enabled && !back && self.mode == RowMode::Normal {
+                    1000
+                } else {
+                    600
+                },
                 bold: selected,
                 strike: false,
                 ..Accent::default()
@@ -557,14 +583,16 @@ impl Row {
                 y,
                 &self.label,
                 Cell {
-                    fg: if !self.enabled {
-                        [108; 3]
+                    fg: if !self.enabled || self.mode == RowMode::Other {
+                        MUTED
+                    } else if self.mode == RowMode::Active {
+                        SECONDARY
                     } else if selected {
-                        [238; 3]
+                        SELECTED
                     } else {
-                        [188; 3]
+                        SECONDARY
                     },
-                    bold: selected && self.enabled,
+                    bold: selected && self.enabled && self.mode == RowMode::Normal,
                     strike: !self.enabled,
                     ..Cell::default()
                 },
@@ -617,6 +645,32 @@ impl Row {
         selected: bool,
         grabbed: bool,
     ) {
+        if self.preview_choice && self.mode == RowMode::Other {
+            // Another selector is grabbed: no arrows, value in the darker grey.
+            let inner = if self.preview_arrows {
+                preview.split_once(' ').map_or(preview, |(_, v)| v)
+            } else {
+                preview.trim_start_matches("‹ ").trim_end_matches(" ›")
+            };
+            let offset = if self.preview_arrows {
+                preview
+                    .split_once(' ')
+                    .map_or(0, |(g, _)| UnicodeWidthStr::width(g) + 1)
+            } else {
+                2
+            };
+            canvas.widget_text(
+                x + offset,
+                y,
+                inner,
+                Cell {
+                    fg: MUTED,
+                    ..Cell::default()
+                },
+                false,
+            );
+            return;
+        }
         if self.preview_choice {
             let selected = selected || grabbed;
             let arrow = Cell {
@@ -711,7 +765,10 @@ impl Row {
                 y,
                 preview,
                 Cell {
-                    fg: self.preview_fg,
+                    fg: match self.preview_focus_fg {
+                        Some(light) if selected && self.mode != RowMode::Other => light,
+                        _ => self.preview_fg,
+                    },
                     ..Cell::default()
                 },
                 false,
@@ -730,6 +787,8 @@ pub struct Options {
     pub preview_visible: bool,
     /// Visible list rows at the last paint; PageUp/PageDown move by this much.
     pub capacity: usize,
+    /// A right-side selection mode is active: the Back arrow drops to the darker grey.
+    pub right_mode: bool,
 }
 /// Align every row's always-visible reason into one column after the longest label.
 pub fn align_reasons(rows: &mut [Row]) {
@@ -1002,7 +1061,7 @@ impl Options {
             .map(|r| {
                 r.preview_column
                     .zip(r.preview.as_deref())
-                    .filter(|_| !r.preview_info)
+                    .filter(|_| !r.preview_info && !r.preview_arrows)
                     .map_or(
                         UnicodeWidthStr::width(r.label.as_str()),
                         |(col, preview)| col.saturating_sub(2) + UnicodeWidthStr::width(preview),
@@ -1315,7 +1374,13 @@ impl Options {
             top,
             text,
             Cell {
-                fg: if self.back { [238; 3] } else { [188; 3] },
+                fg: if self.back {
+                    SELECTED
+                } else if self.right_mode {
+                    MUTED
+                } else {
+                    SECONDARY
+                },
                 bold: self.back,
                 ..Cell::default()
             },

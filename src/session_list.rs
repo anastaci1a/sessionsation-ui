@@ -1,5 +1,6 @@
 //! Session rows: name, state marker, dim provider/account column and operation badge.
 use crate::preferences::{ClaudeSpinner, CodexSpinner, GeminiSpinner, Spinners};
+use crate::widgets::RowMode;
 use crate::{
     render::{Accent, Canvas, Cell},
     usage::short_name,
@@ -394,8 +395,8 @@ pub fn claude_spinner(now_ms: u64) -> &'static str {
 fn busy(session: &Value) -> bool {
     session["availability"] == "running" && session["activity"] == "busy"
 }
-fn idle(session: &Value) -> bool {
-    session["availability"] == "running" && !busy(session)
+fn running(session: &Value) -> bool {
+    session["availability"] == "running"
 }
 /// Milliseconds per frame of the themed Codex and Gemini spinners.
 pub const THEMED_FRAME_MS: u64 = 120;
@@ -712,6 +713,27 @@ pub fn paint_with(
             .label
             .push_str(&" ".repeat(table_width.saturating_sub(width)));
     }
+    // Right-side mode: focus is on a row's operation badge. That row's name turns
+    // lighter, every other row's names and values darker, and all bullets and
+    // icons drop to the dim hue variant.
+    let mode = extras.badge_focus
+        && !options.back
+        && layout
+            .get(options.selected)
+            .copied()
+            .flatten()
+            .and_then(|i| sessions[i]["id"].as_str())
+            .is_some_and(|id| extras.badges.is_some_and(|b| b.contains_key(id)));
+    options.right_mode = mode;
+    if mode {
+        for (i, row) in rows.iter_mut().enumerate() {
+            row.mode = if i == options.selected {
+                RowMode::Active
+            } else {
+                RowMode::Other
+            };
+        }
+    }
     let list_controls = if known {
         controls_start
     } else {
@@ -753,33 +775,13 @@ pub fn paint_with(
         let y = 3 + index - options.scroll;
         let selected = options.selected == index && !options.back;
         let mut x = left + 2 + name_width;
-        // One left-to-right wave over name, icon and account; the selected row
-        // at full brightness, the others at the dim list level.
-        let sweep_level = if selected { 1000 } else { 600 };
-        let sweep_origin = left + 2;
-        let account_rest = if show_accounts {
-            let tag = account_tag(session);
-            UnicodeWidthStr::width(tag.split_once(' ').map_or("", |(_, r)| r))
-        } else {
-            0
-        };
-        let sweep_span = name_width + 2 + if show_accounts { 2 + account_rest } else { 0 };
-        if idle(session) {
-            canvas.sweep_recolor(
-                sweep_origin,
-                y,
-                name_width,
-                sweep_origin,
-                sweep_span,
-                sweep_level,
-            );
-        }
         if show_accounts {
             let icon = row_icon(session, now_ms, extras.spinners);
             let glows = row_glows(session, extras.spinners);
             let tag = account_tag(session);
             let rest = tag.split_once(' ').map_or("", |(_, r)| r);
             let tint = dim(if selected { SECONDARY } else { MUTED }, options.back);
+            let icon_level = if mode { 600 } else { level(options.back) };
             if glows {
                 let fg = canvas.theme.as_ref().map_or(MUTED, |t| t.arrow_pulse());
                 canvas.widget_text(
@@ -787,18 +789,18 @@ pub fn paint_with(
                     y,
                     icon,
                     Cell {
-                        fg: dim(fg, options.back),
+                        fg: dim(fg, options.back || mode),
                         ..Cell::default()
                     },
                     false,
                 );
-            } else if busy(session) {
+            } else if running(session) {
                 canvas.accent_text(
                     x + 1,
                     y,
                     icon,
                     Accent {
-                        brightness: level(options.back),
+                        brightness: icon_level,
                         bold: false,
                         flash: false,
                         ..Accent::default()
@@ -816,24 +818,40 @@ pub fn paint_with(
                     false,
                 );
             }
-            canvas.widget_text(
-                x + 3,
-                y,
-                rest,
-                Cell {
-                    fg: tint,
-                    ..Cell::default()
-                },
-                false,
-            );
-            if idle(session) {
-                canvas.sweep_recolor(
-                    x + 1,
+            if mode && !selected {
+                canvas.widget_text(
+                    x + 3,
                     y,
-                    2 + account_rest,
-                    sweep_origin,
-                    sweep_span,
-                    sweep_level,
+                    rest,
+                    Cell {
+                        fg: MUTED,
+                        ..Cell::default()
+                    },
+                    false,
+                );
+            } else if running(session) {
+                // The account name wears the icon's position-based colour.
+                canvas.accent_text(
+                    x + 3,
+                    y,
+                    rest,
+                    Accent {
+                        brightness: level(options.back),
+                        bold: false,
+                        flash: false,
+                        ..Accent::default()
+                    },
+                );
+            } else {
+                canvas.widget_text(
+                    x + 3,
+                    y,
+                    rest,
+                    Cell {
+                        fg: tint,
+                        ..Cell::default()
+                    },
+                    false,
                 );
             }
             x += columns;
@@ -1191,7 +1209,7 @@ mod tests {
         assert_eq!(tag.fg, MUTED);
         assert!(!tag.bold);
         assert!(!c.cells[3 * 100 + x(&busy, '⬢')].bold);
-        // Hover brightens the account and shows the timer; no "(inactive)".
+        // Hover shows the timer; no "(inactive)".
         let mut c = field.paint(4100);
         paint(
             &mut c,
@@ -1203,7 +1221,6 @@ mod tests {
             19,
         );
         assert!(text(&c, 3).contains("1:01:01:01"));
-        assert_eq!(c.cells[3 * 100 + x(&busy, '⬢') + 2].fg, SECONDARY);
         let mut c = field.paint(4100);
         paint(
             &mut c,
@@ -1237,72 +1254,13 @@ mod tests {
     fn tint_of(c: &Canvas, y: usize, x: usize) -> [u8; 3] {
         c.cells[y * c.width + x].fg
     }
+    /// Running rows colour the account name with the icon's own position-based
+    /// accent at each cell; names stay plain.
     #[test]
-    fn idle_rows_sweep_name_and_icon_while_busy_and_saved_rows_do_not() {
+    fn running_account_names_use_the_icon_accent_at_their_own_cells_and_names_stay_plain() {
         let sessions = sessions();
         let mut field = crate::render::Field::new(100, 20, 1967);
-        let paint_at = |field: &mut crate::render::Field, now: u64| {
-            let mut c = field.paint(now);
-            paint(&mut c, &mut Options::default(), &sessions, true, 18, 62, 19);
-            c
-        };
-        let c = paint_at(&mut field, 5000);
-        let idle = text(&c, 4);
-        let name = idle.chars().position(|g| g == 'd').unwrap();
-        let icon = idle.chars().position(|g| g == '✻').unwrap();
-        let colors: Vec<_> = (name..name + 4).map(|x| tint_of(&c, 4, x)).collect();
-        // Not the static grey, and not all one colour at a moment inside the sweep.
-        assert!(colors.iter().all(|c| *c != MUTED && *c != SECONDARY));
-        let later = paint_at(&mut field, 7000);
-        let later_colors: Vec<_> = (name..name + 4).map(|x| tint_of(&later, 4, x)).collect();
-        assert_ne!(colors, later_colors, "wave moves with the tick");
-        assert_ne!(tint_of(&c, 4, icon), MUTED);
-        // Busy and saved rows keep their own styling (saved name is not swept).
-        let saved_name = text(&c, 6).chars().position(|g| g == 'o').unwrap();
-        let saved_a = tint_of(&c, 6, saved_name);
-        assert_eq!(saved_a, tint_of(&later, 6, saved_name));
-        // Wave fades from one end colour to the other within the palette.
-        let theme = c.theme.clone().unwrap();
-        let ends: Vec<_> = (0..60).map(|o| theme.idle_sweep(o, 20)).collect();
-        assert!(ends.iter().any(|c| *c != ends[0]));
-    }
-    #[test]
-    fn idle_sweep_covers_account_and_dims_when_unselected() {
-        let sessions = sessions();
-        let mut field = crate::render::Field::new(100, 20, 1967);
-        let paint_sel = |field: &mut crate::render::Field, selected: usize| {
-            let mut c = field.paint(5000);
-            let mut o = Options {
-                selected,
-                ..Options::default()
-            };
-            paint(&mut c, &mut o, &sessions, true, 18, 62, 19);
-            c
-        };
-        let sel = paint_sel(&mut field, 1);
-        let unsel = paint_sel(&mut field, 0);
-        let line = text(&sel, 4);
-        let icon = line.chars().position(|g| g == '✻').unwrap();
-        let account = icon + 2..icon + 6;
-        for x in account.clone() {
-            assert_ne!(tint_of(&sel, 4, x), MUTED);
-            assert_ne!(tint_of(&sel, 4, x), SECONDARY);
-        }
-        let name = line.chars().position(|g| g == 'd').unwrap();
-        for x in (name..name + 4).chain(icon..icon + 1).chain(account) {
-            let (a, b) = (tint_of(&sel, 4, x), tint_of(&unsel, 4, x));
-            assert!(
-                b.iter().map(|n| u32::from(*n)).sum::<u32>()
-                    < a.iter().map(|n| u32::from(*n)).sum::<u32>(),
-                "x={x} {a:?} {b:?}"
-            );
-        }
-    }
-    #[test]
-    fn account_cells_use_the_sweep_colour_at_their_own_x_for_every_row_state() {
-        let sessions = sessions();
-        let mut field = crate::render::Field::new(100, 20, 1967);
-        for (selected, back, level) in [(1, false, 1000), (0, false, 600), (1, true, 600)] {
+        for (selected, back, level) in [(1, false, 1000), (0, false, 1000), (1, true, 600)] {
             let mut c = field.paint(5000);
             let mut o = Options {
                 selected,
@@ -1312,22 +1270,32 @@ mod tests {
             paint(&mut c, &mut o, &sessions, true, 18, 62, 19);
             let theme = c.theme.clone().unwrap();
             let line = text(&c, 4);
-            let name = line.chars().position(|g| g == 'd').unwrap();
             let icon = line.chars().position(|g| g == '✻').unwrap();
-            let span = icon - 1 - name + 2 + 2 + 4;
-            for x in (name..name + 4)
-                .chain(icon..icon + 1)
-                .chain(icon + 2..icon + 6)
-            {
-                let want = theme
-                    .idle_sweep(x - name, span)
-                    .map(|v| (i64::from(v) * level / 1000) as u8);
+            let accent = Accent {
+                brightness: level,
+                bold: false,
+                flash: false,
+                ..Accent::default()
+            };
+            for x in std::iter::once(icon).chain(icon + 2..icon + 6) {
                 assert_eq!(
                     tint_of(&c, 4, x),
-                    want,
+                    theme.accent(x, 4, &accent).fg,
                     "x={x} selected={selected} back={back}"
                 );
             }
+            let name = line.chars().position(|g| g == 'd').unwrap();
+            for x in name..name + 4 {
+                let fg = tint_of(&c, 4, x);
+                assert!(fg == SELECTED || fg == SECONDARY, "x={x} {fg:?}");
+            }
+            // Saved rows keep the plain account tint.
+            let saved = text(&c, 6);
+            let at = saved.chars().position(|g| g == '⏣').unwrap() + 2;
+            assert!(
+                [MUTED, MUTED.map(|n| (u16::from(n) * 60 / 100) as u8)]
+                    .contains(&tint_of(&c, 6, at))
+            );
         }
     }
     #[test]
@@ -1560,5 +1528,107 @@ mod tests {
         assert!(text(&focused, 3).contains("moving to work ◀"));
         let m = text(&focused, 3).chars().position(|g| g == 'm').unwrap();
         assert!(focused.cells[3 * 100 + m].bold);
+    }
+    #[test]
+    fn badge_focus_steps_every_other_element_back_and_restores_on_leaving() {
+        let sessions = sessions();
+        let mut badges = std::collections::BTreeMap::new();
+        badges.insert(
+            "a".to_owned(),
+            Badge {
+                kind: "operation".into(),
+                id: "op".into(),
+                text: "moving to work".into(),
+                active: true,
+            },
+        );
+        let draw = |focus: bool| {
+            let mut c = crate::render::Field::new(100, 20, 1967).paint(5000);
+            let mut options = Options::default();
+            paint_with(
+                &mut c,
+                &mut options,
+                &sessions,
+                true,
+                18,
+                62,
+                19,
+                Extras {
+                    badges: Some(&badges),
+                    badge_focus: focus,
+                    ..Extras::default()
+                },
+            );
+            let left = Options::left(100, &rows(&sessions, true));
+            options.paint_back(&mut c, left, 3, "Back");
+            c
+        };
+        let dim = |c: &Canvas, x: usize, y: usize, glyph_bold: bool| {
+            c.theme
+                .as_ref()
+                .unwrap()
+                .accent(
+                    x,
+                    y,
+                    &Accent {
+                        brightness: 600,
+                        bold: glyph_bold,
+                        ..Accent::default()
+                    },
+                )
+                .fg
+        };
+        let find = |c: &Canvas, y: usize, glyph: &str| {
+            (0..c.width).find(|&x| c.cells[y * c.width + x].glyph == glyph)
+        };
+        let focused = draw(true);
+        let plain = draw(false);
+        // Names: the active one lighter and unbolded, the others darker.
+        let name =
+            |c: &Canvas, y: usize, g: &str| c.cells[y * c.width + find(c, y, g).unwrap()].clone();
+        let active = name(&focused, 3, "l");
+        assert_eq!((active.fg, active.bold), (SECONDARY, false));
+        assert_eq!(name(&focused, 4, "d").fg, MUTED);
+        assert_eq!(name(&focused, 6, "o").fg, MUTED);
+        // Bullets are the dim hue variant, including the active row's.
+        for (y, selected) in [(3usize, true), (4, false), (6, false)] {
+            let x = find(&focused, y, if selected { "●" } else { "○" }).unwrap();
+            assert_eq!(
+                focused.cells[y * 100 + x].fg,
+                dim(&focused, x, y, selected),
+                "bullet y={y}"
+            );
+        }
+        // Icons are dim too; the idle row's account value goes darker grey.
+        let icon = find(&focused, 4, "✻").unwrap();
+        let want = focused
+            .theme
+            .as_ref()
+            .unwrap()
+            .accent(
+                icon,
+                4,
+                &Accent {
+                    brightness: 600,
+                    flash: false,
+                    ..Accent::default()
+                },
+            )
+            .fg;
+        assert_eq!(focused.cells[4 * 100 + icon].fg, want);
+        assert_eq!(focused.cells[4 * 100 + icon + 2].fg, MUTED);
+        // The back arrow is darker; the badge keeps its active styling.
+        let back = find(&focused, 3, "◀").unwrap();
+        assert_eq!(focused.cells[3 * 100 + back].fg, MUTED);
+        let badge = find(&focused, 3, "◀").and_then(|_| text(&focused, 3).find("moving"));
+        assert!(badge.is_some() && text(&focused, 3).contains("moving to work ◀"));
+        // Leaving the mode restores the normal styling.
+        let active = name(&plain, 3, "l");
+        assert_eq!((active.fg, active.bold), (SELECTED, true));
+        assert_eq!(name(&plain, 4, "d").fg, SECONDARY);
+        let x = find(&plain, 4, "○").unwrap();
+        assert_ne!(plain.cells[4 * 100 + x].fg, dim(&plain, x, 4, false));
+        let back = find(&plain, 3, "◀").unwrap();
+        assert_eq!(plain.cells[3 * 100 + back].fg, SECONDARY);
     }
 }

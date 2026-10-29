@@ -25,7 +25,11 @@ fn align_pickers(rows: &mut [Row]) {
         .map(|r| UnicodeWidthStr::width(r.label.as_str()))
         .max()
         .unwrap_or(0);
-    for row in rows.iter_mut().filter(|r| r.preview_arrows) {
+    // Arrows and grey settings values share one column, a space after the longest name.
+    for row in rows
+        .iter_mut()
+        .filter(|r| r.preview_arrows || r.preview_focus_fg.is_some())
+    {
         row.preview_column = Some(2 + longest + 1);
     }
 }
@@ -113,9 +117,12 @@ fn settings_rows(items: Vec<(Row, String)>) -> Vec<Row> {
         .map(|(mut row, v)| {
             let pad = value.saturating_sub(UnicodeWidthStr::width(v.as_str()));
             row.preview = Some(format!("{v}{} ›", " ".repeat(pad)));
-            row.preview_column = Some(2 + label + 4);
+            row.preview_column = Some(2 + label + 1);
+            row.preview_gap = 1;
             row.preview_selected_only = false;
+            row.preview_info = true;
             row.preview_fg = crate::widgets::MUTED;
+            row.preview_focus_fg = Some(crate::widgets::SECONDARY);
             row
         })
         .collect()
@@ -400,6 +407,14 @@ impl App {
             self.launch_supported
         }
     }
+    /// A settings selector is grabbed: the rest of the page steps back.
+    fn right_mode(&self) -> bool {
+        self.picker.is_some()
+            && matches!(
+                self.page,
+                Page::Appearance | Page::Spinners | Page::Directories
+            )
+    }
     pub fn rows(&self) -> Vec<Row> {
         let path = |p: Option<&Path>| {
             p.map(|p| p.to_string_lossy().into_owned())
@@ -567,16 +582,6 @@ impl App {
                         },
                     ),
                 ]));
-                // The choice and value columns share one start.
-                let column = rows
-                    .iter()
-                    .map(|r| unicode_width::UnicodeWidthStr::width(r.label.as_str()))
-                    .max()
-                    .unwrap_or(0)
-                    + 6;
-                for row in rows.iter_mut().skip(1) {
-                    row.preview_column = Some(column);
-                }
                 align_pickers(&mut rows);
                 rows
             }
@@ -690,6 +695,15 @@ impl App {
             }
             Page::Launching => vec![Row::gate("Starting session…", false)],
         };
+        if self.right_mode() {
+            for (i, row) in rows.iter_mut().enumerate() {
+                row.mode = if i == self.options.selected {
+                    crate::widgets::RowMode::Active
+                } else {
+                    crate::widgets::RowMode::Other
+                };
+            }
+        }
         if Self::is_popup(&self.page) {
             if matches!(self.page, Page::Directory(_)) {
                 // Its mounted sections are built above.
@@ -2279,6 +2293,7 @@ New directories are created only when the session starts."
             footer
         };
         let bottom = menu_controls.saturating_sub(if self.page == Page::Summary { 3 } else { 1 });
+        self.options.right_mode = self.right_mode();
         let (left, capacity) = self
             .options
             .paint_menu(canvas, &rows, top, bottom, menu_controls);
@@ -2852,6 +2867,62 @@ mod tests {
         );
         a.resume = Some(json!({"id":"old"}));
         assert!(!a.shared_directory());
+    }
+    #[test]
+    fn app_manage_sessions_running_account_uses_the_icon_accent_through_the_real_render_path() {
+        for width in [80usize, 120, 160] {
+            for (selected, back, level) in
+                [(0usize, false, 1000i64), (1, false, 1000), (0, true, 600)]
+            {
+                let mut a = app();
+                a.page = Page::Management;
+                a.manager.page = crate::management::Page::Sessions;
+                a.manager.sessions_known = true;
+                a.manager.sessions = vec![
+                    json!({"id":"a","name":"alpha","provider":"claude","account_id":"claude:main","availability":"running","activity":"idle"}),
+                    json!({"id":"b","name":"bravo","provider":"claude","account_id":"claude:main","availability":"running","activity":"idle"}),
+                ];
+                a.manager.options.selected = selected;
+                a.manager.options.back = back;
+                let c = a.paint(&mut Field::new(width, 24, 1), 5000, width, 24);
+                let theme = c.theme.clone().unwrap();
+                let glyphs = |y: usize| -> Vec<String> {
+                    c.cells[y * width..(y + 1) * width]
+                        .iter()
+                        .map(|c| c.glyph.clone())
+                        .collect()
+                };
+                let y = (0..24)
+                    .find(|&y| glyphs(y).concat().contains("alpha"))
+                    .unwrap();
+                let line = glyphs(y);
+                let name = (0..width)
+                    .find(|&i| line[i..].concat().starts_with("alpha"))
+                    .unwrap();
+                let icon = line.iter().position(|g| g == "✻").unwrap();
+                let accent = crate::render::Accent {
+                    brightness: level,
+                    bold: false,
+                    flash: false,
+                    ..Default::default()
+                };
+                for x in std::iter::once(icon).chain(icon + 2..icon + 6) {
+                    assert_eq!(
+                        c.cells[y * width + x].fg,
+                        theme.accent(x, y, &accent).fg,
+                        "w={width} x={x} sel={selected} back={back} {:?}",
+                        line.concat()
+                    );
+                }
+                for x in name..name + 5 {
+                    let fg = c.cells[y * width + x].fg;
+                    assert!(
+                        fg == crate::widgets::SELECTED || fg == crate::widgets::SECONDARY,
+                        "name is plain: w={width} x={x} {fg:?}"
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn picker_columns_are_adjacent_and_all_statuses_stay_on_their_rows() {
@@ -3519,6 +3590,248 @@ mod tests {
         a.paint(&mut field, 0, 80, 24);
         assert_eq!(a.manager.spinners, a.prefs.spinners());
     }
+    fn row_y(c: &Canvas, label: &str) -> usize {
+        (0..c.height)
+            .find(|&y| {
+                c.cells[y * c.width..(y + 1) * c.width]
+                    .iter()
+                    .map(|c| c.glyph.as_str())
+                    .collect::<String>()
+                    .contains(label)
+            })
+            .unwrap_or_else(|| panic!("{label} not painted"))
+    }
+    fn col_of(c: &Canvas, y: usize, text: &str) -> Option<usize> {
+        let line: Vec<&str> = c.cells[y * c.width..(y + 1) * c.width]
+            .iter()
+            .map(|c| c.glyph.as_str())
+            .collect();
+        (0..line.len()).find(|&x| line[x..].concat().starts_with(text))
+    }
+    #[test]
+    fn settings_values_and_arrows_never_count_toward_centering() {
+        use crate::preferences::{ClaudeSpinner, Starfield};
+        use crate::widgets::Options;
+        for width in [60usize, 80, 120] {
+            let label_x = |page: Page, configure: &dyn Fn(&mut App), label: &str| {
+                let mut a = app();
+                a.page = page;
+                configure(&mut a);
+                let c = a.paint(&mut Field::new(width, 24, 1), 0, width, 24);
+                col_of(&c, row_y(&c, label), label).unwrap()
+            };
+            let names = |a: &App| {
+                a.rows()
+                    .into_iter()
+                    .map(|mut r| {
+                        r.preview = None;
+                        r
+                    })
+                    .collect::<Vec<_>>()
+            };
+            for (page, label) in [
+                (Page::Spinners, "Claude spinner"),
+                (Page::Appearance, "Brightness"),
+                (Page::Config, "Default directories"),
+                (Page::Directories, "Default directory"),
+            ] {
+                let base = label_x(page.clone(), &|_| {}, label);
+                let long = label_x(
+                    page.clone(),
+                    &|a| {
+                        a.prefs.claude_spinner = ClaudeSpinner::Glow;
+                        a.prefs.starfield = Starfield::Off;
+                        a.prefs.global_root = Some("/a/very/long/global/root/path/here".into());
+                    },
+                    label,
+                );
+                let mut a = app();
+                a.page = page.clone();
+                let expect = Options::left(width, &names(&a)) + 2;
+                assert_eq!(base, expect, "{page:?} w={width}");
+                assert_eq!(long, expect, "{page:?} long values w={width}");
+            }
+        }
+    }
+    #[test]
+    fn settings_previews_are_all_or_nothing_and_move_below_when_one_does_not_fit() {
+        let mut a = app();
+        a.page = Page::Config;
+        let wide = a.paint(&mut Field::new(100, 24, 1), 0, 100, 24);
+        for (label, text) in [
+            ("Stars", "Normal · Normal"),
+            ("Spinners", "Claude · Fill pulse · Twinkle"),
+        ] {
+            assert!(
+                col_of(&wide, row_y(&wide, label), text).is_some(),
+                "{label} inline when every preview fits"
+            );
+        }
+        // Too narrow for the widest value: none inline, the selected one below.
+        for (selected, shown, hidden) in [
+            (0usize, "Normal · Normal", "Claude · Fill pulse · Twinkle"),
+            (2, "Claude · Fill pulse · Twinkle", "Normal · Normal"),
+        ] {
+            a.options.selected = selected;
+            let c = a.paint(&mut Field::new(50, 24, 1), 0, 50, 24);
+            for label in ["Stars", "Default directories", "Spinners"] {
+                let y = row_y(&c, label);
+                assert!(col_of(&c, y, "›").is_none(), "{label} stays bare");
+            }
+            let y = (0..24).find(|&y| col_of(&c, y, shown).is_some()).unwrap();
+            assert!(y > row_y(&c, "Spinners"), "drawn below the list");
+            assert!((0..24).all(|y| col_of(&c, y, hidden).is_none()));
+            assert_eq!(
+                c.cells[y * 50 + col_of(&c, y, shown).unwrap()].fg,
+                crate::widgets::SECONDARY
+            );
+        }
+    }
+    #[test]
+    fn settings_preview_is_lighter_when_focused_and_aligned_after_the_longest_name() {
+        use crate::widgets::{MUTED, SECONDARY};
+        for page in [Page::Config, Page::Directories] {
+            let mut a = app();
+            a.page = page.clone();
+            a.prefs.global_root = Some("/g".into());
+            let rows = a.rows();
+            let previews: Vec<usize> = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.preview_focus_fg.is_some())
+                .map(|(i, _)| i)
+                .collect();
+            let longest = rows
+                .iter()
+                .map(|r| unicode_width::UnicodeWidthStr::width(r.label.as_str()))
+                .max()
+                .unwrap();
+            for focused in 0..rows.len() {
+                a.options.selected = focused;
+                let c = a.paint(&mut Field::new(120, 24, 1), 0, 120, 24);
+                let mut starts = std::collections::BTreeSet::new();
+                for &i in &previews {
+                    let y = row_y(&c, &rows[i].label);
+                    let lx = col_of(&c, y, &rows[i].label).unwrap();
+                    let line: Vec<_> = (0..120).map(|x| c.cells[y * 120 + x].clone()).collect();
+                    let start = (lx + longest + 1..120)
+                        .find(|&x| line[x].glyph != " ")
+                        .unwrap();
+                    assert_eq!(
+                        start,
+                        lx + longest + 1,
+                        "{page:?} one space after the longest name"
+                    );
+                    starts.insert(start - lx);
+                    let want = if i == focused { SECONDARY } else { MUTED };
+                    assert_eq!(line[start].fg, want, "{page:?} row {i} focused={focused}");
+                }
+                assert_eq!(starts.len(), 1, "previews line up");
+            }
+        }
+        // Directories: previews share the picker arrows' column.
+        let mut a = app();
+        a.page = Page::Directories;
+        let c = a.paint(&mut Field::new(120, 24, 1), 0, 120, 24);
+        let top = row_y(&c, "Default directory");
+        let arrow = (0..120)
+            .find(|&x| matches!(c.cells[top * 120 + x].glyph.as_str(), "↕" | "↑" | "↓"))
+            .unwrap();
+        let root = row_y(&c, "Global root");
+        assert_ne!(c.cells[root * 120 + arrow].glyph, " ");
+    }
+    #[test]
+    fn grabbed_selector_steps_every_other_element_back_and_restores_on_leaving() {
+        use crate::render::Accent;
+        use crate::widgets::{MUTED, SECONDARY};
+        let mut a = app();
+        a.page = Page::Spinners;
+        a.options.selected = 1;
+        let draw = |a: &mut App| a.paint(&mut Field::new(80, 24, 1), 2000, 80, 24);
+        let bullet = |c: &Canvas, y: usize, label: &str| {
+            let lx = col_of(c, y, label).unwrap();
+            (lx - 2, c.cells[y * c.width + lx - 2].clone())
+        };
+        let dim = |c: &Canvas, x: usize, y: usize, bold: bool| {
+            c.theme
+                .as_ref()
+                .unwrap()
+                .accent(
+                    x,
+                    y,
+                    &Accent {
+                        brightness: 600,
+                        bold,
+                        ..Accent::default()
+                    },
+                )
+                .fg
+        };
+        let glyphs = |c: &Canvas, y: usize| -> Vec<String> {
+            c.cells[y * 80..(y + 1) * 80]
+                .iter()
+                .map(|c| c.glyph.clone())
+                .collect()
+        };
+        let before = draw(&mut a);
+        key(&mut a, KeyCode::Right);
+        assert!(a.picker.is_some());
+        let c = draw(&mut a);
+        for (label, active) in [
+            ("Claude spinner", false),
+            ("Codex spinner", true),
+            ("Gemini spinner", false),
+        ] {
+            let y = row_y(&c, label);
+            let lx = col_of(&c, y, label).unwrap();
+            let name = &c.cells[y * 80 + lx];
+            // Names: active lighter and unbolded, others darker.
+            assert_eq!(
+                (name.fg, name.bold),
+                (if active { SECONDARY } else { MUTED }, false),
+                "{label}"
+            );
+            // Every bullet is the dim hue variant.
+            let (bx, b) = bullet(&c, y, label);
+            assert_eq!(b.fg, dim(&c, bx, y, active), "bullet {label}");
+            let line = glyphs(&c, y);
+            let value = lx + "Gemini spinner".len() + 1;
+            if active {
+                // The active selector keeps its bold pulse arrow.
+                let arrow = &c.cells[y * 80 + value];
+                assert!(arrow.bold && matches!(arrow.glyph.as_str(), "↕" | "↑" | "↓"));
+            } else {
+                // Other selectors lose their arrow; the value is the darker grey.
+                assert!(!line.concat().contains(['↕', '↑', '↓']), "{label}");
+                assert_eq!(c.cells[y * 80 + value + 2].fg, MUTED, "{label} value");
+            }
+        }
+        // The back arrow left of the top option is the darker grey.
+        let top = row_y(&c, "Claude spinner");
+        let back = col_of(&c, top, "◀").unwrap();
+        assert_eq!(c.cells[top * 80 + back].fg, MUTED);
+        // Leaving the mode restores normal styling.
+        key(&mut a, KeyCode::Esc);
+        let after = draw(&mut a);
+        assert!(a.picker.is_none());
+        for y in 0..24 {
+            for x in 0..80 {
+                if before.cells[y * 80 + x].glyph == "◀" || (y, x) == (0, 0) {
+                    assert_eq!(before.cells[y * 80 + x].fg, after.cells[y * 80 + x].fg);
+                }
+            }
+        }
+        let y = row_y(&after, "Claude spinner");
+        assert_eq!(
+            after.cells[y * 80 + col_of(&after, y, "◀").unwrap()].fg,
+            SECONDARY
+        );
+        assert!(glyphs(&after, y).concat().contains('↓'));
+        let lx = col_of(&after, y, "Claude spinner").unwrap();
+        assert_eq!(after.cells[y * 80 + lx].fg, SECONDARY);
+        let (bx, b) = bullet(&after, y, "Claude spinner");
+        assert_ne!(b.fg, dim(&after, bx, y, false));
+    }
     #[test]
     fn picker_arrows_align_in_one_column_and_are_styled_by_state() {
         use crate::widgets::{MUTED, SECONDARY};
@@ -3572,8 +3885,14 @@ mod tests {
                 let (_, _, cell) = arrow_cell(&c, "Codex spinner");
                 assert!(cell.bold && (188..=255).contains(&cell.fg[0]), "{cell:?}");
                 seen.insert(cell.fg[0]);
-                let (_, _, other) = arrow_cell(&c, "Claude spinner");
-                assert_eq!((other.fg, other.bold), (MUTED, false));
+                let text = line(
+                    &c,
+                    (0..c.height)
+                        .find(|&y| line(&c, y).concat().contains("Claude spinner"))
+                        .unwrap(),
+                )
+                .concat();
+                assert!(!text.contains(['↕', '↑', '↓']), "other arrows hide: {text}");
             }
             assert!(seen.len() > 3, "{seen:?}");
         }

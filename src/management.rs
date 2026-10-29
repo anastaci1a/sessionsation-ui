@@ -5452,6 +5452,63 @@ mod tests {
         );
     }
     #[test]
+    fn manage_sessions_running_account_uses_the_icon_accent_and_name_stays_plain() {
+        for width in [80usize, 120, 160] {
+            for (selected, back, level) in
+                [(0usize, false, 1000i64), (1, false, 1000), (0, true, 600)]
+            {
+                let mut m = setup();
+                m.page = Page::Sessions;
+                m.sessions_known = true;
+                m.sessions = vec![
+                    json!({"id":"a","name":"alpha","provider":"claude","account_id":"claude:main","availability":"running","activity":"idle"}),
+                    json!({"id":"b","name":"bravo","provider":"claude","account_id":"claude:main","availability":"running","activity":"idle"}),
+                ];
+                m.options.selected = selected;
+                m.options.back = back;
+                let mut field = crate::render::Field::new(width, 24, 1967);
+                let mut c = field.paint(5000);
+                m.paint_at(&mut c, 23, 100);
+                let theme = c.theme.clone().unwrap();
+                let glyphs = |y: usize| -> Vec<String> {
+                    c.cells[y * width..(y + 1) * width]
+                        .iter()
+                        .map(|c| c.glyph.clone())
+                        .collect()
+                };
+                let y = (0..24)
+                    .find(|&y| glyphs(y).concat().contains("alpha"))
+                    .unwrap();
+                let line = glyphs(y);
+                let name = (0..width)
+                    .find(|&i| line[i..].concat().starts_with("alpha"))
+                    .unwrap();
+                let icon = line.iter().position(|g| g == "✻").unwrap();
+                let accent = crate::render::Accent {
+                    brightness: level,
+                    bold: false,
+                    flash: false,
+                    ..Default::default()
+                };
+                for x in std::iter::once(icon).chain(icon + 2..icon + 6) {
+                    assert_eq!(
+                        c.cells[y * width + x].fg,
+                        theme.accent(x, y, &accent).fg,
+                        "w={width} x={x} sel={selected} back={back} {:?}",
+                        line.concat()
+                    );
+                }
+                for x in name..name + 5 {
+                    let fg = c.cells[y * width + x].fg;
+                    assert!(
+                        fg == crate::widgets::SELECTED || fg == crate::widgets::SECONDARY,
+                        "name is plain: w={width} x={x} {fg:?}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
     fn live_state_refresh_is_single_flight_and_errors_clear_busy_claims() {
         let mut m = setup();
         m.page = Page::Sessions;
