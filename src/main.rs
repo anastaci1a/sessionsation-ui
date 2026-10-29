@@ -597,6 +597,17 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     if let Some(sessions) = sessionsation_ui::state_cache::load(&cache_path, &cache_root) {
         app.manager.show_cached(&sessions);
     }
+    let accounts_cache_path = pref.with_file_name("accounts-cache.json");
+    let loaded = Instant::now();
+    if let Some(accounts) =
+        sessionsation_ui::state_cache::load_accounts(&accounts_cache_path, &cache_root)
+    {
+        app.manager.show_cached_accounts(&accounts);
+        sessionsation_ui::trace::event(
+            "accounts_cached",
+            format_args!("us={}", loaded.elapsed().as_micros()),
+        );
+    }
     let mut effects = Effects {
         client: client.clone(),
         sender: tx.clone(),
@@ -670,7 +681,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           Message::Input(Event::Resize(w,h))=>{dimensions=(w as usize,h as usize);app.dirty=true;},
           Message::Input(Event::FocusGained)=>{app.manager.visible=true;let intents=app.manager.read_sessions();next=app.management(intents);app.dirty=true;},Message::Input(Event::FocusLost)=>{app.manager.visible=false;},Message::Input(_)=>{},
           Message::InputError(e)=>{app.error=e;app.exit=true;},
-          Message::Inventory(result)=>{inventory_pending=false;match result{Ok((accounts,spaces,capabilities))=>{app.launch_supported=capabilities["launch"]["version"]==1;let changed=app.manager.capabilities!=capabilities;app.manager.capabilities=capabilities;next=app.inventory(accounts,spaces,now());if changed{let intents=app.manager.refresh();next.extend(app.management(intents));}
+          Message::Inventory(result)=>{inventory_pending=false;match result{Ok((accounts,spaces,capabilities))=>{if let Ok(saved)=serde_json::to_value(&accounts){let (path,root)=(accounts_cache_path.clone(),cache_root.clone());tokio::task::spawn_blocking(move||{let _=sessionsation_ui::state_cache::save_accounts(&path,&root,&saved);});}app.launch_supported=capabilities["launch"]["version"]==1;let changed=app.manager.capabilities!=capabilities;app.manager.capabilities=capabilities;next=app.inventory(accounts,spaces,now());if changed{let intents=app.manager.refresh();next.extend(app.management(intents));}
           if !app.launch_supported{app.error="Backend launch API is not installed; creation disabled".into();}},Err(e)=>{app.manager.note=e.clone();app.error=e;app.draft.name_valid=false;}}app.dirty=true;},
           Message::Managed(token,result)=>{let intents=app.manager.response(token,result);next=app.management(intents);if let Some(sessions)=app.manager.cache_out.take(){let (path,root)=(cache_path.clone(),cache_root.clone());tokio::task::spawn_blocking(move||{let _=sessionsation_ui::state_cache::save(&path,&root,&sessions);});}},
           Message::LoginLaunched(result)=>{let intents=app.manager.login_launched(result);next=app.management(intents);app.dirty=true;},

@@ -7,6 +7,13 @@ use serde_json::{Value, json};
 use std::{fs, io::Write, os::unix::fs::OpenOptionsExt, path::Path};
 
 pub fn save(path: &Path, root: &Path, sessions: &Value) -> Result<()> {
+    write(path, json!({"version":1,"root":root,"sessions":sessions}))
+}
+/// Last successful account list (with usage observations) for the first Home frame.
+pub fn save_accounts(path: &Path, root: &Path, accounts: &Value) -> Result<()> {
+    write(path, json!({"version":1,"root":root,"accounts":accounts}))
+}
+fn write(path: &Path, document: Value) -> Result<()> {
     let parent = path.parent().context("State cache path has no parent")?;
     fs::create_dir_all(parent)?;
     let temp = parent.join(format!(".state-cache-{}", uuid::Uuid::new_v4()));
@@ -16,9 +23,7 @@ pub fn save(path: &Path, root: &Path, sessions: &Value) -> Result<()> {
             .create_new(true)
             .mode(0o600)
             .open(&temp)?;
-        f.write_all(&serde_json::to_vec(
-            &json!({"version":1,"root":root,"sessions":sessions}),
-        )?)?;
+        f.write_all(&serde_json::to_vec(&document)?)?;
         f.sync_all()?;
         fs::rename(&temp, path)?;
         Ok(())
@@ -31,6 +36,12 @@ pub fn load(path: &Path, root: &Path) -> Option<Value> {
     let v: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
     (v["version"] == 1 && v["root"] == json!(root) && v["sessions"].is_array())
         .then(|| v["sessions"].clone())
+}
+/// The cached accounts, only when written for this backend root.
+pub fn load_accounts(path: &Path, root: &Path) -> Option<Value> {
+    let v: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    (v["version"] == 1 && v["root"] == json!(root) && v["accounts"].is_array())
+        .then(|| v["accounts"].clone())
 }
 #[cfg(test)]
 mod tests {
@@ -50,6 +61,11 @@ mod tests {
         assert_eq!(load(&p, Path::new("/other")), None);
         assert_eq!(fs::read_dir(t.path()).unwrap().count(), 1);
         fs::write(&p, b"garbage").unwrap();
+        assert_eq!(load(&p, Path::new("/r")), None);
+        let accounts = json!([{"id":"codex:a","selectable":true}]);
+        save_accounts(&p, Path::new("/r"), &accounts).unwrap();
+        assert_eq!(load_accounts(&p, Path::new("/r")), Some(accounts));
+        assert_eq!(load_accounts(&p, Path::new("/other")), None);
         assert_eq!(load(&p, Path::new("/r")), None);
     }
 }
