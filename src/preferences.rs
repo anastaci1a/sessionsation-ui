@@ -79,6 +79,95 @@ impl Brightness {
         }
     }
 }
+/// Busy spinner choices (Settings > Spinners). Each list runs top (default) to
+/// bottom; `Classic` is the plain Braille spinner and `Glow` the least motion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaudeSpinner {
+    #[default]
+    Claude,
+    Classic,
+    Glow,
+}
+impl ClaudeSpinner {
+    pub const ALL: [Self; 3] = [Self::Claude, Self::Classic, Self::Glow];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Classic => "Classic",
+            Self::Glow => "Glow",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexSpinner {
+    #[default]
+    FillPulse,
+    Rotate,
+    Benzene,
+    BuildUp,
+    Classic,
+    Glow,
+}
+impl CodexSpinner {
+    pub const ALL: [Self; 6] = [
+        Self::FillPulse,
+        Self::Rotate,
+        Self::Benzene,
+        Self::BuildUp,
+        Self::Classic,
+        Self::Glow,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FillPulse => "Fill pulse",
+            Self::Rotate => "Rotate",
+            Self::Benzene => "Benzene",
+            Self::BuildUp => "Build-up",
+            Self::Classic => "Classic",
+            Self::Glow => "Glow",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeminiSpinner {
+    #[default]
+    Twinkle,
+    SpinFill,
+    Morph,
+    ConcaveBlink,
+    Classic,
+    Glow,
+}
+impl GeminiSpinner {
+    pub const ALL: [Self; 6] = [
+        Self::Twinkle,
+        Self::SpinFill,
+        Self::Morph,
+        Self::ConcaveBlink,
+        Self::Classic,
+        Self::Glow,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Twinkle => "Twinkle",
+            Self::SpinFill => "Spin fill",
+            Self::Morph => "Morph",
+            Self::ConcaveBlink => "Concave blink",
+            Self::Classic => "Classic",
+            Self::Glow => "Glow",
+        }
+    }
+}
+/// The chosen busy spinner of each provider.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Spinners {
+    pub claude: ClaudeSpinner,
+    pub codex: CodexSpinner,
+    pub gemini: GeminiSpinner,
+}
 /// The value one step up (toward the top of `all`) or down; it stops at the ends.
 pub fn step<T: Copy + PartialEq>(all: &[T], current: T, up: bool) -> T {
     let i = all.iter().position(|v| *v == current).unwrap_or(0);
@@ -88,13 +177,13 @@ pub fn step<T: Copy + PartialEq>(all: &[T], current: T, up: bool) -> T {
         (i + 1).min(all.len() - 1)
     }]
 }
-/// Arrow for the value in `all`: down-only at the top, up-only at the bottom.
+/// Arrow for the value in `all`: `↓` at the top, `↑` at the bottom, else `↕`.
 pub fn choice_arrow<T: Copy + PartialEq>(all: &[T], current: T) -> &'static str {
     let i = all.iter().position(|v| *v == current).unwrap_or(0);
     match (i == 0, i + 1 == all.len()) {
-        (true, false) => "⬇",
-        (false, true) => "⬆",
-        _ => "⬍",
+        (true, false) => "↓",
+        (false, true) => "↑",
+        _ => "↕",
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,6 +200,12 @@ pub struct Preferences {
     pub starfield: Starfield,
     #[serde(default)]
     pub brightness: Brightness,
+    #[serde(default)]
+    pub claude_spinner: ClaudeSpinner,
+    #[serde(default)]
+    pub codex_spinner: CodexSpinner,
+    #[serde(default)]
+    pub gemini_spinner: GeminiSpinner,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -123,10 +218,20 @@ impl Default for Preferences {
             root_plans: BTreeMap::new(),
             starfield: Starfield::Normal,
             brightness: Brightness::Normal,
+            claude_spinner: ClaudeSpinner::default(),
+            codex_spinner: CodexSpinner::default(),
+            gemini_spinner: GeminiSpinner::default(),
         }
     }
 }
 impl Preferences {
+    pub fn spinners(&self) -> Spinners {
+        Spinners {
+            claude: self.claude_spinner,
+            codex: self.codex_spinner,
+            gemini: self.gemini_spinner,
+        }
+    }
     pub fn key(instance: &str, workspace: &str) -> String {
         format!("{instance}\n{workspace}")
     }
@@ -252,10 +357,10 @@ mod arrow_tests {
         assert_eq!(step(&all, Starfield::Dense, true), Starfield::Dense);
         assert_eq!(step(&all, Starfield::Off, false), Starfield::Off);
         assert_eq!(step(&all, Starfield::Normal, true), Starfield::Dense);
-        assert_eq!(choice_arrow(&all, Starfield::Dense), "⬇");
-        assert_eq!(choice_arrow(&all, Starfield::Normal), "⬍");
-        assert_eq!(choice_arrow(&all, Starfield::Off), "⬆");
-        for g in ["⬍", "⬇", "⬆"] {
+        assert_eq!(choice_arrow(&all, Starfield::Dense), "↓");
+        assert_eq!(choice_arrow(&all, Starfield::Normal), "↕");
+        assert_eq!(choice_arrow(&all, Starfield::Off), "↑");
+        for g in ["↕", "↓", "↑"] {
             assert_eq!(unicode_width::UnicodeWidthStr::width(g), 1, "{g}");
         }
     }
@@ -269,5 +374,31 @@ mod arrow_tests {
         assert_eq!(load("dense"), Starfield::Dense);
         assert_eq!(load("off"), Starfield::Off);
         assert_eq!(load("normal"), Starfield::Normal);
+    }
+}
+#[cfg(test)]
+mod spinner_tests {
+    use super::*;
+    #[test]
+    fn spinner_choices_persist_and_missing_keys_mean_the_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("prefs.json");
+        let p = Preferences {
+            claude_spinner: ClaudeSpinner::Glow,
+            codex_spinner: CodexSpinner::Benzene,
+            gemini_spinner: GeminiSpinner::ConcaveBlink,
+            ..Default::default()
+        };
+        p.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"codex_spinner\": \"benzene\""), "{text}");
+        let loaded = Preferences::load(&path).unwrap();
+        assert_eq!(loaded.spinners(), p.spinners());
+        std::fs::write(&path, r#"{"version":1,"mode":"global","global_root":null,"space_roots":{},"last_account":null}"#).unwrap();
+        let old = Preferences::load(&path).unwrap();
+        assert_eq!(old.spinners(), Spinners::default());
+        assert_eq!(old.codex_spinner, CodexSpinner::FillPulse);
+        assert_eq!(old.gemini_spinner, GeminiSpinner::Twinkle);
+        assert_eq!(old.claude_spinner, ClaudeSpinner::Claude);
     }
 }

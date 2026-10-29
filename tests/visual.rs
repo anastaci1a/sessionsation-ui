@@ -103,6 +103,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("session-details", 90, 26),
         ("account-details", 90, 30),
         ("appearance", 80, 20),
+        ("spinners", 80, 20),
         ("directory-filter", 80, 26),
         ("directory-new", 80, 26),
         ("directory-confirm", 80, 26),
@@ -306,6 +307,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
         }
         if name.starts_with("settings-")
             || name == "appearance"
+            || name == "spinners"
             || name == "roots-compact"
             || name.starts_with("directory-")
         {
@@ -327,6 +329,10 @@ fn management_geometry_usage_markers_and_picker_columns() {
             );
             app.page = AppPage::Config;
             app.options.selected = 1;
+            if name == "spinners" {
+                app.page = AppPage::Spinners;
+                app.options.selected = 1;
+            }
             if name == "appearance" {
                 app.page = AppPage::Appearance;
                 app.options.selected = 0;

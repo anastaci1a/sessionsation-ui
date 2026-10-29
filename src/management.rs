@@ -108,6 +108,8 @@ pub struct Manager {
     pub operations: Vec<Value>,
     pub launches: BTreeMap<&'static str, Vec<Value>>,
     pub capabilities: Value,
+    /// Busy spinner choices, synced from the preferences before painting.
+    pub spinners: crate::preferences::Spinners,
     pub dialog: Option<Dialog>,
     pub palette: Palette,
     pub note: String,
@@ -216,6 +218,7 @@ impl Default for Manager {
             operations: vec![],
             launches: BTreeMap::new(),
             capabilities: json!({}),
+            spinners: Default::default(),
             dialog: None,
             palette: Palette::default(),
             note: String::new(),
@@ -4027,6 +4030,7 @@ impl Manager {
                         archives: !self.archives.is_empty(),
                         badges: Some(&badges),
                         badge_focus: self.badge_focus,
+                        spinners: self.spinners,
                     },
                 )
             } else {
@@ -6873,7 +6877,7 @@ mod tests {
             .collect();
         let line = |name: &str| rows.iter().find(|r| r.contains(name)).cloned().unwrap();
         assert!(line("c-busy-claude").contains(crate::session_list::claude_spinner(0)));
-        assert!(line("d-busy-codex").contains(crate::session_list::spinner(0)));
+        assert!(line("d-busy-codex").contains(crate::session_list::CODEX_FILL_PULSE_FRAMES[0]));
         assert!(!line("b-idle-claude").contains(crate::session_list::claude_spinner(0)));
     }
 

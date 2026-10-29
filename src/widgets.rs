@@ -365,7 +365,7 @@ impl Row {
         self.preview_gap = 2;
         self
     }
-    /// A picker choice drawn `<arrow> value`; `arrow` is one of `⬍ ⬇ ⬆`.
+    /// A picker choice drawn `<arrow> value`; `arrow` is one of `↕ ↓ ↑`.
     pub fn with_picker(mut self, value: impl AsRef<str>, arrow: &str) -> Self {
         self.preview = Some(format!("{arrow} {}", value.as_ref()));
         self.preview_selected_only = false;
@@ -632,7 +632,8 @@ impl Row {
             };
             if self.preview_arrows {
                 let (glyph, inner) = preview.split_once(' ').unwrap_or((preview, ""));
-                let arrow = if selected {
+                // Grabbed: bold pulse. Focused: static lighter grey. Else: dim grey.
+                let arrow = if grabbed {
                     Cell {
                         fg: canvas
                             .theme
@@ -642,7 +643,11 @@ impl Row {
                         ..Cell::default()
                     }
                 } else {
-                    arrow
+                    Cell {
+                        fg: if selected { SECONDARY } else { MUTED },
+                        bold: false,
+                        ..Cell::default()
+                    }
                 };
                 canvas.widget_text(x, y, glyph, arrow, false);
                 canvas.widget_text(

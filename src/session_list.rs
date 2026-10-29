@@ -1,4 +1,5 @@
 //! Session rows: name, state marker, dim provider/account column and operation badge.
+use crate::preferences::{ClaudeSpinner, CodexSpinner, GeminiSpinner, Spinners};
 use crate::{
     render::{Accent, Canvas, Cell},
     usage::short_name,
@@ -369,13 +370,17 @@ pub fn duration(seconds: i64) -> String {
         format!("{m}:{s:02}")
     }
 }
+const BRAILLE_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+fn spinner_at(ms: u64, now_ms: u64) -> &'static str {
+    BRAILLE_FRAMES[(now_ms / ms % 10) as usize]
+}
 /// cli-main-menu/select.bash: ten Braille frames, one frame every 100 ms.
 pub fn spinner(now_ms: u64) -> &'static str {
-    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][(now_ms / 100 % 10) as usize]
+    spinner_at(100, now_ms)
 }
 /// Gemini CLI's ink-spinner `dots`: one Braille frame every 80 ms, never bold.
 pub fn gemini_spinner(now_ms: u64) -> &'static str {
-    ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][(now_ms / 80 % 10) as usize]
+    spinner_at(GEMINI_CLASSIC_MS, now_ms)
 }
 /// Claude Code 2.1.312 busy spinner: six single-cell frames on a cosine ease over a
 /// 2000 ms cycle (dwelling on the first and last), elapsed time quantized down to
@@ -392,16 +397,99 @@ fn busy(session: &Value) -> bool {
 fn idle(session: &Value) -> bool {
     session["availability"] == "running" && !busy(session)
 }
-/// The row's provider icon: the provider's own spinner frame replaces it while
+/// Milliseconds per frame of the themed Codex and Gemini spinners.
+pub const THEMED_FRAME_MS: u64 = 120;
+/// Codex "fill pulse" (default).
+pub const CODEX_FILL_PULSE_FRAMES: [&str; 6] = ["⬡", "⎔", "⏣", "⬢", "⏣", "⎔"];
+pub const CODEX_FILL_PULSE_MS: u64 = THEMED_FRAME_MS;
+/// Codex "rotate".
+pub const CODEX_ROTATE_FRAMES: [&str; 4] = ["⬢", "⬣", "⬢", "⬣"];
+pub const CODEX_ROTATE_MS: u64 = THEMED_FRAME_MS;
+/// Codex "benzene".
+pub const CODEX_BENZENE_FRAMES: [&str; 4] = ["⌬", "⏣", "⬡", "⏣"];
+pub const CODEX_BENZENE_MS: u64 = THEMED_FRAME_MS;
+/// Codex "build-up".
+pub const CODEX_BUILD_UP_FRAMES: [&str; 6] = ["·", "⬡", "⏣", "⬢", "⏣", "⬡"];
+pub const CODEX_BUILD_UP_MS: u64 = THEMED_FRAME_MS;
+/// Codex "classic": the Braille spinner at 100 ms.
+pub const CODEX_CLASSIC_MS: u64 = 100;
+/// Gemini "twinkle" (default).
+pub const GEMINI_TWINKLE_FRAMES: [&str; 6] = ["⋅", "✧", "⟡", "✦", "⟡", "✧"];
+pub const GEMINI_TWINKLE_MS: u64 = THEMED_FRAME_MS;
+/// Gemini "spin fill".
+pub const GEMINI_SPIN_FILL_FRAMES: [&str; 4] = ["⬖", "⬘", "⬗", "⬙"];
+pub const GEMINI_SPIN_FILL_MS: u64 = THEMED_FRAME_MS;
+/// Gemini "morph".
+pub const GEMINI_MORPH_FRAMES: [&str; 4] = ["✦", "❖", "◆", "❖"];
+pub const GEMINI_MORPH_MS: u64 = THEMED_FRAME_MS;
+/// Gemini "concave blink".
+pub const GEMINI_CONCAVE_BLINK_FRAMES: [&str; 4] = ["✦", "⟡", "✧", "⟡"];
+pub const GEMINI_CONCAVE_BLINK_MS: u64 = THEMED_FRAME_MS;
+/// Gemini "classic": Gemini CLI's own Braille spinner at 80 ms.
+pub const GEMINI_CLASSIC_MS: u64 = 80;
+/// "Glow": a static glyph whose colour pulses like the picker arrow.
+pub const CODEX_GLOW_GLYPH: &str = "⏣";
+pub const GEMINI_GLOW_GLYPH: &str = "✦";
+pub const CLAUDE_GLOW_GLYPH: &str = "✻";
+
+fn cycle(frames: &'static [&'static str], ms: u64, now_ms: u64) -> &'static str {
+    frames[(now_ms / ms % frames.len() as u64) as usize]
+}
+/// The busy frame of the chosen Codex spinner (Glow is its static glyph).
+pub fn codex_frame(kind: CodexSpinner, now_ms: u64) -> &'static str {
+    match kind {
+        CodexSpinner::FillPulse => cycle(&CODEX_FILL_PULSE_FRAMES, CODEX_FILL_PULSE_MS, now_ms),
+        CodexSpinner::Rotate => cycle(&CODEX_ROTATE_FRAMES, CODEX_ROTATE_MS, now_ms),
+        CodexSpinner::Benzene => cycle(&CODEX_BENZENE_FRAMES, CODEX_BENZENE_MS, now_ms),
+        CodexSpinner::BuildUp => cycle(&CODEX_BUILD_UP_FRAMES, CODEX_BUILD_UP_MS, now_ms),
+        CodexSpinner::Classic => spinner_at(CODEX_CLASSIC_MS, now_ms),
+        CodexSpinner::Glow => CODEX_GLOW_GLYPH,
+    }
+}
+/// The busy frame of the chosen Gemini spinner (Glow is its static glyph).
+pub fn gemini_frame(kind: GeminiSpinner, now_ms: u64) -> &'static str {
+    match kind {
+        GeminiSpinner::Twinkle => cycle(&GEMINI_TWINKLE_FRAMES, GEMINI_TWINKLE_MS, now_ms),
+        GeminiSpinner::SpinFill => cycle(&GEMINI_SPIN_FILL_FRAMES, GEMINI_SPIN_FILL_MS, now_ms),
+        GeminiSpinner::Morph => cycle(&GEMINI_MORPH_FRAMES, GEMINI_MORPH_MS, now_ms),
+        GeminiSpinner::ConcaveBlink => cycle(
+            &GEMINI_CONCAVE_BLINK_FRAMES,
+            GEMINI_CONCAVE_BLINK_MS,
+            now_ms,
+        ),
+        GeminiSpinner::Classic => spinner_at(GEMINI_CLASSIC_MS, now_ms),
+        GeminiSpinner::Glow => GEMINI_GLOW_GLYPH,
+    }
+}
+/// The busy frame of the chosen Claude spinner (Glow is its static glyph).
+pub fn claude_frame(kind: ClaudeSpinner, now_ms: u64) -> &'static str {
+    match kind {
+        ClaudeSpinner::Claude => claude_spinner(now_ms),
+        ClaudeSpinner::Classic => spinner(now_ms),
+        ClaudeSpinner::Glow => CLAUDE_GLOW_GLYPH,
+    }
+}
+/// Whether the busy row's chosen spinner is a static glyph with a colour pulse.
+pub fn row_glows(session: &Value, spinners: Spinners) -> bool {
+    busy(session)
+        && if is_gemini(session) {
+            spinners.gemini == GeminiSpinner::Glow
+        } else if is_claude(session) {
+            spinners.claude == ClaudeSpinner::Glow
+        } else {
+            spinners.codex == CodexSpinner::Glow
+        }
+}
+/// The row's provider icon: the chosen provider spinner frame replaces it while
 /// a turn runs, otherwise it is the static provider symbol.
-pub fn row_icon(session: &Value, now_ms: u64) -> &'static str {
+pub fn row_icon(session: &Value, now_ms: u64, spinners: Spinners) -> &'static str {
     if busy(session) {
         if is_gemini(session) {
-            gemini_spinner(now_ms)
+            gemini_frame(spinners.gemini, now_ms)
         } else if is_claude(session) {
-            claude_spinner(now_ms)
+            claude_frame(spinners.claude, now_ms)
         } else {
-            spinner(now_ms)
+            codex_frame(spinners.codex, now_ms)
         }
     } else {
         crate::usage::provider_symbol(provider(session))
@@ -522,6 +610,7 @@ pub struct Extras<'a> {
     pub archives: bool,
     pub badges: Option<&'a std::collections::BTreeMap<String, Badge>>,
     pub badge_focus: bool,
+    pub spinners: Spinners,
 }
 pub fn paint(
     canvas: &mut Canvas,
@@ -686,11 +775,24 @@ pub fn paint_with(
             );
         }
         if show_accounts {
-            let icon = row_icon(session, now_ms);
+            let icon = row_icon(session, now_ms, extras.spinners);
+            let glows = row_glows(session, extras.spinners);
             let tag = account_tag(session);
             let rest = tag.split_once(' ').map_or("", |(_, r)| r);
             let tint = dim(if selected { SECONDARY } else { MUTED }, options.back);
-            if busy(session) {
+            if glows {
+                let fg = canvas.theme.as_ref().map_or(MUTED, |t| t.arrow_pulse());
+                canvas.widget_text(
+                    x + 1,
+                    y,
+                    icon,
+                    Cell {
+                        fg: dim(fg, options.back),
+                        ..Cell::default()
+                    },
+                    false,
+                );
+            } else if busy(session) {
                 canvas.accent_text(
                     x + 1,
                     y,
@@ -1071,24 +1173,24 @@ mod tests {
     fn every_row_has_a_busy_icon_and_dim_provider_account_column() {
         let sessions = sessions();
         let mut field = crate::render::Field::new(100, 20, 1967);
-        let mut c = field.paint(4100);
+        let mut c = field.paint(4000);
         paint(&mut c, &mut Options::default(), &sessions, true, 18, 62, 19);
         let busy = text(&c, 3);
         let idle = text(&c, 4);
         let saved = text(&c, 6);
         // Busy replaces the provider icon itself; no second glyph, no dot.
-        assert!(busy.contains("⠙ gate1") && !busy.contains('⏣'), "{busy}");
+        assert!(busy.contains("⬢ gate1") && !busy.contains('⏣'), "{busy}");
         assert!(idle.contains("✻ main") && !idle.contains('●'), "{idle}");
         assert!(saved.contains("⏣ work") && !saved.contains('●'), "{saved}");
         assert!(!saved.contains("inactive"));
         // Account columns start at one x on every row.
         let x = |line: &str, glyph: char| line.chars().position(|g| g == glyph).unwrap();
-        assert_eq!(x(&busy, '⠙'), x(&saved, '⏣'));
-        assert_eq!(x(&busy, '⠙'), x(&idle, '✻'));
+        assert_eq!(x(&busy, '⬢'), x(&saved, '⏣'));
+        assert_eq!(x(&busy, '⬢'), x(&idle, '✻'));
         let tag = &c.cells[6 * 100 + x(&saved, '⏣') + 2];
         assert_eq!(tag.fg, MUTED);
         assert!(!tag.bold);
-        assert!(!c.cells[3 * 100 + x(&busy, '⠙')].bold);
+        assert!(!c.cells[3 * 100 + x(&busy, '⬢')].bold);
         // Hover brightens the account and shows the timer; no "(inactive)".
         let mut c = field.paint(4100);
         paint(
@@ -1101,7 +1203,7 @@ mod tests {
             19,
         );
         assert!(text(&c, 3).contains("1:01:01:01"));
-        assert_eq!(c.cells[3 * 100 + x(&busy, '⠙') + 2].fg, SECONDARY);
+        assert_eq!(c.cells[3 * 100 + x(&busy, '⬢') + 2].fg, SECONDARY);
         let mut c = field.paint(4100);
         paint(
             &mut c,
@@ -1229,16 +1331,95 @@ mod tests {
         }
     }
     #[test]
-    fn row_icon_frames_follow_the_provider_while_busy() {
+    fn row_icon_frames_follow_the_provider_and_chosen_spinner_while_busy() {
+        use crate::preferences::{ClaudeSpinner as C, CodexSpinner as X, GeminiSpinner as G};
         let busy = |p: &str| json!({"account_id":format!("{p}:a"),"availability":"running","activity":"busy"});
         let idle = |p: &str| json!({"account_id":format!("{p}:a"),"availability":"running","activity":"idle"});
-        assert_eq!(row_icon(&busy("claude"), 0), "·");
-        assert_eq!(row_icon(&busy("claude"), 1000), "✽");
-        assert_eq!(row_icon(&busy("gemini"), 80), "⠙");
-        assert_eq!(row_icon(&busy("codex"), 100), "⠙");
-        assert_eq!(row_icon(&idle("claude"), 1000), "✻");
-        assert_eq!(row_icon(&idle("gemini"), 80), "✦");
-        assert_eq!(row_icon(&idle("codex"), 100), "⏣");
+        let d = Spinners::default();
+        let with = |claude, codex, gemini| Spinners {
+            claude,
+            codex,
+            gemini,
+        };
+        assert_eq!(row_icon(&busy("claude"), 0, d), "·");
+        assert_eq!(row_icon(&busy("claude"), 1000, d), "✽");
+        let codex: Vec<_> = (0..7)
+            .map(|i| row_icon(&busy("codex"), i * 120, d))
+            .collect();
+        assert_eq!(codex, ["⬡", "⎔", "⏣", "⬢", "⏣", "⎔", "⬡"]);
+        let gemini: Vec<_> = (0..7)
+            .map(|i| row_icon(&busy("gemini"), i * 120, d))
+            .collect();
+        assert_eq!(gemini, ["⋅", "✧", "⟡", "✦", "⟡", "✧", "⋅"]);
+        assert_eq!(row_icon(&idle("claude"), 1000, d), "✻");
+        assert_eq!(row_icon(&idle("gemini"), 80, d), "✦");
+        assert_eq!(row_icon(&idle("codex"), 100, d), "⏣");
+        // Every option selects its own frames.
+        let frames = |kind, n| -> Vec<&str> {
+            (0..n)
+                .map(|i| row_icon(&busy("codex"), i * 120, with(C::Claude, kind, G::Twinkle)))
+                .collect()
+        };
+        assert_eq!(frames(X::Rotate, 5), ["⬢", "⬣", "⬢", "⬣", "⬢"]);
+        assert_eq!(frames(X::Benzene, 5), ["⌬", "⏣", "⬡", "⏣", "⌬"]);
+        assert_eq!(frames(X::BuildUp, 6), ["·", "⬡", "⏣", "⬢", "⏣", "⬡"]);
+        assert_eq!(frames(X::Glow, 3), ["⏣", "⏣", "⏣"]);
+        let classic = with(C::Claude, X::Classic, G::Classic);
+        assert_eq!(row_icon(&busy("codex"), 100, classic), "⠙");
+        assert_eq!(row_icon(&busy("codex"), 99, classic), "⠋");
+        assert_eq!(row_icon(&busy("gemini"), 80, classic), "⠙");
+        assert_eq!(row_icon(&busy("gemini"), 79, classic), "⠋");
+        let gem = |kind, n| -> Vec<&str> {
+            (0..n)
+                .map(|i| {
+                    row_icon(
+                        &busy("gemini"),
+                        i * 120,
+                        with(C::Claude, X::FillPulse, kind),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(gem(G::SpinFill, 4), ["⬖", "⬘", "⬗", "⬙"]);
+        assert_eq!(gem(G::Morph, 4), ["✦", "❖", "◆", "❖"]);
+        assert_eq!(gem(G::ConcaveBlink, 4), ["✦", "⟡", "✧", "⟡"]);
+        assert_eq!(gem(G::Glow, 3), ["✦", "✦", "✦"]);
+        let claude =
+            |kind, now| row_icon(&busy("claude"), now, with(kind, X::FillPulse, G::Twinkle));
+        assert_eq!(claude(C::Classic, 100), "⠙");
+        assert_eq!(claude(C::Classic, 99), "⠋");
+        assert_eq!(claude(C::Glow, 0), "✻");
+        assert_eq!(claude(C::Glow, 777), "✻");
+        // Only busy Glow rows get the colour pulse.
+        let glow = with(C::Glow, X::Glow, G::Glow);
+        for p in ["claude", "codex", "gemini"] {
+            assert!(row_glows(&busy(p), glow) && !row_glows(&idle(p), glow));
+            assert!(!row_glows(&busy(p), d));
+        }
+    }
+    #[test]
+    fn every_spinner_glyph_is_one_cell_wide() {
+        use unicode_width::UnicodeWidthStr;
+        let mut glyphs: Vec<&str> = [
+            &CODEX_FILL_PULSE_FRAMES[..],
+            &CODEX_ROTATE_FRAMES,
+            &CODEX_BENZENE_FRAMES,
+            &CODEX_BUILD_UP_FRAMES,
+            &GEMINI_TWINKLE_FRAMES,
+            &GEMINI_SPIN_FILL_FRAMES,
+            &GEMINI_MORPH_FRAMES,
+            &GEMINI_CONCAVE_BLINK_FRAMES,
+            &BRAILLE_FRAMES,
+            &["·", "✢", "*", "✶", "✻", "✽"],
+        ]
+        .concat();
+        glyphs.extend([CODEX_GLOW_GLYPH, GEMINI_GLOW_GLYPH, CLAUDE_GLOW_GLYPH]);
+        for g in glyphs {
+            assert_eq!(UnicodeWidthStr::width(g), 1, "{g}");
+            if std::env::var_os("SPINNER_WIDTH_REPORT").is_some() {
+                eprintln!("{g} cjk={}", unicode_width::UnicodeWidthStr::width_cjk(g));
+            }
+        }
     }
     #[test]
     fn account_column_sits_one_space_after_the_longest_name() {

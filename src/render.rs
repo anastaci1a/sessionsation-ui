@@ -810,11 +810,13 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for now in (0..ARROW_PULSE_MS * 2).step_by(25) {
             let mut c = field.paint(now);
-            let mut row = crate::widgets::Row::yes("Setting").with_picker("Dense", "⬍");
+            let mut row = crate::widgets::Row::yes("Setting")
+                .with_picker("Dense", "↕")
+                .grabbed(true);
             row.preview_selected_only = false;
             let mut options = crate::widgets::Options::default();
             options.paint_menu(&mut c, &[row], 1, 4, 4);
-            let cell = c.cells.iter().find(|c| c.glyph == "⬍").unwrap();
+            let cell = c.cells.iter().find(|c| c.glyph == "↕").unwrap();
             assert!(cell.bold, "now={now}");
             assert!(
                 cell.fg.iter().all(|v| (188..=255).contains(v)) && cell.fg[0] == cell.fg[2],
