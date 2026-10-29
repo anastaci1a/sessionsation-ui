@@ -6,10 +6,9 @@ use crate::widgets::RowMode;
 use crate::{
     render::{Accent, Canvas, Cell},
     usage::short_name,
-    widgets::{MUTED, Options, Row, SECONDARY, SELECTED, ellipsize},
+    widgets::{MUTED, Options, Row, SECONDARY, SELECTED, fit_selectable},
 };
 use serde_json::Value;
-use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
@@ -675,33 +674,6 @@ pub fn rows_with_archives(sessions: &[Value], known: bool, archives: bool) -> Ve
 pub fn name_budget(width: usize) -> usize {
     (width * 3 / 10).clamp(12, 40)
 }
-/// Selected-name marquee: pause at the start, scroll left one cell at a time to
-/// reveal the end, pause, then loop. Hidden text is marked with `…` on either side.
-pub fn marquee(text: &str, width: usize, now_ms: u64) -> String {
-    const PAUSE: u64 = 1500;
-    const STEP: u64 = 160;
-    if UnicodeWidthStr::width(text) <= width || width < 3 {
-        return ellipsize(text, width);
-    }
-    let graphemes: Vec<&str> = text.graphemes(true).collect();
-    let tail = |k: usize| graphemes[k..].concat();
-    // Smallest offset whose remainder fits after a leading ellipsis.
-    let last = (1..graphemes.len())
-        .find(|k| UnicodeWidthStr::width(tail(*k).as_str()) < width)
-        .unwrap_or(graphemes.len() - 1);
-    let cycle = PAUSE * 2 + STEP * last as u64;
-    let t = now_ms % cycle;
-    let offset = if t < PAUSE {
-        0
-    } else {
-        (((t - PAUSE) / STEP) as usize + 1).min(last)
-    };
-    if offset == 0 {
-        ellipsize(text, width)
-    } else {
-        ellipsize(&format!("…{}", tail(offset)), width)
-    }
-}
 /// Start (Unix seconds) of the session's attachment process, when the backend
 /// reports `attachment.process_start` (Linux /proc start ticks) and that same
 /// process is still alive on this host. Read once per state update, never while
@@ -846,11 +818,8 @@ pub fn paint_with(
         .filter_map(|(row, i)| i.map(|i| (row, &sessions[i])))
     {
         let name = full_name(session);
-        rows[i].label = if options.selected == i && !options.back {
-            marquee(&name, name_width, now_ms)
-        } else {
-            ellipsize(&name, name_width)
-        };
+        let selected = options.selected == i && !options.back;
+        rows[i].label = fit_selectable(&name, name_width, now_ms, selected);
         let width = UnicodeWidthStr::width(rows[i].label.as_str());
         rows[i]
             .label
@@ -1054,7 +1023,8 @@ pub fn paint_with(
                     );
                 }
                 let arrow = if focused { 2 } else { 0 };
-                let text = ellipsize(&badge.text, room.saturating_sub(2 + arrow));
+                let text =
+                    fit_selectable(&badge.text, room.saturating_sub(2 + arrow), now_ms, focused);
                 if !text.is_empty() {
                     canvas.widget_text(
                         x + 4,
@@ -1939,28 +1909,16 @@ mod tests {
         }
     }
     #[test]
-    fn selected_long_name_marquees_with_pauses_and_loops() {
-        let name = "abcdefghijklmnop";
-        assert_eq!(marquee(name, 8, 0), "abcdefg…");
-        assert_eq!(marquee(name, 8, 1499), "abcdefg…");
-        assert_eq!(marquee(name, 8, 1500), "…bcdefg…");
-        assert_eq!(marquee(name, 8, 1660), "…cdefgh…");
-        let end = marquee(name, 8, 1500 + 160 * 40);
-        assert_eq!(end, "…jklmnop", "stops with the end revealed");
-        let cycle = 1500 * 2 + 160 * 9;
-        assert_eq!(
-            marquee(name, 8, cycle),
-            "abcdefg…",
-            "loops back to the start"
-        );
-        assert_eq!(marquee("short", 8, 5000), "short");
+    fn only_the_selected_long_name_scrolls_and_others_stay_ellipsized() {
         // Only the selected row scrolls.
         let sessions = vec![
             json!({"id":"a","name":"abcdefghijklmnopqrstuvwxyz0123456789","account_id":"codex:p","availability":"saved"}),
             json!({"id":"b","name":"abcdefghijklmnopqrstuvwxyz0123456789","account_id":"codex:p","availability":"saved"}),
         ];
         let mut field = crate::render::Field::new(60, 20, 1967);
-        let mut c = field.paint(1500 + 160 * 3);
+        // Four steps into the cycle: the selected name has moved four graphemes.
+        let now = crate::widgets::MARQUEE_PAUSE_MS + crate::widgets::MARQUEE_STEP_MS * 3;
+        let mut c = field.paint(now);
         paint(
             &mut c,
             &mut Options::default(),
@@ -1970,8 +1928,14 @@ mod tests {
             100,
             19,
         );
-        assert!(text(&c, 3).contains("…ef"), "{}", text(&c, 3));
-        assert!(text(&c, 4).contains("abc"));
+        let (selected, other) = (text(&c, 3), text(&c, 4));
+        assert!(selected.contains("efghij"), "{selected}");
+        assert!(!selected.contains('…'), "{selected}");
+        assert!(other.contains("abcdef"), "{other}");
+        assert!(
+            other.contains('…'),
+            "unselected keeps the ellipsis: {other}"
+        );
     }
     #[test]
     fn badges_hang_right_animate_when_active_and_focus_with_an_arrow() {

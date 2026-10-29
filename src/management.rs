@@ -1075,6 +1075,10 @@ impl Manager {
     /// Archived name, shortened to `budget` cells; only colliding names gain a
     /// short ID suffix (`codex-root · 7792`).
     fn archive_label(&self, s: &Value, budget: usize) -> String {
+        self.archive_row(s, budget).label
+    }
+    /// The archive row for `s`: its shortened name scrolls while selected.
+    fn archive_row(&self, s: &Value, budget: usize) -> Row {
         let name = crate::session_list::full_name(s);
         let collides = self
             .archives
@@ -1082,15 +1086,19 @@ impl Manager {
             .filter(|o| crate::session_list::full_name(o) == name)
             .count()
             > 1;
-        if collides {
-            let suffix = format!(" · {}", id(s).chars().take(4).collect::<String>());
-            format!(
-                "{}{suffix}",
-                crate::widgets::ellipsize(&name, budget.saturating_sub(suffix.chars().count()))
-            )
+        let suffix = if collides {
+            format!(" · {}", id(s).chars().take(4).collect::<String>())
         } else {
-            crate::widgets::ellipsize(&name, budget)
-        }
+            String::new()
+        };
+        let short = crate::widgets::ellipsize(&name, budget.saturating_sub(suffix.chars().count()));
+        let mut row = Row::yes(format!("{short}{suffix}"));
+        row.shorten(
+            0,
+            unicode_width::UnicodeWidthStr::width(short.as_str()),
+            &name,
+        );
+        row
     }
     fn selected_account(&self) -> Option<String> {
         match &self.page {
@@ -1696,11 +1704,14 @@ impl Manager {
                     Row::separator(),
                     Row::yes("Settings"),
                 ];
-                rows.extend(
-                    self.accounts
-                        .iter()
-                        .map(|a| Row::yes(account_title(a)).account()),
-                );
+                rows.extend(self.accounts.iter().map(|a| {
+                    Row::overflowing(
+                        crate::usage::account_title_full(a),
+                        crate::usage::ACCOUNT_TITLE_CELLS,
+                        true,
+                    )
+                    .account()
+                }));
                 rows
             }
             Page::Account(key) => {
@@ -2035,7 +2046,9 @@ impl Manager {
                 .map(|e| e.3)
         };
         let slots = self.operation_slots();
-        let describe = |kind: &str, key: &str| -> Option<(String, String, String, String)> {
+        /// Time, shortened subject, kind, status and full subject of an operation.
+        type Described = (String, String, String, String, String);
+        let describe = |kind: &str, key: &str| -> Option<Described> {
             find(kind, key).map(|r| {
                 let code = if kind == "operation" {
                     r["kind"].as_str().unwrap_or("operation")
@@ -2047,10 +2060,11 @@ impl Manager {
                     crate::widgets::ellipsize(&self.operation_subject(kind, r), 24),
                     kind_label(code),
                     operation_row_status(kind, r),
+                    self.operation_subject(kind, r),
                 )
             })
         };
-        let described: Vec<Option<(String, String, String, String)>> = slots
+        let described: Vec<Option<Described>> = slots
             .iter()
             .map(|slot| match slot {
                 Slot::Entry(kind, key) => describe(kind, key),
@@ -2060,7 +2074,7 @@ impl Manager {
         // Column widths come from every operation, not the filtered subset, so the
         // list stays put when the filter changes.
         let everything: Vec<_> = entries.iter().filter_map(|e| describe(e.0, e.1)).collect();
-        let width = |f: fn(&(String, String, String, String)) -> &String| {
+        let width = |f: fn(&Described) -> &String| {
             everything
                 .iter()
                 .map(|d| UnicodeWidthStr::width(f(d).as_str()))
@@ -2094,7 +2108,7 @@ impl Manager {
                     row
                 }
                 (Slot::Heading(label), _) => Row::heading(label.clone()),
-                (Slot::Entry(..), Some((time, subject, kind, status))) => {
+                (Slot::Entry(..), Some((time, subject, kind, status, full_subject))) => {
                     let label = format!(
                         "{}{time}  {}  {}",
                         " ".repeat(time_w.saturating_sub(UnicodeWidthStr::width(time.as_str()))),
@@ -2102,6 +2116,11 @@ impl Manager {
                         pad(&kind, kind_w),
                     );
                     let mut row = Row::yes(label).with_reason(status);
+                    row.shorten(
+                        time_w + 2,
+                        UnicodeWidthStr::width(subject.as_str()),
+                        &full_subject,
+                    );
                     row.preview = row.preview.map(|p| p.trim_start_matches("· ").to_owned());
                     row.preview_column = Some(2 + time_w + subject_w + kind_w + 6);
                     row
@@ -5193,18 +5212,20 @@ impl Manager {
                 let budget = crate::session_list::name_budget(canvas.width);
                 if self.page == Page::Archives {
                     for (row, s) in rows.iter_mut().zip(&self.archives) {
-                        row.label = self.archive_label(s, budget);
+                        let short = self.archive_row(s, budget);
+                        row.label = short.label;
+                        row.overflow = short.overflow;
                     }
                 }
                 // Inline statuses and reasons shorten to the space they have; when
                 // too narrow, the selected one moves below the list (standard wrap).
                 for row in rows.iter_mut() {
-                    if let (Some(column), Some(preview)) = (row.preview_column, &row.preview)
+                    if let (Some(column), Some(_)) = (row.preview_column, &row.preview)
                         && !row.preview_choice
                     {
                         let room = canvas.width.saturating_sub(column + 6);
                         if room >= 6 {
-                            row.preview = Some(crate::widgets::ellipsize(preview, room));
+                            row.shorten_preview(room, crate::widgets::ellipsize);
                         } else {
                             row.preview_selected_only = true;
                         }
@@ -5382,11 +5403,23 @@ mod tests {
         m.archives[1]["name"] = json!("a-very-long-archived-session-name");
         let mut c = Canvas::new(40, 24);
         m.paint_at(&mut c, 23, 100);
+        let line = |y: usize| -> String {
+            c.cells[y * 40..(y + 1) * 40]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect()
+        };
+        assert!(line(4).contains("… · 1234"), "{}", line(4));
+        // The selected name scrolls (from its start) instead of ending in `…`.
+        assert!(line(3).contains("a-ver · 7792"), "{}", line(3));
+        let mut c = Canvas::new(40, 24);
+        c.clock = crate::widgets::MARQUEE_PAUSE_MS;
+        m.paint_at(&mut c, 23, 100);
         let line: String = c.cells[3 * 40..4 * 40]
             .iter()
             .map(|c| c.glyph.as_str())
             .collect();
-        assert!(line.contains("… · 7792"), "{line}");
+        assert!(line.contains("-very · 7792"), "{line}");
     }
     #[test]
     fn loading_confirmation_and_operation_share_the_opened_frame() {

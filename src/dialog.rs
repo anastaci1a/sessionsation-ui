@@ -1,7 +1,7 @@
 //! Shared, nonblocking dialogs. Validation and cancellation never depend on focus.
 use crate::{
     render::{Canvas, Cell},
-    widgets::{NAME_MAX_CHARS, Row, TextInput, clip},
+    widgets::{NAME_MAX_CHARS, Row, TextInput},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
@@ -112,7 +112,11 @@ impl Field {
             },
             ..style.clone()
         };
-        let label = clip(&format!(" {} ", self.label), width - 4);
+        let label = crate::widgets::fit_scrolling(
+            &format!(" {} ", self.label),
+            width - 4,
+            crate::widgets::frame_time(canvas),
+        );
         let label_width = UnicodeWidthStr::width(label.as_str());
         canvas.text(
             x,
@@ -495,7 +499,9 @@ impl Dialog {
                 fg: palette.accent,
                 ..style.clone()
             };
-            canvas.text(0, 0, &clip(&title, width), border, false);
+            let title =
+                crate::widgets::fit_scrolling(&title, width, crate::widgets::frame_time(canvas));
+            canvas.text(0, 0, &title, border, false);
         }
         let mut lines: Vec<(String, bool)> = vec![];
         for (i, link) in view.shown.iter().enumerate() {
@@ -734,7 +740,11 @@ impl Dialog {
                     && button.preview_selected_only
                     && let Some(note) = button.preview.as_deref()
                 {
-                    let text = crate::widgets::ellipsize(note, width.saturating_sub(4));
+                    let text = crate::widgets::fit_scrolling(
+                        note,
+                        width.saturating_sub(4),
+                        crate::widgets::frame_time(canvas),
+                    );
                     let at = row + self.buttons.len() + 1;
                     if at < y + height - 1 {
                         button.paint_preview(
@@ -1007,7 +1017,10 @@ mod tests {
                 .iter()
                 .map(|c| c.glyph.as_str())
                 .collect::<String>();
-            assert!(row.starts_with(&format!("┌{}", clip(title, d.size.unwrap().width - 2))));
+            assert!(row.starts_with(&format!(
+                "┌{}",
+                crate::widgets::clip(title, d.size.unwrap().width - 2)
+            )));
             assert!(row.ends_with('┐'));
             if title == "Popup Title" {
                 assert!(row.starts_with("┌Popup Title──"));

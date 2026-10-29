@@ -356,6 +356,11 @@ impl Manager {
                 pad(&crate::widgets::ellipsize(&item.subject, 24), subject_w)
             );
             let mut row = Row::yes(label).with_reason(status);
+            row.shorten(
+                UnicodeWidthStr::width(icon) + 1 + label_w + 2,
+                UnicodeWidthStr::width(crate::widgets::ellipsize(&item.subject, 24).as_str()),
+                &item.subject,
+            );
             row.preview = row.preview.map(|p| p.trim_start_matches("· ").to_owned());
             row.preview_column = Some(2 + 2 + label_w + 2 + subject_w + 2);
             row
@@ -389,6 +394,9 @@ impl Manager {
                             i,
                             crate::widgets::ellipsize(&i.status, RECENT_REASON_WIDTH),
                         );
+                        if UnicodeWidthStr::width(i.status.as_str()) > RECENT_REASON_WIDTH {
+                            r.preview_full = Some(i.status.clone());
+                        }
                         r.preview_info = false;
                         r
                     }
@@ -677,9 +685,9 @@ impl Manager {
         let inner = self.popup_size.unwrap().width.saturating_sub(4);
         let left = crate::widgets::Options::left(inner, &rows);
         for row in rows.iter_mut().filter(|r| !r.preview_info) {
-            if let (Some(column), Some(preview)) = (row.preview_column, &row.preview) {
+            if let (Some(column), Some(_)) = (row.preview_column, &row.preview) {
                 let room = inner.saturating_sub(left + column + 1);
-                row.preview = Some(crate::widgets::ellipsize(preview, room));
+                row.shorten_preview(room, crate::widgets::ellipsize);
             }
         }
         let view = crate::popup::Choices {

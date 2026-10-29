@@ -824,7 +824,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
          _=receipt.tick(),if app.request.is_some()&&!app.success&&receipt_pending.as_deref()!=app.request.as_ref().and_then(|r|r["request_id"].as_str())=>{arm="receipt";woke=Instant::now();receipt_pending=app.request.as_ref().and_then(|r|r["request_id"].as_str()).map(str::to_owned);effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
          message=rx.recv()=>{woke=Instant::now();arm=message.as_ref().map_or("closed",Message::kind);match message.context("Input channel closed")? {
          Message::Background(color)=>{app.terminal_background=color;app.dirty=true;},
-         Message::Input(Event::Key(k))=>{if prefixes.matches(k){app.exit=true;}else{next=app.key(k);}},
+         Message::Input(Event::Key(k))=>{if prefixes.matches(k){app.exit=true;}else{sessionsation_ui::widgets::restart_selection_marquee(started.elapsed().as_millis() as u64);next=app.key(k);}},
           Message::Input(Event::Paste(s))=>{next=app.paste(&s);},
           Message::Input(Event::Resize(w,h))=>{dimensions=(w as usize,h as usize);app.dirty=true;},
           Message::Input(Event::FocusGained)=>{app.manager.visible=true;let intents=app.manager.read_sessions();next=app.management(intents);app.dirty=true;},Message::Input(Event::FocusLost)=>{app.manager.visible=false;},Message::Input(_)=>{},

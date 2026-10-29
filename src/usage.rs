@@ -5,19 +5,32 @@ use crate::{
 };
 use unicode_width::UnicodeWidthStr;
 
+/// Cells an account name gets in lists and tags; longer names are shortened.
+pub const ACCOUNT_TITLE_CELLS: usize = 12;
 pub fn short_name(id: &str) -> String {
-    let name = id.split_once(':').map_or(id, |(_, n)| n);
-    clipped_name(name, 12)
+    clipped_name(full_short_name(id), ACCOUNT_TITLE_CELLS)
+}
+fn full_short_name(id: &str) -> &str {
+    id.split_once(':').map_or(id, |(_, n)| n)
 }
 /// Account name for lists and tags: the backend display name when set, else the
-/// short name derived from the ID.
+/// short name derived from the ID, shortened to [`ACCOUNT_TITLE_CELLS`].
 pub fn account_title(a: &Account) -> String {
+    crate::widgets::ellipsize(&account_title_full(a), ACCOUNT_TITLE_CELLS)
+}
+/// [`account_title`] before shortening (control characters removed).
+pub fn account_title_full(a: &Account) -> String {
     a.details
         .get("display_name")
         .and_then(|v| v.as_str())
-        .map(|n| clipped_name(n, 12))
+        .map(|n| n.chars().filter(|c| !c.is_control()).collect::<String>())
         .filter(|n| !n.trim().is_empty())
-        .unwrap_or_else(|| short_name(&a.id))
+        .unwrap_or_else(|| {
+            full_short_name(&a.id)
+                .chars()
+                .filter(|c| !c.is_control())
+                .collect()
+        })
 }
 pub fn display_name(name: &str) -> String {
     clipped_name(name, 16)
@@ -770,7 +783,12 @@ impl AccountsLayout {
                 self.name_x,
                 y,
                 &pad(
-                    &crate::widgets::ellipsize(&account_title(account), self.name_width),
+                    &crate::widgets::fit_selectable(
+                        &account_title_full(account),
+                        self.name_width,
+                        crate::widgets::frame_time(canvas),
+                        active,
+                    ),
                     self.name_width,
                 ),
                 name_style,
@@ -801,7 +819,11 @@ impl AccountsLayout {
                     self.name_x,
                     y + 1,
                     &pad(
-                        &crate::widgets::ellipsize(&format!("({age})"), self.name_width),
+                        &crate::widgets::fit_scrolling(
+                            &format!("({age})"),
+                            self.name_width,
+                            crate::widgets::frame_time(canvas),
+                        ),
                         self.name_width,
                     ),
                     Cell {

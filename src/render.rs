@@ -43,6 +43,9 @@ pub struct Canvas {
     /// Cells inside a popup painted this frame, and those already faded under a newer one.
     popup: Vec<bool>,
     faded: Vec<bool>,
+    /// Animation time (ms) for canvases without a theme, such as popup content
+    /// painted on a local canvas; text marquees read it.
+    pub clock: u64,
 }
 /// How far popups beneath the top one fade toward the terminal background (permille).
 pub const UNFOCUSED_FADE: i64 = 300;
@@ -71,6 +74,7 @@ impl Canvas {
             base: [0; 3],
             popup: vec![false; w * h],
             faded: vec![false; w * h],
+            clock: 0,
         }
     }
     /// A popup opens at this rectangle: every popup beneath it fades once toward

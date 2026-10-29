@@ -614,6 +614,16 @@ impl App {
                         },
                     ),
                 ]));
+                // The shortened global root scrolls in full while selected.
+                if let (Some(root), Some(row)) = (
+                    &self.prefs.global_root,
+                    rows.iter_mut().find(|r| r.label == "Global root"),
+                ) {
+                    let full = root.to_string_lossy().into_owned();
+                    if row.preview.as_deref() != Some(full.as_str()) {
+                        row.preview_full = Some(full);
+                    }
+                }
                 align_pickers(&mut rows);
                 rows
             }
@@ -661,15 +671,19 @@ impl App {
                         };
                         let column = 2 + name_width + 1 + preview_width + tag_width
                             - UnicodeWidthStr::width(usage.as_str());
-                        Row::gate(crate::usage::account_title(a), a.selectable)
-                            .with_symbol(crate::usage::provider_symbol(a.provider()))
-                            .with_column_preview(usage, column, false)
-                            .preview_gap(1)
-                            .preview_color(crate::widgets::SECONDARY)
-                            .with_status(
-                                crate::usage::Usage::account(a).status.clone(),
-                                crate::usage::Usage::account(a).status == "Ready",
-                            )
+                        Row::overflowing(
+                            crate::usage::account_title_full(a),
+                            crate::usage::ACCOUNT_TITLE_CELLS,
+                            a.selectable,
+                        )
+                        .with_symbol(crate::usage::provider_symbol(a.provider()))
+                        .with_column_preview(usage, column, false)
+                        .preview_gap(1)
+                        .preview_color(crate::widgets::SECONDARY)
+                        .with_status(
+                            crate::usage::Usage::account(a).status.clone(),
+                            crate::usage::Usage::account(a).status == "Ready",
+                        )
                     }))
                     .collect()
             }
@@ -4315,6 +4329,58 @@ mod tests {
                 let y = row_y(&c, &row.label);
                 assert!(col_of(&c, y, "›").is_none(), "{}", row.label);
             }
+        }
+    }
+    /// The grabbed selector's direction arrow stays bold through its whole pulse,
+    /// on the canvas and in the bytes written to the terminal, on every picker page.
+    #[test]
+    fn grabbed_picker_arrow_is_bold_at_every_pulse_phase() {
+        use crate::render::ARROW_PULSE_MS;
+        for page in [Page::Appearance, Page::Spinners, Page::Permissions] {
+            let count = {
+                let mut a = app();
+                a.page = page.clone();
+                a.rows().len()
+            };
+            let mut grabbed = 0;
+            for selected in 0..count {
+                let mut a = app();
+                a.page = page.clone();
+                a.options.selected = selected;
+                key(&mut a, KeyCode::Right);
+                if a.picker.is_none() {
+                    continue;
+                }
+                grabbed += 1;
+                let mut field = Field::new(80, 24, 1);
+                let mut shown: Option<Canvas> = None;
+                let mut rotation = 0;
+                // Both sides of the hue rotation start, and eight pulse phases.
+                for now in [0, 4000]
+                    .into_iter()
+                    .flat_map(|base| (0..8).map(move |k| base + ARROW_PULSE_MS * k / 8))
+                {
+                    let c = a.paint(&mut field, now, 80, 24);
+                    let arrows: Vec<_> = c
+                        .cells
+                        .iter()
+                        .filter(|c| matches!(c.glyph.as_str(), "↕" | "↑" | "↓"))
+                        .collect();
+                    assert_eq!(arrows.len(), 1, "{page:?} {selected} at {now}");
+                    assert!(arrows[0].bold, "{page:?} {selected} at {now}");
+                    let (delta, next) = c.paced_diff(
+                        shown.as_ref(),
+                        crate::render::AMBIENT_CELLS_PER_FRAME,
+                        &mut rotation,
+                    );
+                    if let Some(at) = delta.find(['↕', '↑', '↓']) {
+                        let sgr = &delta[delta[..at].rfind("\x1b[0;").unwrap()..at];
+                        assert!(sgr.starts_with("\x1b[0;1;"), "{page:?} at {now}: {sgr:?}");
+                    }
+                    shown = Some(next);
+                }
+            }
+            assert!(grabbed > 0, "{page:?} has a picker");
         }
     }
     #[test]

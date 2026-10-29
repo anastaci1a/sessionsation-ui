@@ -278,7 +278,7 @@ An unfinished conversation offers Start Session with an explicit warning first.
 Confirming acknowledges only unfinished history, not active writers or conflicting copies.
 Input focus is shown by the cursor alone, with no triangle. Only the focused input
 shows a cursor in multi-input dialogs; single-input dialogs
-stay editable while navigating buttons. Menu account names are ellipsized on cell 12, session titles on cell 16; full values remain
+stay editable while navigating buttons. Menu account names are shortened to cell 12, session titles on cell 16; full values remain
 editable and exact confirmation IDs remain intact. See the
 [rendering specification](cli-specification/architecture.md#account-and-session-management)
 for the precise glyph, alignment and motion rules.
@@ -386,7 +386,14 @@ Operations shows progress, fresh confirmation prompts and supported recovery.
 Hover details are selected-only and disappear on Back/Close. Fit is decided for
 the whole list: if any detail cannot fit inline, the selected detail moves below
 the options or pagination, centered, unbolded, with one blank line above and below.
-Long detached text is ellipsized to one line. Space roots use this same rule.
+Long detached text stays on one line and scrolls. Space roots use this same rule.
+
+Text longer than its space scrolls as a marquee: it shows its start for about a
+second, then moves left one character every 160 ms around a loop of the text,
+two spaces and the text again, until the start is back in place, and repeats.
+Selectable items (menu rows, list entries, badges, previews) scroll only while
+selected and otherwise end in `…`; titles, notes, hints and info lines scroll on
+their own. Colours and weights stay those of each cell.
 Manage Sessions → Operations (or `o` while the status lane shows operations) opens
 the Operations popup over the current page: Running (operation spinner, kind,
 subject, live elapsed counter), Queued (in order, `queued #n`) and Recent (the last

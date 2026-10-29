@@ -245,6 +245,11 @@ pub struct Row {
     pub mode: RowMode,
     /// Width this row reserves for centering regardless of its own text.
     pub min_width: usize,
+    /// A shortened part of the label: (first cell, cells, full text). It shows
+    /// as a marquee of the full text while the row is selected.
+    pub overflow: Option<(usize, usize, String)>,
+    /// The full text of a shortened preview, shown as a marquee while selected.
+    pub preview_full: Option<String>,
 }
 /// A row's part in a right-side selection mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -309,6 +314,8 @@ impl Row {
             settings_value: false,
             info: None,
             mode: RowMode::Normal,
+            overflow: None,
+            preview_full: None,
         }
     }
     pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
@@ -438,6 +445,37 @@ impl Row {
         self.preview_gap = 1;
         self
     }
+    /// Label `text` shortened to `width` cells (ellipsized while unselected,
+    /// a marquee while selected).
+    pub fn overflowing(label: impl Into<String>, width: usize, enabled: bool) -> Self {
+        let full: String = label.into();
+        let mut row = Self::gate(ellipsize(&full, width), enabled);
+        row.shorten(0, width, &full);
+        row
+    }
+    /// Record that label cells `start..start + width` show `full` shortened.
+    pub fn shorten(&mut self, start: usize, width: usize, full: &str) {
+        if UnicodeWidthStr::width(full) > width {
+            self.overflow = Some((start, width, full.to_owned()));
+        }
+    }
+    /// Shorten the preview to `width` cells, keeping the full text for the marquee.
+    pub fn shorten_preview(&mut self, width: usize, short: impl Fn(&str, usize) -> String) {
+        if let Some(preview) = self.preview.take() {
+            let shortened = short(&preview, width);
+            if shortened != preview && self.preview_full.is_none() {
+                self.preview_full = Some(preview);
+            }
+            self.preview = Some(shortened);
+        }
+    }
+    /// The label with any shortened part restored to its full text.
+    pub fn full_label(&self) -> String {
+        match &self.overflow {
+            Some((start, width, full)) => splice_cells(&self.label, *start, *width, full),
+            None => self.label.clone(),
+        }
+    }
     /// Mark a choice row as grabbed by its picker.
     pub fn grabbed(mut self, grabbed: bool) -> Self {
         self.preview_grabbed = grabbed && self.preview_choice;
@@ -479,6 +517,8 @@ impl Row {
             settings_value: false,
             info: None,
             mode: RowMode::Normal,
+            overflow: None,
+            preview_full: None,
         }
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, selected: bool, back: bool) {
@@ -509,9 +549,16 @@ impl Row {
             if start >= x + 3 && y < canvas.height {
                 let mut row = self.clone();
                 row.status = None;
-                row.label = ellipsize(&row.label, start.saturating_sub(x + 3));
+                let room = start.saturating_sub(x + 3);
+                if UnicodeWidthStr::width(row.label.as_str()) > room {
+                    let full = self.full_label();
+                    row.label = ellipsize(&row.label, room);
+                    row.overflow = None;
+                    row.shorten(0, room, &full);
+                }
                 let mut left = Canvas::new(start - 1, 1);
                 left.popup_palette = canvas.popup_palette.clone();
+                left.clock = frame_time(canvas);
                 row.paint_with_preview(&mut left, x, 0, selected, back, show_preview);
                 for (col, cell) in left.cells.into_iter().enumerate() {
                     canvas.cells[y * canvas.width + col] = cell;
@@ -541,6 +588,20 @@ impl Row {
                 }
                 return;
             }
+        }
+        // Shortened text scrolls while its row is selected.
+        if selected && !back && (self.overflow.is_some() || self.preview_full.is_some()) {
+            let now = frame_time(canvas);
+            let mut row = self.clone();
+            if let Some((start, width, full)) = row.overflow.take() {
+                let frame = fit_selectable(&full, width, now, true);
+                row.label = splice_cells(&row.label, start, width, &frame);
+            }
+            if let (Some(full), Some(short)) = (row.preview_full.take(), &row.preview) {
+                let width = UnicodeWidthStr::width(short.as_str());
+                row.preview = Some(fit_selectable(&full, width, now, true));
+            }
+            return row.paint_with_preview(canvas, x, y, selected, back, show_preview);
         }
         if self.placeholder {
             canvas.accent_text(
@@ -873,7 +934,7 @@ pub fn paint_hint(canvas: &mut Canvas, x: usize, y: usize, text: &str) {
 }
 /// Center each hint within its own surface, retaining an opaque popup background.
 pub fn paint_centered_hint(canvas: &mut Canvas, left: usize, y: usize, width: usize, text: &str) {
-    let text = clip(text, width);
+    let text = fit_scrolling(text, width, frame_time(canvas));
     let used = UnicodeWidthStr::width(text.as_str());
     let x = left + width.saturating_sub(used) / 2;
     if y >= canvas.height || x + used > canvas.width {
@@ -897,9 +958,10 @@ pub fn paint_status(canvas: &mut Canvas, controls_start: usize, text: &str) {
     paint_status_colored(canvas, controls_start, text, false);
 }
 pub fn paint_status_colored(canvas: &mut Canvas, controls_start: usize, text: &str, accent: bool) {
-    let text = clip(
+    let text = fit_scrolling(
         &crate::messages::describe(text),
         canvas.width.saturating_sub(2),
+        frame_time(canvas),
     );
     let width = UnicodeWidthStr::width(text.as_str());
     let x = canvas.width.saturating_sub(width) / 2;
@@ -963,6 +1025,85 @@ pub fn ellipsize(text: &str, width: usize) -> String {
         return String::new();
     }
     format!("{}…", clip(text, width - 1))
+}
+/// Marquee: how long a cycle shows the text from its start before scrolling.
+pub const MARQUEE_PAUSE_MS: u64 = 1000;
+/// Marquee: how long each one-grapheme step to the left stays on screen.
+pub const MARQUEE_STEP_MS: u64 = 160;
+/// Marquee: what separates the end of the looping text from its next start.
+pub const MARQUEE_GAP: &str = "  ";
+/// Animation time (ms) at which the current selection began; selected items
+/// start their marquee cycle from here so they open on their first characters.
+static SELECTION_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Restart selected items' marquee cycle (input arrived at animation time `now`).
+pub fn restart_selection_marquee(now: u64) {
+    SELECTION_EPOCH.store(now, std::sync::atomic::Ordering::Relaxed);
+}
+/// Animation time (ms) of the frame being painted.
+pub fn frame_time(canvas: &Canvas) -> u64 {
+    canvas.theme.as_ref().map_or(canvas.clock, |t| t.now)
+}
+/// Text that overflows `width` cells, `elapsed` ms into its marquee loop. A
+/// cycle pauses on the start for [`MARQUEE_PAUSE_MS`], then moves one grapheme
+/// left every [`MARQUEE_STEP_MS`] around `text + MARQUEE_GAP + text …` until the
+/// start is back in place, and repeats. Frames are exactly `width` cells and
+/// never ellipsized; text that fits is returned as is.
+pub fn marquee(text: &str, width: usize, elapsed: u64) -> String {
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_owned();
+    }
+    let ring: Vec<&str> = text
+        .graphemes(true)
+        .chain(MARQUEE_GAP.graphemes(true))
+        .filter(|g| UnicodeWidthStr::width(*g) > 0)
+        .collect();
+    let period = MARQUEE_PAUSE_MS + MARQUEE_STEP_MS * (ring.len() as u64 - 1);
+    let t = elapsed % period;
+    let offset = if t < MARQUEE_PAUSE_MS {
+        0
+    } else {
+        ((t - MARQUEE_PAUSE_MS) / MARQUEE_STEP_MS) as usize + 1
+    };
+    let mut frame = String::new();
+    let mut used = 0;
+    for g in ring.iter().cycle().skip(offset) {
+        let w = UnicodeWidthStr::width(*g);
+        if used + w > width {
+            break;
+        }
+        frame.push_str(g);
+        used += w;
+    }
+    // A wide glyph that would straddle the right edge leaves a blank cell.
+    frame.push_str(&" ".repeat(width - used));
+    frame
+}
+/// A selectable item's text: the marquee while it is selected (its cycle starts
+/// with the selection), otherwise the static ellipsized form.
+pub fn fit_selectable(text: &str, width: usize, now: u64, selected: bool) -> String {
+    if selected {
+        let epoch = SELECTION_EPOCH.load(std::sync::atomic::Ordering::Relaxed);
+        marquee(text, width, now.saturating_sub(epoch))
+    } else {
+        ellipsize(text, width)
+    }
+}
+/// Non-selectable text (titles, headers, info lines): scrolls on its own.
+pub fn fit_scrolling(text: &str, width: usize, now: u64) -> String {
+    marquee(text, width, now)
+}
+/// Replace `width` cells of `text` starting at cell `start` with `replacement`.
+fn splice_cells(text: &str, start: usize, width: usize, replacement: &str) -> String {
+    let (mut before, mut after, mut col) = (String::new(), String::new(), 0);
+    for g in text.graphemes(true) {
+        if col < start {
+            before.push_str(g);
+        } else if col >= start + width {
+            after.push_str(g);
+        }
+        col += UnicodeWidthStr::width(g);
+    }
+    format!("{before}{replacement}{after}")
 }
 /// Keep the end of a long value (paths), marking hidden text with a leading `…`.
 pub fn ellipsize_start(text: &str, width: usize) -> String {
@@ -1184,11 +1325,9 @@ impl Options {
             };
             if y + 1 < controls_start && canvas.width > 3 {
                 let max = canvas.width.saturating_sub(row.preview_edge_padding * 2);
-                let text = if UnicodeWidthStr::width(preview) > max {
-                    ellipsize(preview, max)
-                } else {
-                    preview.to_owned()
-                };
+                // Below the list the selected row's note has the width to itself.
+                let full = row.preview_full.as_deref().unwrap_or(preview);
+                let text = fit_scrolling(full, max, frame_time(canvas));
                 self.preview_visible = true;
                 row.paint_preview(
                     canvas,
@@ -1217,9 +1356,10 @@ impl Options {
                 top + rows.len().saturating_sub(self.scroll).min(result.1) + 1
             };
             if y + 1 < controls_start && canvas.width > 3 {
-                let text = ellipsize(
+                let text = fit_scrolling(
                     info,
                     canvas.width.saturating_sub(row.preview_edge_padding * 2),
+                    frame_time(canvas),
                 );
                 canvas.widget_text(
                     canvas
@@ -1450,6 +1590,137 @@ impl Options {
 mod tests {
     use super::*;
 
+    /// One full marquee cycle of an overflowing text, frame by frame.
+    #[test]
+    fn marquee_pauses_scrolls_left_around_a_two_space_gap_and_pauses_again() {
+        let (pause, step) = (MARQUEE_PAUSE_MS, MARQUEE_STEP_MS);
+        assert_eq!(MARQUEE_GAP, "  ");
+        let frame = |t: u64| marquee("abcdefgh", 5, t);
+        // The opening pause shows the start, without an ellipsis.
+        for t in [0, pause / 2, pause - 1] {
+            assert_eq!(frame(t), "abcde", "pause at {t}");
+        }
+        // Then one grapheme left per step, all the way around the loop.
+        let steps = [
+            "bcdef", "cdefg", "defgh", "efgh ", "fgh  ", "gh  a", "h  ab", "  abc", " abcd",
+        ];
+        for (k, want) in steps.iter().enumerate() {
+            let t = pause + step * k as u64;
+            assert_eq!(frame(t), *want, "step {} at {t}", k + 1);
+            assert_eq!(frame(t + step - 1), *want, "held through step {}", k + 1);
+        }
+        // Exactly two blank cells separate the end from the next start.
+        assert!(frame(pause + step * 5).contains("h  a"));
+        assert!(!steps.iter().any(|f| f.contains("   ") || f.contains('…')));
+        // The start returns to its place and the next cycle pauses again.
+        let period = pause + step * steps.len() as u64;
+        for t in [period, period + pause - 1] {
+            assert_eq!(frame(t), "abcde", "second pause at {t}");
+        }
+        assert_eq!(frame(period + pause), "bcdef");
+        // Every frame fills its width; text that fits never moves.
+        assert!((0..period).all(|t| UnicodeWidthStr::width(frame(t).as_str()) == 5));
+        assert_eq!(marquee("short", 5, pause + step * 3), "short");
+        // Wide glyphs never straddle the edge: a blank cell takes their place.
+        assert_eq!(marquee("界界界", 5, 0), "界界 ");
+    }
+    #[test]
+    fn selectable_text_scrolls_only_while_selected() {
+        let t = MARQUEE_PAUSE_MS + MARQUEE_STEP_MS * 2;
+        for now in [0, t, 10_000] {
+            assert_eq!(fit_selectable("abcdefgh", 5, now, false), "abcd…");
+        }
+        assert_eq!(fit_selectable("abcdefgh", 5, 0, true), "abcde");
+        assert_eq!(fit_selectable("abcdefgh", 5, t, true), "defgh");
+        assert_eq!(fit_selectable("abc", 5, t, true), "abc");
+        // A menu row: the static ellipsized label until it is selected.
+        let row = Row::overflowing("abcdefghijklmnop", 8, true);
+        assert_eq!(row.label, "abcdefg…");
+        let line = |selected: bool| {
+            let mut canvas = Canvas::new(20, 1);
+            canvas.clock = t;
+            row.paint(&mut canvas, 0, 0, selected, false);
+            canvas.cells[2..10]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+        };
+        assert_eq!(line(false), "abcdefg…");
+        assert_eq!(line(true), "defghijk");
+    }
+    #[test]
+    fn titles_scroll_on_their_own() {
+        let palette = crate::dialog::Palette::default();
+        let title = |clock: u64| {
+            let mut canvas = Canvas::new(12, 4);
+            canvas.clock = clock;
+            crate::popup::Panel {
+                x: 0,
+                y: 0,
+                width: 12,
+                height: 4,
+            }
+            .frame(&mut canvas, "Account settings", &palette);
+            canvas.cells[1..11]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect::<String>()
+        };
+        assert_eq!(title(0), "Account se");
+        assert_eq!(title(MARQUEE_PAUSE_MS), "ccount set");
+        let period = MARQUEE_PAUSE_MS + MARQUEE_STEP_MS * 17;
+        assert_eq!(title(period - 1), " Account s");
+        assert_eq!(title(period), "Account se");
+        // Info text below a list scrolls the same way with nothing selected.
+        assert_eq!(fit_scrolling("abcdefgh", 5, MARQUEE_PAUSE_MS), "bcdef");
+    }
+    #[test]
+    fn scrolling_keeps_each_cell_style() {
+        // Account names take the hue at their cell and are bold while selected.
+        let row = Row::overflowing("a-very-long-account", 12, true).account();
+        let mut field = crate::render::Field::new(30, 4, 3);
+        for now in [0, 5000, 5000 + MARQUEE_PAUSE_MS + MARQUEE_STEP_MS * 4] {
+            let mut canvas = field.paint(now);
+            row.paint(&mut canvas, 0, 1, true, false);
+            let theme = canvas.theme.clone().unwrap();
+            let shown: String = canvas.cells[32..44]
+                .iter()
+                .map(|c| c.glyph.as_str())
+                .collect();
+            assert_eq!(
+                shown,
+                fit_selectable("a-very-long-account", 12, now, true),
+                "{now}"
+            );
+            for x in 2..14 {
+                let cell = &canvas.cells[30 + x];
+                let want = theme.accent(
+                    x,
+                    1,
+                    &crate::render::Accent {
+                        bold: true,
+                        ..crate::render::Accent::default()
+                    },
+                );
+                assert_eq!((cell.fg, cell.bold), (want.fg, want.bold), "{now} {x}");
+            }
+        }
+        // Plain rows keep their bold selected text and disabled strike while scrolling.
+        let disabled = Row::overflowing("abcdefghijklmnop", 8, false);
+        let mut canvas = Canvas::new(20, 1);
+        canvas.clock = MARQUEE_PAUSE_MS;
+        disabled.paint(&mut canvas, 0, 0, true, false);
+        assert!(canvas.cells[2..10].iter().all(|c| c.strike));
+        let enabled = Row::overflowing("abcdefghijklmnop", 8, true);
+        let mut canvas = Canvas::new(20, 1);
+        canvas.clock = MARQUEE_PAUSE_MS;
+        enabled.paint(&mut canvas, 0, 0, true, false);
+        assert!(
+            canvas.cells[2..10]
+                .iter()
+                .all(|c| c.bold && c.fg == SELECTED)
+        );
+    }
     #[test]
     fn grey_info_text_never_moves_or_widens_menu_items() {
         let long = "no usage limits are published for this provider, so there is nothing to set";

@@ -4,7 +4,6 @@ const DIRECTORY_HEIGHT_PERCENT: usize = 90;
 use crate::{
     dialog::Palette,
     render::{Canvas, Cell},
-    widgets::clip,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -53,7 +52,11 @@ impl Panel {
         canvas.text(
             self.x + 1,
             self.y,
-            &clip(title, self.width - 2),
+            &crate::widgets::fit_scrolling(
+                title,
+                self.width - 2,
+                crate::widgets::frame_time(canvas),
+            ),
             // HERDR draws popup titles in the border's own style, never bold.
             border,
             false,
@@ -263,7 +266,11 @@ pub fn paint_choices(
             local.text(
                 0,
                 0,
-                &clip("Resize to view; Esc cancels", local.width),
+                &crate::widgets::fit_scrolling(
+                    "Resize to view; Esc cancels",
+                    local.width,
+                    crate::widgets::frame_time(local),
+                ),
                 style,
                 false,
             );
@@ -317,7 +324,11 @@ pub fn paint_choices(
             local.text(
                 x,
                 y,
-                &clip(view.note, local.width.saturating_sub(x)),
+                &crate::widgets::fit_scrolling(
+                    view.note,
+                    local.width.saturating_sub(x),
+                    crate::widgets::frame_time(local),
+                ),
                 Cell {
                     fg: if view.note_accent {
                         palette.accent
@@ -371,6 +382,7 @@ pub fn paint_sized(
         panel.frame(canvas, title, palette);
         let mut local = Canvas::new(width - 4, height - 2);
         local.popup_palette = Some(palette.clone());
+        local.clock = crate::widgets::frame_time(canvas);
         content(&mut local);
         for row in 0..local.height {
             for col in 0..local.width {
