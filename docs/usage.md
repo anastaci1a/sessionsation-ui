@@ -186,16 +186,18 @@ use the darker bullet hue. Focus on any account name or usage/status also dims
 the top-option bullets, just like Close focus. Selecting a top option or Close dims all account names,
 bars and text statuses; normal deselected gray-white labels/percentages retain
 their brightness and are unbolded. Moving focus away restores the appropriate hue. Right from an account with available usage selects its bars; Enter/Space
-opens Limits directly. Left returns to the name. Cancel, close and save retain the
+opens Limits directly. Left returns to the name. Up/Down remember the column: moving onto
+single-column rows keeps the cursor there, and the next account row puts it back on
+the usage; Left onto Close resets it to the names. Cancel, close and save retain the
 same account and bar focus. Only usage focus selects its percentages. The focused bar keeps its normal colors
 and bolds its line characters; other bars darken without adding
 another selector. A white `◀`, separated by one space, follows the first usage
 value when it has focus.
 Bar glyphs are always bold, including their gray remainder and threshold marker;
 focus still changes their colors without changing label or percentage styling.
-Status-only accounts also accept Right. Their status and focused `◀` use the normal
-bullet hue; the focused status text is bold, and the triangle stays regular weight. While a usage/status item is focused on the right, other
-text statuses use the darker bullet hue, like the other dimmed usage bars. Enter/Space opens Enable for Disabled, Login for Login
+Status-only accounts also accept Right. Parenthetical statuses (`(disabled)`,
+`(usage unavailable)`, `(moving)`) use the usage bars' hue at every position and are
+bold only while the cursor is on them; the focused `◀` stays regular weight. Enter/Space opens Enable for Disabled, Login for Login
 required, Restore for Deregistered, or usage details otherwise. These dialogs retain
 the account and right-side focus when closed; mutations require confirmation.
 
@@ -253,6 +255,11 @@ Account actions begin with Details/Limits/Rename for every account, then group
 Login/Enable/Disable and Deregister/Restore/Delete with dot separators. Rename sets a
 backend display name (empty clears it) and is enabled only when the provider reports
 `account_rename`; display names replace short names in lists and session tags.
+Claude accounts on a revision-16 backend add a `Live steering` selector (On/Off)
+that reads `api account live-steering` and changes it with `--enable`/`--disable`
+through the usual operation dialog; the value is always the backend's reply. An
+operator `hold`/`refuse`, a symlinked `settings.json` or a failed read shows the row
+unavailable with its reason.
 Deregister/Restore and Delete are enabled only when the provider reports
 `account_removal`/`account_deletion`; a disabled row shows the backend reason when
 published. Delete confirmations show backend semantics text when present (for Claude
@@ -348,6 +355,10 @@ one scrolls left (pause, scroll, pause, loop) to reveal the rest. A session with
 pending or recently failed operation shows a badge after the account (`◜ moving to
 work` animates while active, `✗ move failed`); Right moves focus onto the badge,
 Enter opens that operation's progress or details over the list, and Left returns.
+A finished operation's dialog offers `Dismiss` before `Close`: it hides that badge
+for good (kept in `dismissed-operations.json` beside the preferences, pruned when
+the backend no longer lists the operation). Running operations cannot be
+dismissed, and a newer operation on the same session shows its badge again.
 The selected row's timer or state (`stale`) hangs right when no badge is shown.
 "Showing saved sessions; refreshing…" appears only on this list and only until
 fresh state arrives. Unavailable actions stay visible, greyed, with a short dim
@@ -443,10 +454,16 @@ account does not rewrite its limits.
 On full-screen menus, the Back arrow is beside the top visible option. Left selects and expands it only
 when the expanded label retains a left padding cell;
 Right returns to the option. On the main page its expanded label is **Close**.
-Settings rows show a dim value and `›` in one column. **Appearance** sets the
-star field (`‹ Off/Calm/Normal/Lively ›`) and brightness (`‹ Dim/Normal/Bright ›`),
-cycled with Left/Right and saved in `preferences.json`. **Default directories**
-chooses global or per-Space defaults (`‹ Global ›`) and holds the roots. Leave
+Settings submenu rows show the submenu's selected option in the darker grey, in one
+column three spaces after the longest name (all inline or, when one does not fit,
+none, with the selected one below the list). Selectors (`Starfield  › Normal`) show
+a `›` one space after the longest name, in the bullet hue (bold when hovered, darker
+while Back or another selector is focused); Right or Enter enters one, which shows
+the remaining directions (`↕ ↑ ↓`) pulsing between the two hue levels; Up/Down
+choose, Enter sets, Esc reverts. **Appearance** sets the star field
+(Off/Calm/Normal/Lively) and brightness (Dim/Normal/Bright), saved in
+`preferences.json`. **Default directories** chooses global or per-Space defaults and
+holds the roots; its values share one column. Leave
 unset clears that default and its pending creation plan.
 The session-directory picker retains its two top actions. Configuration uses short
 labels; path previews follow the shared hover-only, list-wide fit rule.

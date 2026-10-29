@@ -55,6 +55,7 @@ enum Purpose {
     Remove(String),
     Delete(String),
     DeleteAvailability(String),
+    LiveSteering(String),
     Limits(String),
     Mutation,
     LoginPoll(String),
@@ -118,6 +119,9 @@ pub struct Manager {
     /// Order before an unsaved move; present only while move mode is active.
     moving: Option<Vec<Account>>,
     pub usage_focus: bool,
+    /// Home column the cursor returns to on rows that have it (0 = names, 1 =
+    /// usage), kept while it crosses single-column rows.
+    home_column: usize,
     pub inventory_known: bool,
     pub sessions_known: bool,
     /// True while the session list comes from the on-disk cache or a stale snapshot:
@@ -125,6 +129,10 @@ pub struct Manager {
     pub cached_snapshot: bool,
     /// A finished full state result to persist (taken by the event loop).
     pub cache_out: Option<Value>,
+    /// Finished operations whose badges the user dismissed, by operation ID.
+    pub dismissed: std::collections::BTreeSet<String>,
+    /// Changed dismissals to persist (taken by the event loop).
+    pub dismissed_out: Option<Vec<String>>,
     /// False while the popup is not visible: background polling pauses.
     pub visible: bool,
     ticks_since_state: u32,
@@ -138,6 +146,12 @@ pub struct Manager {
     space_choices: Value,
     space_session: Value,
     deletion_previews: BTreeMap<String, Value>,
+    /// Last live-steering state read for each Claude account (`api account live-steering`).
+    steering: BTreeMap<String, Value>,
+    /// Why live steering cannot be changed for an account (failed read, symlinked settings).
+    steering_unavailable: BTreeMap<String, String>,
+    /// The Live steering selector is grabbed: the choice pending Enter (true = On).
+    steering_pick: Option<bool>,
     pub active_operation: Option<String>,
     foreground: Option<u64>,
     details_open: bool,
@@ -225,10 +239,13 @@ impl Default for Manager {
             account_scroll: 0,
             moving: None,
             usage_focus: false,
+            home_column: 0,
             inventory_known: false,
             sessions_known: false,
             cached_snapshot: false,
             cache_out: None,
+            dismissed: Default::default(),
+            dismissed_out: None,
             visible: true,
             ticks_since_state: 0,
             ticks_since_full: 0,
@@ -241,6 +258,9 @@ impl Default for Manager {
             space_choices: Value::Null,
             space_session: Value::Null,
             deletion_previews: BTreeMap::new(),
+            steering: BTreeMap::new(),
+            steering_unavailable: BTreeMap::new(),
+            steering_pick: None,
             active_operation: None,
             foreground: None,
             details_open: false,
@@ -532,6 +552,25 @@ fn launch_status(record: &Value) -> &str {
         phase => phase,
     }
 }
+/// A finished operation's dialog: Dismiss, then Close, which keeps the focus.
+/// Repeated polls leave a finished dialog and its focus alone.
+fn finish_operation(d: &mut Dialog) {
+    if d.buttons.iter().any(|b| b.label == "Dismiss") {
+        return;
+    }
+    d.finish();
+    d.buttons.insert(0, Row::yes("Dismiss"));
+    d.selected += 1;
+}
+const SYMLINKED: &str = "settings.json is a symlink";
+/// Short row reason for a live-steering failure.
+fn steering_reason(error: &str) -> String {
+    if error.starts_with("SETTINGS_IS_SYMLINK") {
+        SYMLINKED.into()
+    } else {
+        crate::messages::describe(error)
+    }
+}
 fn terminal(phase: &str) -> bool {
     matches!(
         phase,
@@ -758,6 +797,42 @@ impl Manager {
             row.with_reason(reason)
         }
     }
+    /// Live steering is offered for Claude accounts by a revision-16 backend.
+    fn live_steering_supported(&self, key: &str) -> bool {
+        self.provider_of(key) == "claude"
+            && self.capabilities["claude_input_delivery"]["peer_message"].is_object()
+    }
+    /// The account's live-steering state: Some(on) when it can be changed.
+    fn steering_state(&self, key: &str) -> Result<bool, String> {
+        if let Some(reason) = self.steering_unavailable.get(key) {
+            return Err(reason.clone());
+        }
+        let Some(v) = self.steering.get(key) else {
+            return Err("checking…".into());
+        };
+        match v["value"].as_str() {
+            None | Some("accept") => Ok(v["live_steering"] == true),
+            // An operator's own hold/refuse is never overwritten from here.
+            Some(other) => Err(format!("settings.json sets {other}")),
+        }
+    }
+    fn live_steering_row(&self, key: &str) -> Row {
+        match self.steering_state(key) {
+            Ok(on) => {
+                let on = self.steering_pick.unwrap_or(on);
+                let mut row = Row::yes("Live steering")
+                    .with_picker(
+                        if on { "On" } else { "Off" },
+                        crate::preferences::choice_arrow(&[true, false], on),
+                    )
+                    .grabbed(self.steering_pick.is_some());
+                row.info =
+                    Some("lets other sessions message this account's running sessions".into());
+                row
+            }
+            Err(reason) => Row::gate("Live steering", false).with_reason(reason),
+        }
+    }
     fn logout_account_row(&self, key: &str, removed: bool) -> Row {
         let provider = self.provider_of(key);
         let supported = self.provider_cap(&provider, "account_logout");
@@ -876,6 +951,11 @@ impl Manager {
             Page::Account(id) => Some(id.clone()),
             _ => None,
         }
+    }
+    /// Put the cursor in the remembered home column, clamped to the columns the
+    /// row has.
+    fn apply_home_column(&mut self) {
+        self.usage_focus = self.home_column > 0 && self.usage_selectable();
     }
     fn usage_selectable(&self) -> bool {
         self.page == Page::Home
@@ -1089,6 +1169,8 @@ impl Manager {
         self.page = page;
         self.popup_size = None;
         self.usage_focus = false;
+        self.home_column = 0;
+        self.steering_pick = None;
         self.options = Options::default();
         self.options.selected = self.rows().iter().position(|r| !r.separator).unwrap_or(0);
         self.note.clear();
@@ -1175,6 +1257,7 @@ impl Manager {
                 .map(|(index, _)| index)
                 .unwrap_or(0);
         }
+        self.home_column = usize::from(location.usage_focus);
         self.usage_focus = location.usage_focus && self.usage_selectable();
         true
     }
@@ -1239,6 +1322,9 @@ impl Manager {
                         !removed && self.provider_cap(&provider, "enrollment"),
                     ));
                 }
+                if self.live_steering_supported(key) {
+                    rows.extend([Row::separator(), self.live_steering_row(key)]);
+                }
                 rows.extend([
                     Row::separator(),
                     Row::gate(
@@ -1253,6 +1339,24 @@ impl Manager {
                     self.delete_account_row(key),
                 ]);
                 crate::widgets::align_reasons(&mut rows);
+                // The selector glyph one space after the longest name, as in Settings.
+                let longest = rows
+                    .iter()
+                    .map(|r| unicode_width::UnicodeWidthStr::width(r.label.as_str()))
+                    .max()
+                    .unwrap_or(0);
+                for row in rows.iter_mut().filter(|r| r.preview_arrows) {
+                    row.preview_column = Some(2 + longest + 1);
+                }
+                if self.steering_pick.is_some() {
+                    for row in &mut rows {
+                        row.mode = if row.preview_grabbed {
+                            crate::widgets::RowMode::Active
+                        } else {
+                            crate::widgets::RowMode::Other
+                        };
+                    }
+                }
                 rows
             }
             Page::Sessions => crate::session_list::rows_with_archives(
@@ -1587,6 +1691,18 @@ impl Manager {
     }
     fn refresh_with(&mut self, poll: bool) -> Vec<Intent> {
         let mut out = vec![];
+        if let Page::Account(key) = self.page.clone()
+            && self.live_steering_supported(&key)
+            && !self
+                .pending
+                .values()
+                .any(|p| matches!(p, Purpose::LiveSteering(_)))
+        {
+            out.extend(self.request(
+                strings(&["account", "live-steering", &key]),
+                Purpose::LiveSteering(key),
+            ));
+        }
         if let Page::Account(key) = self.page.clone()
             && self.provider_cap(&self.provider_of(&key), "account_deletion")
             && !self
@@ -2179,6 +2295,17 @@ impl Manager {
         if let Some(out) = self.move_key(key) {
             return out;
         }
+        if self.steering_pick.is_some() {
+            return self.steering_key(key.code);
+        }
+        if matches!(
+            key.code,
+            KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ')
+        ) && let Some((_, on)) = self.steering_selected()
+        {
+            self.steering_pick = Some(on);
+            return vec![];
+        }
         if key.code == KeyCode::Char('m') && self.can_start_move() {
             self.moving = Some(self.accounts.clone());
             return vec![];
@@ -2191,9 +2318,7 @@ impl Manager {
                 self.options
                     .boundary(&self.rows(), false, key.code == KeyCode::End);
                 self.badge_focus = false;
-                if !self.usage_selectable() {
-                    self.usage_focus = false;
-                }
+                self.apply_home_column();
                 vec![]
             }
             KeyCode::PageUp | KeyCode::PageDown => {
@@ -2207,9 +2332,7 @@ impl Manager {
                 self.options
                     .step_with_wrap(&self.rows(), false, key.code == KeyCode::Up, wrap);
                 self.badge_focus = false;
-                if !self.usage_selectable() {
-                    self.usage_focus = false;
-                }
+                self.apply_home_column();
                 vec![]
             }
             KeyCode::Left | KeyCode::Right if filter_row => {
@@ -2225,11 +2348,14 @@ impl Manager {
                 } else {
                     self.options.back = true;
                 }
+                // Back, or the name column: return on the left from now on.
+                self.home_column = 0;
                 vec![]
             }
             KeyCode::Right => {
                 if !self.options.back && self.usage_selectable() {
                     self.usage_focus = true;
+                    self.home_column = 1;
                 }
                 if !self.options.back && self.selected_badge().is_some() {
                     self.badge_focus = true;
@@ -2265,6 +2391,49 @@ impl Manager {
             }
             _ => vec![],
         }
+    }
+    /// Hide a finished operation's badge for good; running ones stay.
+    fn dismiss_operation(&mut self, key: &str) {
+        if self
+            .operations
+            .iter()
+            .any(|o| id(o) == key && terminal(o["phase"].as_str().unwrap_or("")))
+            && self.dismissed.insert(key.to_owned())
+        {
+            self.dismissed_out = Some(self.dismissed.iter().cloned().collect());
+            self.badge_focus = false;
+        }
+    }
+    /// The selected row is an available Live steering selector: its account and state.
+    fn steering_selected(&self) -> Option<(String, bool)> {
+        let Page::Account(key) = &self.page else {
+            return None;
+        };
+        if self.options.back || self.dialog.is_some() || !self.live_steering_supported(key) {
+            return None;
+        }
+        let on = self.steering_state(key).ok()?;
+        (self.rows().get(self.options.selected)?.label == "Live steering")
+            .then(|| (key.clone(), on))
+    }
+    /// Keys while Live steering is grabbed: Up/Down choose, Esc reverts, Enter sets.
+    /// The value shown afterwards is the state the backend reports.
+    fn steering_key(&mut self, code: KeyCode) -> Vec<Intent> {
+        match code {
+            KeyCode::Up | KeyCode::Down => self.steering_pick = Some(code == KeyCode::Up),
+            KeyCode::Esc => self.steering_pick = None,
+            KeyCode::Left | KeyCode::Enter | KeyCode::Char(' ') => {
+                if let Some(pick) = self.steering_pick.take()
+                    && let Some((key, on)) = self.steering_selected()
+                    && pick != on
+                {
+                    let flag = if pick { "--enable" } else { "--disable" };
+                    return self.mutate(strings(&["account", "live-steering", &key, flag]));
+                }
+            }
+            _ => {}
+        }
+        vec![]
     }
     /// The selected session row's operation badge, when it has one.
     fn selected_badge(&self) -> Option<crate::session_list::Badge> {
@@ -2302,6 +2471,8 @@ impl Manager {
                     let recent = o["created_at"].as_i64().is_none_or(|t| now - t < 86_400);
                     if !terminal(phase) {
                         Some((active_text(kind, o, &self.space_names), true, id(o)))
+                    } else if self.dismissed.contains(id(o)) {
+                        None
                     } else if phase == "failed" && recent {
                         Some((failed_text(kind), false, id(o)))
                     } else {
@@ -2344,16 +2515,14 @@ impl Manager {
         self.show(
             &kind_label(o["kind"].as_str().unwrap_or("operation")),
             Self::operation_body(&o, &badge.id),
-            &[if finished {
-                "Close"
-            } else {
-                "Continue in background"
-            }],
+            &["Continue in background"],
             Form::Operation(badge.id.clone()),
         );
         if let Some(d) = &mut self.dialog {
             d.dim_from = Some(d.body.len().saturating_sub(2));
-            if !finished {
+            if finished {
+                finish_operation(d);
+            } else {
                 d.busy = true;
             }
         }
@@ -2731,15 +2900,14 @@ impl Manager {
                         self.show(
                             &kind_label(o["kind"].as_str().unwrap_or("operation")),
                             Self::operation_body(&o, &key),
-                            &[if terminal(o["phase"].as_str().unwrap_or("")) {
-                                "Close"
-                            } else {
-                                "Continue in background"
-                            }],
+                            &["Continue in background"],
                             Form::Operation(key.clone()),
                         );
                         if let Some(d) = &mut self.dialog {
                             d.dim_from = Some(d.body.len().saturating_sub(2));
+                            if terminal(o["phase"].as_str().unwrap_or("")) {
+                                finish_operation(d);
+                            }
                         }
                     }
                     1 | 2 => self.confirm(
@@ -3080,6 +3248,18 @@ impl Manager {
                 &sequence.to_string(),
             ]));
         }
+        if let Form::Operation(key) = self.form.clone() {
+            if self
+                .dialog
+                .as_ref()
+                .and_then(|d| d.buttons.get(button))
+                .is_some_and(|b| b.label == "Dismiss")
+            {
+                self.dismiss_operation(&key);
+            }
+            self.dismiss();
+            return vec![];
+        }
         if let Form::AddProvider(providers) = self.form.clone() {
             self.dialog = None;
             self.form = Form::None;
@@ -3307,6 +3487,21 @@ impl Manager {
         let value = match result {
             Ok(v) => v,
             Err(e) => {
+                if let Purpose::LiveSteering(key) = &purpose {
+                    // A failed read is shown on the row, not as a page note.
+                    self.steering.remove(key);
+                    self.steering_unavailable
+                        .insert(key.clone(), steering_reason(&e));
+                    return vec![];
+                }
+                if let [a, b, key, ..] = &self.mutation[..]
+                    && a == "account"
+                    && b == "live-steering"
+                    && e.starts_with("SETTINGS_IS_SYMLINK")
+                {
+                    self.steering_unavailable
+                        .insert(key.clone(), steering_reason(&e));
+                }
                 if matches!(purpose, Purpose::State) {
                     for session in &mut self.sessions {
                         session["activity"] = json!("unknown");
@@ -3328,6 +3523,17 @@ impl Manager {
             Purpose::ActionCheck(..) | Purpose::LoginPoll(_) => unreachable!(),
             Purpose::DeleteAvailability(key) => {
                 self.deletion_previews.insert(key, value);
+            }
+            Purpose::LiveSteering(key) => {
+                // A symlinked settings file is only reported by a change attempt.
+                if self
+                    .steering_unavailable
+                    .get(&key)
+                    .is_some_and(|r| r != SYMLINKED)
+                {
+                    self.steering_unavailable.remove(&key);
+                }
+                self.steering.insert(key, value);
             }
             Purpose::Archives => {
                 self.archives = value.as_array().cloned().unwrap_or_default();
@@ -3482,6 +3688,13 @@ impl Manager {
                     .flatten()
                     .flatten();
                 self.operations = value.as_array().cloned().unwrap_or_default();
+                // Forget dismissals of operations the backend no longer lists.
+                let known = self.dismissed.len();
+                self.dismissed
+                    .retain(|k| self.operations.iter().any(|o| id(o) == k));
+                if self.dismissed.len() != known {
+                    self.dismissed_out = Some(self.dismissed.iter().cloned().collect());
+                }
                 self.retain_operation_focus(chosen);
                 let viewed = match &self.form {
                     Form::Operation(key) | Form::OperationApproval(key, _) => Some(key.clone()),
@@ -3517,7 +3730,7 @@ impl Manager {
                     d.dim_from = Some(d.body.len().saturating_sub(2));
                     d.title = kind_label(o["kind"].as_str().unwrap_or("operation"));
                     if terminal(o["phase"].as_str().unwrap_or("")) {
-                        d.finish();
+                        finish_operation(d);
                     }
                 }
                 if let Some(key) = &self.active_operation
@@ -3784,6 +3997,19 @@ impl Manager {
                 }
             }
             Purpose::Mutation => {
+                if value["setting"] == "crossSessionInbound"
+                    && let Some(key) = value["account_id"].as_str()
+                {
+                    // The state the backend reports after the change, never the request.
+                    self.steering_unavailable.remove(key);
+                    self.steering.insert(key.to_owned(), value.clone());
+                    if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
+                        self.dialog = None;
+                        self.form = Form::None;
+                        self.foreground = None;
+                    }
+                    return vec![];
+                }
                 self.note = "Operation acknowledged; refresh to see current state.".into();
                 if let Some(argv) = login_plan(&value["login"]["argv"]) {
                     if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
@@ -3845,7 +4071,7 @@ impl Manager {
                         if terminal(value["phase"].as_str().unwrap_or(""))
                             && let Some(d) = &mut self.dialog
                         {
-                            d.finish();
+                            finish_operation(d);
                         }
                     }
                     return self.refresh();
@@ -3925,6 +4151,8 @@ impl Manager {
         }
         let hints = if self.moving.is_some() {
             hint_lines(&["▲/▼: Move", "Enter: Save", "Esc: Cancel"], canvas.width)
+        } else if self.steering_pick.is_some() {
+            hint_lines(&["▲/▼: Choose", "Enter: Set", "Esc: Cancel"], canvas.width)
         } else if let Some(d) = &self.dialog {
             // The footer follows the top dialog.
             let info = d.compact
@@ -4055,6 +4283,7 @@ impl Manager {
                         }
                     }
                 }
+                self.options.right_mode = self.steering_pick.is_some();
                 self.options
                     .paint_menu(canvas, &rows, 3, bottom, menu_controls)
             };
@@ -5014,7 +5243,7 @@ mod tests {
         m.operations = vec![json!({"id":"done","phase":"complete"})];
         m.options.selected = 0;
         m.activate();
-        assert_eq!(m.dialog.as_ref().unwrap().buttons[0].label, "Close");
+        assert_eq!(m.dialog.as_ref().unwrap().buttons[1].label, "Close");
         m.form = Form::Operation("done".into());
         m.dialog = Some(Dialog::progress("Working"));
         let requests = m.request(strings(&["operations"]), Purpose::Operations);
@@ -5022,7 +5251,7 @@ mod tests {
             panic!()
         };
         m.response(token, Ok(json!([{"id":"done","phase":"complete"}])));
-        assert_eq!(m.dialog.as_ref().unwrap().buttons[0].label, "Close");
+        assert_eq!(m.dialog.as_ref().unwrap().buttons[1].label, "Close");
         assert_eq!(m.rows()[0].label, "Details");
     }
     #[test]
@@ -5086,7 +5315,7 @@ mod tests {
         poll(&mut m, "awaiting_background_approval", 7);
         poll(&mut m, "complete", 8);
         assert!(matches!(m.form, Form::Operation(_)));
-        assert_eq!(m.dialog.as_ref().unwrap().buttons[0].label, "Close");
+        assert_eq!(m.dialog.as_ref().unwrap().buttons[1].label, "Close");
     }
     #[test]
     fn operation_consent_retains_dedicated_details_return() {
@@ -5569,6 +5798,229 @@ mod tests {
             }
         }
     }
+    #[tokio::test]
+    async fn live_steering_reads_and_changes_through_the_backend_and_reports_failures() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let cli = tmp.path().join("sessionsation");
+        std::fs::write(&cli, r#"#!/usr/bin/env python3
+import json, pathlib, sys
+root=pathlib.Path(__file__).parent
+args=sys.argv[sys.argv.index('--api-version')+2:]
+def ok(result): print(json.dumps({'api_version':1,'ok':True,'result':result}))
+def fail(code):
+ print(json.dumps({'api_version':1,'ok':False,'error':{'code':code,'message':'fixture'}}),file=sys.stderr);sys.exit(1)
+if args[:2]!=['account','live-steering']:ok({});sys.exit(0)
+with (root/'calls').open('a') as f:f.write(' '.join(args[2:])+'\n')
+mode=(root/'mode').read_text()
+value=(root/'value').read_text() or None
+if mode=='unreadable':fail('SETTINGS_INVALID')
+if '--enable' in args or '--disable' in args:
+ if mode=='symlink':fail('SETTINGS_IS_SYMLINK')
+ if '--enable' in args:value='accept'
+ elif value=='accept':value=None
+ (root/'value').write_text(value or '')
+ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','setting':'crossSessionInbound','value':value,'settings_file':'/fixture/settings.json'})
+"#).unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let client = crate::client::Client {
+            binary: cli,
+            root: tmp.path().into(),
+            herdr: "unused".into(),
+            socket: "unused".into(),
+            session: "fixture".into(),
+        };
+        let set = |mode: &str, value: &str| {
+            std::fs::write(tmp.path().join("mode"), mode).unwrap();
+            std::fs::write(tmp.path().join("value"), value).unwrap();
+            std::fs::write(tmp.path().join("calls"), "").unwrap();
+        };
+        let calls = || std::fs::read_to_string(tmp.path().join("calls")).unwrap();
+        async fn drive(m: &mut Manager, client: &crate::client::Client, mut intents: Vec<Intent>) {
+            while let Some(intent) = intents.pop() {
+                if let Intent::Api(token, args) = intent {
+                    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+                    let result = client.api(&refs, None).await.map_err(|e| e.to_string());
+                    intents.extend(m.response(token, result));
+                }
+            }
+        }
+        let key = "claude:main";
+        let mut m = Manager::default();
+        let mut claude = account(1);
+        claude.id = key.into();
+        let mut codex = account(2);
+        codex.id = "codex:other".into();
+        m.inventory(vec![claude, codex]);
+        m.capabilities = json!({"claude_input_delivery":{"peer_message":{"opt_in":"account live-steering --enable"}}});
+        let row = |m: &Manager| m.rows().into_iter().find(|r| r.label == "Live steering");
+        let press = |m: &mut Manager, code| m.key(KeyEvent::new(code, KeyModifiers::NONE));
+        // Codex accounts never offer it.
+        m.go(Page::Account("codex:other".into()));
+        assert!(row(&m).is_none());
+        // Read: the backend state is shown, with its info text.
+        set("plain", "");
+        m.go(Page::Account(key.into()));
+        assert!(!row(&m).unwrap().preview_choice, "unknown until read");
+        let intents = m.refresh();
+        drive(&mut m, &client, intents).await;
+        assert_eq!(calls(), "claude:main\n");
+        let r = row(&m).unwrap();
+        assert_eq!(r.preview.as_deref(), Some("↑ Off"));
+        assert!(r.info.as_deref().unwrap().contains("message this account"));
+        m.options.selected = m
+            .rows()
+            .iter()
+            .position(|r| r.label == "Live steering")
+            .unwrap();
+        // Enable: grab, choose On, set. The value is what the backend returns.
+        press(&mut m, KeyCode::Right);
+        assert!(row(&m).unwrap().preview_grabbed);
+        press(&mut m, KeyCode::Up);
+        assert_eq!(row(&m).unwrap().preview.as_deref(), Some("↓ On"));
+        let intents = press(&mut m, KeyCode::Enter);
+        assert!(m.dialog.is_some(), "the usual operation progress");
+        drive(&mut m, &client, intents).await;
+        assert_eq!(calls(), "claude:main\nclaude:main --enable\n");
+        assert!(m.dialog.is_none());
+        assert_eq!(row(&m).unwrap().preview.as_deref(), Some("↓ On"));
+        assert!(!row(&m).unwrap().preview_grabbed);
+        // Disable.
+        press(&mut m, KeyCode::Right);
+        press(&mut m, KeyCode::Down);
+        let intents = press(&mut m, KeyCode::Enter);
+        drive(&mut m, &client, intents).await;
+        assert!(calls().ends_with("claude:main --disable\n"));
+        assert_eq!(row(&m).unwrap().preview.as_deref(), Some("↑ Off"));
+        // Esc reverts without a command; an unchanged choice sends nothing.
+        set("plain", "");
+        press(&mut m, KeyCode::Right);
+        press(&mut m, KeyCode::Up);
+        assert!(press(&mut m, KeyCode::Esc).is_empty());
+        press(&mut m, KeyCode::Right);
+        assert!(press(&mut m, KeyCode::Enter).is_empty());
+        assert_eq!(calls(), "");
+        // Error path: a symlinked settings file is refused and shown as unavailable,
+        // also after the next read.
+        set("symlink", "");
+        press(&mut m, KeyCode::Right);
+        press(&mut m, KeyCode::Up);
+        let intents = press(&mut m, KeyCode::Enter);
+        drive(&mut m, &client, intents).await;
+        assert!(m.dialog.is_none());
+        assert!(m.note.starts_with("SETTINGS_IS_SYMLINK"), "{}", m.note);
+        let r = row(&m).unwrap();
+        assert!(!r.enabled);
+        assert_eq!(r.preview.as_deref(), Some("· settings.json is a symlink"));
+        let intents = m.refresh();
+        drive(&mut m, &client, intents).await;
+        assert_eq!(
+            row(&m).unwrap().preview.as_deref(),
+            Some("· settings.json is a symlink")
+        );
+        // An operator's hold or refuse is shown honestly and cannot be changed here.
+        for held in ["hold", "refuse"] {
+            let mut m = Manager::default();
+            m.inventory(vec![account(1)]);
+            m.accounts[0].id = key.into();
+            m.capabilities = json!({"claude_input_delivery":{"peer_message":{}}});
+            m.go(Page::Account(key.into()));
+            set("plain", held);
+            let intents = m.refresh();
+            drive(&mut m, &client, intents).await;
+            let r = row(&m).unwrap();
+            assert!(!r.enabled);
+            assert_eq!(r.preview, Some(format!("· settings.json sets {held}")));
+            m.options.selected = m
+                .rows()
+                .iter()
+                .position(|r| r.label == "Live steering")
+                .unwrap();
+            press(&mut m, KeyCode::Right);
+            assert!(m.steering_pick.is_none());
+        }
+        // A failed read is shown on the row, not assumed off.
+        set("unreadable", "");
+        m.steering_unavailable.clear();
+        let intents = m.refresh();
+        drive(&mut m, &client, intents).await;
+        let r = row(&m).unwrap();
+        assert!(!r.enabled && r.preview.as_deref().is_some_and(|p| p.starts_with("· ")));
+    }
+    #[test]
+    fn home_right_column_survives_single_column_rows() {
+        let mut m = setup();
+        let key = |m: &mut Manager, code| m.key(KeyEvent::new(code, KeyModifiers::NONE));
+        m.options.selected = 5;
+        key(&mut m, KeyCode::Right);
+        assert!(m.usage_focus);
+        // Up through the single-column rows: the cursor sits on their only column.
+        while m.options.selected > 0 {
+            key(&mut m, KeyCode::Up);
+            if !m.usage_selectable() {
+                assert!(!m.usage_focus, "row {}", m.options.selected);
+            }
+        }
+        // Back down onto the account rows: the right column again.
+        while m.options.selected < 5 {
+            key(&mut m, KeyCode::Down);
+        }
+        assert!(m.usage_focus);
+        key(&mut m, KeyCode::Down);
+        assert_eq!(m.options.selected, 6);
+        assert!(m.usage_focus);
+    }
+    #[test]
+    fn home_close_arrow_resets_the_column_to_the_left() {
+        let mut m = setup();
+        let key = |m: &mut Manager, code| m.key(KeyEvent::new(code, KeyModifiers::NONE));
+        m.options.selected = 5;
+        key(&mut m, KeyCode::Right);
+        assert!(m.usage_focus);
+        key(&mut m, KeyCode::Left);
+        assert!(!m.usage_focus && !m.options.back);
+        key(&mut m, KeyCode::Left);
+        assert!(m.options.back, "on Close");
+        key(&mut m, KeyCode::Right);
+        assert!(!m.options.back);
+        assert!(!m.usage_focus, "back on the left option");
+        for code in [KeyCode::Up, KeyCode::Down, KeyCode::Down] {
+            key(&mut m, code);
+        }
+        assert!(m.usage_selectable() && !m.usage_focus);
+        // Left onto Close straight from a single-column row resets it too.
+        m.options.selected = 5;
+        key(&mut m, KeyCode::Right);
+        while m.usage_selectable() {
+            key(&mut m, KeyCode::Up);
+        }
+        key(&mut m, KeyCode::Left);
+        assert!(m.options.back);
+        key(&mut m, KeyCode::Right);
+        while m.options.selected < 5 {
+            key(&mut m, KeyCode::Down);
+        }
+        assert!(!m.usage_focus);
+    }
+    #[test]
+    fn home_column_clamps_on_rows_with_fewer_columns() {
+        let mut m = setup();
+        let key = |m: &mut Manager, code| m.key(KeyEvent::new(code, KeyModifiers::NONE));
+        m.options.selected = 5;
+        key(&mut m, KeyCode::Right);
+        // Right on a single-column row neither leaves it nor forgets the column.
+        key(&mut m, KeyCode::Up);
+        let single = m.options.selected;
+        assert!(!m.usage_selectable() && !m.usage_focus);
+        key(&mut m, KeyCode::Right);
+        assert_eq!(m.options.selected, single);
+        assert!(!m.usage_focus && !m.options.back);
+        assert_eq!(m.home_column, 1, "the right column is still preferred");
+        while m.options.selected < 5 {
+            key(&mut m, KeyCode::Down);
+        }
+        assert!(m.usage_focus);
+    }
     #[test]
     fn home_usage_focus_limits_returns_to_same_selection() {
         let mut m = setup();
@@ -5812,6 +6264,97 @@ mod tests {
         m.operations.truncate(1);
         m.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         assert!(!m.badge_focus);
+    }
+    #[test]
+    fn finished_operation_badges_can_be_dismissed_and_stay_dismissed() {
+        let fresh = || {
+            let mut m = setup();
+            m.sessions_known = true;
+            m.sessions = vec![
+                json!({"id":"s1","name":"busy","account_id":"codex:account1","availability":"running","activity":"idle","capabilities":{}}),
+                json!({"id":"s2","name":"other","account_id":"codex:account1","availability":"saved","capabilities":{}}),
+            ];
+            m.operations = vec![
+                json!({"id":"op1","kind":"move_space","session_id":"s1","phase":"dispatching","created_at":90}),
+                json!({"id":"op2","kind":"move_space","session_id":"s2","phase":"failed","created_at":95,"detail":"gone"}),
+            ];
+            m.go(Page::Sessions);
+            m
+        };
+        let press = |m: &mut Manager, code| m.key(KeyEvent::new(code, KeyModifiers::NONE));
+        let open = |m: &mut Manager, session: usize| {
+            m.dialog = None;
+            m.form = Form::None;
+            m.badge_focus = false;
+            m.options.back = false;
+            m.options.selected = crate::session_list::session_row(&m.sessions, session);
+            press(m, KeyCode::Right);
+            assert!(m.badge_focus);
+            press(m, KeyCode::Enter);
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .buttons
+                .iter()
+                .map(|b| b.label.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut m = fresh();
+        // Running: no Dismiss. Finished: Dismiss, then Close, with Close focused.
+        assert_eq!(open(&mut m, 0), ["Continue in background"]);
+        assert_eq!(open(&mut m, 1), ["Dismiss", "Close"]);
+        assert_eq!(m.dialog.as_ref().unwrap().selected, 1);
+        m.paint_at(&mut Canvas::new(100, 30), 29, 100);
+        // Dismiss hides the badge and returns to the session row.
+        press(&mut m, KeyCode::Up);
+        press(&mut m, KeyCode::Enter);
+        assert!(m.dialog.is_none());
+        assert_eq!(m.page, Page::Sessions);
+        assert_eq!(
+            m.options.selected,
+            crate::session_list::session_row(&m.sessions, 1)
+        );
+        assert!(!m.badge_focus);
+        assert!(!m.badges().contains_key("s2"));
+        assert!(m.badges().contains_key("s1"));
+        let mut c = Canvas::new(100, 30);
+        m.paint_at(&mut c, 29, 100);
+        assert!(!screen_text(&c).contains("move failed"));
+        // Persisted next to the preferences and restored after a restart.
+        let saved = m.dismissed_out.take().unwrap();
+        assert_eq!(saved, ["op2"]);
+        let t = tempfile::tempdir().unwrap();
+        let path = t.path().join("dismissed-operations.json");
+        crate::state_cache::save_dismissed(&path, std::path::Path::new("/r"), &saved).unwrap();
+        let mut reloaded = fresh();
+        reloaded.dismissed = crate::state_cache::load_dismissed(&path, std::path::Path::new("/r"))
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert!(!reloaded.badges().contains_key("s2"));
+        assert!(
+            crate::state_cache::load_dismissed(&path, std::path::Path::new("/other")).is_none()
+        );
+        // A new operation on the same session shows its badge again.
+        reloaded.operations.push(
+            json!({"id":"op3","kind":"move_space","session_id":"s2","phase":"failed","created_at":99}),
+        );
+        assert_eq!(reloaded.badges()["s2"].id, "op3");
+        // Operations the backend no longer lists are pruned.
+        let sent = reloaded.refresh();
+        let token = sent
+            .iter()
+            .find_map(|i| match i {
+                Intent::Api(token, args) if args[0] == "operations" => Some(*token),
+                _ => None,
+            })
+            .unwrap();
+        reloaded.response(
+            token,
+            Ok(json!([{"id":"op3","kind":"move_space","session_id":"s2","phase":"failed","created_at":99}])),
+        );
+        assert!(reloaded.dismissed.is_empty());
+        assert_eq!(reloaded.dismissed_out.take().unwrap(), Vec::<String>::new());
     }
     #[test]
     fn operation_ids_stay_out_of_the_list_and_details_are_titled_by_kind() {

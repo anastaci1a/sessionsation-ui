@@ -195,8 +195,11 @@ pub struct Row {
     pub preview_grabbed: bool,
     /// Leading label characters drawn in the bright text colour (typed prefix).
     pub highlight: usize,
-    /// Lighter grey for a plain preview while its row is hovered or focused.
-    pub preview_focus_fg: Option<[u8; 3]>,
+    /// A settings submenu row whose preview shows that submenu's selected option.
+    pub settings_value: bool,
+    /// Grey info text after a picker value: inline when it fits, otherwise shown
+    /// below the list while its row is selected. Never counts toward centering.
+    pub info: Option<String>,
     /// Right-side selection mode (grabbed selector or focused badge): how this row
     /// is styled while the mode is active.
     pub mode: RowMode,
@@ -260,7 +263,8 @@ impl Row {
             preview_arrows: false,
             preview_grabbed: false,
             highlight: 0,
-            preview_focus_fg: None,
+            settings_value: false,
+            info: None,
             mode: RowMode::Normal,
         }
     }
@@ -358,6 +362,15 @@ impl Row {
                 <= width.saturating_sub(self.preview_edge_padding))
         .then_some(start)
     }
+    /// Where the info text starts: three spaces after the preview, when it fits.
+    pub fn info_position(&self, width: usize, x: usize) -> Option<usize> {
+        let info = self.info.as_deref()?;
+        let start = self.preview_position(width, x)?
+            + UnicodeWidthStr::width(self.preview.as_deref().unwrap_or(""))
+            + 3;
+        (start + UnicodeWidthStr::width(info) <= width.saturating_sub(self.preview_edge_padding))
+            .then_some(start)
+    }
     /// Nonselectable group label drawn after the standard bullet (`• Today`).
     pub fn heading(label: impl Into<String>) -> Self {
         let mut row = Self::separator();
@@ -401,8 +414,7 @@ impl Row {
             && !self.right_preview
             && !self.preview_choice
             && self.preview.is_some()
-            && (self.preview_focus_fg.is_some()
-                || self.preview.as_deref().is_some_and(|p| p.starts_with("· ")))
+            && (self.settings_value || self.preview.as_deref().is_some_and(|p| p.starts_with("· ")))
     }
     pub fn separator() -> Self {
         Self {
@@ -429,7 +441,8 @@ impl Row {
             preview_arrows: false,
             preview_grabbed: false,
             highlight: 0,
-            preview_focus_fg: None,
+            settings_value: false,
+            info: None,
             mode: RowMode::Normal,
         }
     }
@@ -633,9 +646,24 @@ impl Row {
             && (!self.preview_selected_only || (selected && !back))
             && let Some(start) = self.preview_position(canvas.width, x)
         {
-            self.paint_preview(canvas, start, y, preview, selected && !back, grabbed);
+            self.paint_preview(canvas, start, y, preview, selected && !back, back, grabbed);
+            if let Some(info) = self.info.as_deref()
+                && let Some(at) = self.info_position(canvas.width, x)
+            {
+                canvas.widget_text(
+                    at,
+                    y,
+                    info,
+                    Cell {
+                        fg: MUTED,
+                        ..Cell::default()
+                    },
+                    false,
+                );
+            }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn paint_preview(
         &self,
         canvas: &mut Canvas,
@@ -643,26 +671,73 @@ impl Row {
         y: usize,
         preview: &str,
         selected: bool,
+        back: bool,
         grabbed: bool,
     ) {
-        if self.preview_choice && self.mode == RowMode::Other {
-            // Another selector is grabbed: no arrows, value in the darker grey.
-            let inner = if self.preview_arrows {
-                preview.split_once(' ').map_or(preview, |(_, v)| v)
+        if self.preview_choice && self.preview_arrows {
+            let (glyph, inner) = preview.split_once(' ').unwrap_or((preview, ""));
+            // One blank cell on each side of the glyph, never a star.
+            for gap in [x.saturating_sub(1), x + UnicodeWidthStr::width(glyph)] {
+                canvas.widget_text(gap, y, " ", Cell::default(), false);
+            }
+            if grabbed {
+                // Inside the selector: the directions left, bold, pulsing between
+                // the selected-bullet accent and its dim level.
+                canvas.widget_text(
+                    x,
+                    y,
+                    glyph,
+                    Cell {
+                        fg: canvas
+                            .theme
+                            .as_ref()
+                            .map_or(SECONDARY, |theme| theme.accent_pulse(x, y)),
+                        bold: true,
+                        ..Cell::default()
+                    },
+                    false,
+                );
             } else {
-                preview.trim_start_matches("‹ ").trim_end_matches(" ›")
-            };
-            let offset = if self.preview_arrows {
-                preview
-                    .split_once(' ')
-                    .map_or(0, |(g, _)| UnicodeWidthStr::width(g) + 1)
-            } else {
-                2
-            };
+                // Outside it: the chevron that enters it, dim while Back or
+                // another selector holds the focus, bold while hovered.
+                let dim = back || self.mode == RowMode::Other;
+                canvas.accent_text(
+                    x,
+                    y,
+                    "›",
+                    Accent {
+                        brightness: if dim { 600 } else { 1000 },
+                        bold: selected && !dim,
+                        flash: false,
+                        ..Accent::default()
+                    },
+                );
+            }
             canvas.widget_text(
-                x + offset,
+                x + 1 + UnicodeWidthStr::width(glyph),
                 y,
                 inner,
+                Cell {
+                    fg: if self.mode == RowMode::Other {
+                        MUTED
+                    } else if selected || grabbed {
+                        SELECTED
+                    } else {
+                        SECONDARY
+                    },
+                    bold: grabbed,
+                    ..Cell::default()
+                },
+                false,
+            );
+            return;
+        }
+        if self.preview_choice && self.mode == RowMode::Other {
+            // Another selector is grabbed: no arrows, value in the darker grey.
+            canvas.widget_text(
+                x + 2,
+                y,
+                preview.trim_start_matches("‹ ").trim_end_matches(" ›"),
                 Cell {
                     fg: MUTED,
                     ..Cell::default()
@@ -684,39 +759,6 @@ impl Row {
                 bold: grabbed,
                 ..Cell::default()
             };
-            if self.preview_arrows {
-                let (glyph, inner) = preview.split_once(' ').unwrap_or((preview, ""));
-                // Grabbed: bold pulse. Focused: static lighter grey. Else: dim grey.
-                let arrow = if grabbed {
-                    Cell {
-                        fg: canvas
-                            .theme
-                            .as_ref()
-                            .map_or(SECONDARY, |theme| theme.arrow_pulse()),
-                        bold: true,
-                        ..Cell::default()
-                    }
-                } else {
-                    Cell {
-                        fg: if selected { SECONDARY } else { MUTED },
-                        bold: false,
-                        ..Cell::default()
-                    }
-                };
-                canvas.widget_text(x, y, glyph, arrow, false);
-                canvas.widget_text(
-                    x + 1 + UnicodeWidthStr::width(glyph),
-                    y,
-                    inner,
-                    Cell {
-                        fg: if selected { SELECTED } else { SECONDARY },
-                        bold: grabbed,
-                        ..Cell::default()
-                    },
-                    false,
-                );
-                return;
-            }
             let inner = preview
                 .trim_start_matches("‹ ")
                 .trim_end_matches(" ›")
@@ -765,10 +807,7 @@ impl Row {
                 y,
                 preview,
                 Cell {
-                    fg: match self.preview_focus_fg {
-                        Some(light) if selected && self.mode != RowMode::Other => light,
-                        _ => self.preview_fg,
-                    },
+                    fg: self.preview_fg,
                     ..Cell::default()
                 },
                 false,
@@ -1105,9 +1144,16 @@ impl Options {
     }
     pub fn previews_detached(width: usize, rows: &[Row]) -> bool {
         Self::reasons_detached(width, rows)
+            || Self::info_detached(width, rows)
             || Self::preview_groups(width, rows)
                 .iter()
                 .any(|detached| *detached)
+    }
+    /// Some info text does not fit beside its picker.
+    fn info_detached(width: usize, rows: &[Row]) -> bool {
+        let left = Self::left(width, rows);
+        rows.iter()
+            .any(|r| r.info.is_some() && r.info_position(width, left).is_none())
     }
     fn preview_group_detached(width: usize, rows: &[Row], group: u8) -> bool {
         Self::preview_groups(width, rows)[group as usize]
@@ -1175,6 +1221,39 @@ impl Options {
                     y,
                     &text,
                     true,
+                    false,
+                    false,
+                );
+            }
+        }
+        // Info text that does not fit beside its picker: below the list while selected.
+        if !self.back
+            && result.1 > 0
+            && let Some(row) = rows.get(self.selected)
+            && let Some(info) = row.info.as_deref()
+            && row.info_position(canvas.width, result.0).is_none()
+        {
+            let y = if rows.len() > result.1 {
+                bottom + 2
+            } else {
+                top + rows.len().saturating_sub(self.scroll).min(result.1) + 1
+            };
+            if y + 1 < controls_start && canvas.width > 3 {
+                let text = ellipsize(
+                    info,
+                    canvas.width.saturating_sub(row.preview_edge_padding * 2),
+                );
+                canvas.widget_text(
+                    canvas
+                        .width
+                        .saturating_sub(UnicodeWidthStr::width(text.as_str()))
+                        / 2,
+                    y,
+                    &text,
+                    Cell {
+                        fg: MUTED,
+                        ..Cell::default()
+                    },
                     false,
                 );
             }

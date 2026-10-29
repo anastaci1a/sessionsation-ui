@@ -317,12 +317,30 @@ impl Theme {
             ..Cell::default()
         }
     }
-    /// Selected picker arrow: a sinusoidal pulse between the light grey and
+    /// Glowing spinner icon: a sinusoidal pulse between the light grey and
     /// white, once per [`ARROW_PULSE_MS`], interpolated in RGB.
     pub fn arrow_pulse(&self) -> [u8; 3] {
+        mix(crate::widgets::SECONDARY, [255; 3], self.pulse())
+    }
+    /// Grabbed picker arrow: a sinusoidal pulse between the selected-bullet
+    /// accent and its dim level at (x, y), once per [`ARROW_PULSE_MS`].
+    pub fn accent_pulse(&self, x: usize, y: usize) -> [u8; 3] {
+        let level = |brightness| {
+            self.accent(
+                x,
+                y,
+                &Accent {
+                    brightness,
+                    ..Accent::default()
+                },
+            )
+            .fg
+        };
+        mix(level(1000), level(600), self.pulse())
+    }
+    fn pulse(&self) -> i64 {
         let phase = (self.now % ARROW_PULSE_MS) as f64 / ARROW_PULSE_MS as f64;
-        let p = ((1.0 - (phase * std::f64::consts::TAU).cos()) / 2.0 * 1000.0).round() as i64;
-        mix(crate::widgets::SECONDARY, [255; 3], p)
+        ((1.0 - (phase * std::f64::consts::TAU).cos()) / 2.0 * 1000.0).round() as i64
     }
     pub fn bar(&self, secondary: bool) -> [u8; 3] {
         let p = if self.now < 4000 {
@@ -525,14 +543,11 @@ impl Field {
             self.brightness_scale = brightness;
         }
     }
+    /// Record this frame's text cells. Text only covers stars on the canvas;
+    /// the stars themselves persist and show again once the text is gone.
     pub fn apply_masks(&mut self, canvas: &Canvas) {
         self.baseline_blocked.clone_from(&canvas.baseline_blocked);
         self.foreground.clone_from(&canvas.foreground);
-        for (i, blocked) in self.baseline_blocked.iter().enumerate() {
-            if *blocked && self.stars[i].take().is_some() {
-                self.debts.push(i);
-            }
-        }
     }
     fn rotate(&mut self, cycle: u64) -> i64 {
         if cycle + 1 == self.hue_cycle {
@@ -758,9 +773,10 @@ mod tests {
     /// blocked on that output and held keys for 200-800 ms. The model link below
     /// drains 250 kB/s; paced frames must never queue a key change behind it.
     #[test]
-    fn selected_picker_arrow_pulses_between_light_grey_and_white_and_is_bold() {
+    fn grabbed_picker_arrow_pulses_between_the_two_accent_levels_and_is_bold() {
         let mut field = Field::new(40, 5, 7);
-        let mut seen = std::collections::BTreeSet::new();
+        let (mut light_seen, mut dark_seen, mut seen) =
+            (false, false, std::collections::BTreeSet::new());
         for now in (0..ARROW_PULSE_MS * 2).step_by(25) {
             let mut c = field.paint(now);
             let mut row = crate::widgets::Row::yes("Setting")
@@ -769,19 +785,32 @@ mod tests {
             row.preview_selected_only = false;
             let mut options = crate::widgets::Options::default();
             options.paint_menu(&mut c, &[row], 1, 4, 4);
-            let cell = c.cells.iter().find(|c| c.glyph == "↕").unwrap();
+            let i = c.cells.iter().position(|c| c.glyph == "↕").unwrap();
+            let (x, y, cell) = (i % 40, i / 40, &c.cells[i]);
+            let level = |brightness| {
+                let theme = c.theme.as_ref().unwrap();
+                theme
+                    .accent(
+                        x,
+                        y,
+                        &Accent {
+                            brightness,
+                            ..Accent::default()
+                        },
+                    )
+                    .fg
+            };
+            let (light, dark) = (level(1000), level(600));
             assert!(cell.bold, "now={now}");
-            assert!(
-                cell.fg.iter().all(|v| (188..=255).contains(v)) && cell.fg[0] == cell.fg[2],
-                "now={now} {:?}",
-                cell.fg
-            );
-            seen.insert(cell.fg[0]);
+            for ch in 0..3 {
+                let (lo, hi) = (light[ch].min(dark[ch]), light[ch].max(dark[ch]));
+                assert!((lo..=hi).contains(&cell.fg[ch]), "now={now} {:?}", cell.fg);
+            }
+            light_seen |= cell.fg == light;
+            dark_seen |= cell.fg == dark;
+            seen.insert(cell.fg);
         }
-        assert!(
-            seen.contains(&188) && seen.contains(&255) && seen.len() > 10,
-            "{seen:?}"
-        );
+        assert!(light_seen && dark_seen && seen.len() > 10, "{seen:?}");
     }
     #[test]
     fn star_sweep_is_paced_so_a_slow_link_never_queues_key_changes() {

@@ -597,6 +597,12 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     if let Some(sessions) = sessionsation_ui::state_cache::load(&cache_path, &cache_root) {
         app.manager.show_cached(&sessions);
     }
+    let dismissed_path = pref.with_file_name("dismissed-operations.json");
+    if let Some(operations) =
+        sessionsation_ui::state_cache::load_dismissed(&dismissed_path, &cache_root)
+    {
+        app.manager.dismissed = operations.into_iter().collect();
+    }
     let accounts_cache_path = pref.with_file_name("accounts-cache.json");
     let loaded = Instant::now();
     if let Some(accounts) =
@@ -703,6 +709,12 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           Message::Focused(result)=>{match result { Ok(())=>{app.prefs.last_account=app.draft.account.clone();next.push(Effect::Save);},Err(e)=>{app.error=format!("Session is running; tab focus failed: {e}. Esc closes.");}}app.dirty=true;},
           Message::Saved(result)=>{if let Err(e)=result{app.error=format!("Preferences were not saved: {e}");if !app.success{app.page=Page::Config;}app.dirty=true;}else if app.success && !app.launch_background {app.exit=true;}},
          }}
+        }
+        if let Some(operations) = app.manager.dismissed_out.take() {
+            let (path, root) = (dismissed_path.clone(), cache_root.clone());
+            tokio::task::spawn_blocking(move || {
+                let _ = sessionsation_ui::state_cache::save_dismissed(&path, &root, &operations);
+            });
         }
         if traced {
             sessionsation_ui::trace::event(

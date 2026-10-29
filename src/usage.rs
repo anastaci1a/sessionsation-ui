@@ -259,16 +259,7 @@ impl Usage {
         if self.status_only() {
             let sx = self.status_x(x, bar);
             let label = self.status_label();
-            canvas.accent_text(
-                sx,
-                y,
-                &label,
-                Accent {
-                    bold: false,
-                    flash: false,
-                    ..Accent::default()
-                },
-            );
+            self.paint_status(canvas, x, y, bar, true);
             canvas.accent_text(
                 sx + UnicodeWidthStr::width(label.as_str()),
                 y,
@@ -309,7 +300,7 @@ impl Usage {
         digits: usize,
     ) {
         if self.status_only() {
-            self.paint_status(canvas, x, y, bar, 600);
+            self.paint_status(canvas, x, y, bar, false);
             return;
         }
         self.paint_selected(canvas, x, y, bar, digits, false);
@@ -344,14 +335,16 @@ impl Usage {
             }
         }
     }
-    fn paint_status(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, brightness: i64) {
+    /// A parenthetical status takes the usage bars' hue level; bold only while
+    /// the cursor is on it.
+    fn paint_status(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, bold: bool) {
         canvas.accent_text(
             self.status_x(x, bar),
             y,
             &self.status_label(),
             Accent {
-                brightness,
-                bold: false,
+                brightness: BAR_LEVEL,
+                bold,
                 flash: false,
                 ..Accent::default()
             },
@@ -367,7 +360,7 @@ impl Usage {
         selected: bool,
     ) {
         if self.status_only() {
-            self.paint_status(canvas, x, y, bar, if selected { 1000 } else { 600 });
+            self.paint_status(canvas, x, y, bar, false);
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
@@ -415,7 +408,7 @@ impl Usage {
                         y + row,
                         glyph,
                         Accent {
-                            brightness: 1000,
+                            brightness: BAR_LEVEL,
                             bold: true,
                             flash: false,
                             ..Accent::default()
@@ -505,6 +498,8 @@ pub fn provider_symbol(provider: &str) -> &'static str {
         _ => "⏣",
     }
 }
+/// Hue level of the usage bars, shared by parenthetical statuses.
+const BAR_LEVEL: i64 = 1000;
 /// Smallest bar the home list shrinks to on narrow screens.
 const MIN_BAR: usize = 6;
 const MAX_BAR: usize = 24;
@@ -706,8 +701,8 @@ impl AccountsLayout {
                     y,
                     "(moving)",
                     Accent {
-                        brightness: if active && usage_focus { 1000 } else { 600 },
-                        bold: false,
+                        brightness: BAR_LEVEL,
+                        bold: active && usage_focus,
                         ..Accent::default()
                     },
                 );
@@ -776,17 +771,15 @@ mod tests {
                     assert_eq!(c.cells[cell], expected.cells[cell]);
                     let usage = Usage::account(a);
                     if usage.status_only() {
-                        let brightness = if active && usage_focus { 1000 } else { 600 };
                         usage.paint_status(
                             &mut expected,
                             layout.bars,
                             y,
                             layout.bar_width,
-                            brightness,
+                            active && usage_focus,
                         );
                         let sx = usage.status_x(layout.bars, layout.bar_width);
                         for x in sx..sx + UnicodeWidthStr::width(usage.status_label().as_str()) {
-                            expected.cells[y * 100 + x].bold = false;
                             assert_eq!(c.cells[y * 100 + x], expected.cells[y * 100 + x]);
                         }
                     }
@@ -817,35 +810,64 @@ mod tests {
         }
     }
     #[test]
-    fn parenthetical_status_is_dim_until_cursor_is_on_the_option_and_never_bold() {
+    fn parenthetical_status_takes_the_bar_hue_and_is_bold_only_with_the_cursor_on_it() {
         let mut a = account();
         a.id = "codex:personal".into();
         a.details.insert("enabled".into(), json!(false));
         let usage = Usage::account(&a);
         assert!(usage.status_only());
-        let layout = AccountsLayout::fit(&[a.clone()], 100);
+        let mut bars = account();
+        bars.id = "codex:bars".into();
+        let layout = AccountsLayout::fit(&[a.clone(), bars.clone()], 100);
         let base = crate::render::Field::new(100, 10, 1967).paint(4200);
         let sx = usage.status_x(layout.bars, layout.bar_width);
         let len = UnicodeWidthStr::width(usage.status_label().as_str());
-        let colour = |brightness| {
+        // The usage bars' own colour, sampled at each cell.
+        let bar = |x: usize, y: usize| {
             let mut c = base.clone();
-            usage.paint_status(&mut c, layout.bars, 3, layout.bar_width, brightness);
-            c.cells[3 * 100 + sx].fg
+            Usage::account(&bars).paint(&mut c, x, y, layout.bar_width, layout.digits);
+            c.cells[y * 100 + x].fg
         };
-        assert_ne!(colour(600), colour(1000));
-        // (selected, back, usage_focus, expect selected colour)
-        for (selected, back, focus, bright) in [
+        // (selected, back, usage_focus, cursor on the parenthetical)
+        for (selected, back, focus, on) in [
             (Some(0), false, false, false),
             (Some(0), false, true, true),
+            (Some(1), false, false, false),
+            (Some(1), false, true, false),
             (None, false, false, false),
             (Some(0), true, true, false),
         ] {
             let mut c = base.clone();
-            layout.paint(&mut c, &[a.clone()], 3, 10, 0, selected, back, focus, None);
+            layout.paint(
+                &mut c,
+                &[a.clone(), bars.clone()],
+                3,
+                10,
+                0,
+                selected,
+                back,
+                focus,
+                None,
+            );
             for x in sx..sx + len {
                 let cell = &c.cells[3 * 100 + x];
-                assert!(!cell.bold, "{selected:?} {back} {focus}");
-                assert_eq!(cell.fg, colour(if bright { 1000 } else { 600 }));
+                assert_eq!(cell.bold, on, "{selected:?} {back} {focus}");
+                assert_eq!(cell.fg, bar(x, 3), "{selected:?} {back} {focus} x={x}");
+            }
+        }
+        // `(moving)` follows the same rule.
+        for (focus, on) in [(false, false), (true, true)] {
+            let mut c = base.clone();
+            let accounts = [bars.clone()];
+            layout.paint(&mut c, &accounts, 3, 10, 0, Some(0), false, focus, Some(0));
+            let line: String = c.cells[300..400].iter().map(|c| c.glyph.as_str()).collect();
+            let mx = line
+                .find("(moving)")
+                .map(|b| line[..b].chars().count())
+                .unwrap();
+            for x in mx..mx + "(moving)".len() {
+                assert_eq!(c.cells[300 + x].bold, on, "moving focus={focus}");
+                assert_eq!(c.cells[300 + x].fg, bar(x, 3), "moving x={x}");
             }
         }
     }
@@ -920,7 +942,7 @@ mod tests {
                 },
             );
             assert_eq!(expected.cells[120 + end + 1], c.cells[120 + end + 1]);
-            assert!(!c.cells[120 + sx].bold);
+            assert!(c.cells[120 + sx].bold);
         }
     }
     #[test]
