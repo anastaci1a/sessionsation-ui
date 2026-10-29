@@ -173,7 +173,11 @@ longer text grows right). Enter opens the account's own action page. With the ba
 `account_reorder`, `m` picks up the focused account (marked `⇅`, `(moving)`),
 Up/Down move it, Enter saves with `account reorder <provider:name> --position <i>`
 (zero-based) and Esc restores the previous order; the footer shows `m: Move` only
-while an account is focused.
+while an account is focused. While moving, the moving row's accent elements (cursor,
+icon, name, bars, statuses) pulse between the selected and dim accent levels with the
+grabbed picker arrow's period; every other account looks as it does with the cursor
+on the menu options above. Saving is silent; a failed save restores the backend's
+order and shows the error.
 Entering a page from its parent always starts at the first selectable row; Back/Esc
 restores the parent's previous selection and scroll. Refreshed lists retain focus by
 stable identity. Close on Home detaches the viewer without stopping agents; Esc
@@ -319,6 +323,13 @@ Hover details are selected-only and disappear on Back/Close. Fit is decided for
 the whole list: if any detail cannot fit inline, the selected detail moves below
 the options or pagination, centered, unbolded, with one blank line above and below.
 Long detached text is ellipsized to one line. Space roots use this same rule.
+Manage Sessions → Operations (or `o` while the status lane shows operations) opens
+the Operations popup over the current page: Running (operation spinner, kind,
+subject, live elapsed counter), Queued (in order, `queued #n`) and Recent (the last
+five finished or failed, newest first), then All operations (the full list below)
+and Close. It updates live and keeps the selected item. A queued item offers Cancel
+and Close; a recent one Dismiss and Close; a running one its progress dialog.
+Esc/Left return to the opener at its remembered row.
 Operations has a filter row (`Show  ‹ All ›`, cycled with Left/Right: All, In
 progress, Failed, Completed) above day groups (`• Today`, `• Yesterday`, `• Mon Oct 26`;
 undated legacy records last). Each row shows relative creation time, the subject
@@ -353,19 +364,41 @@ account (`liq-glass-lead  ⠙  ⏣ gate1`). Name width scales with the popup (ab
 30% of its width, 12–40 cells); unselected long names end in `…`, and the selected
 one scrolls left (pause, scroll, pause, loop) to reveal the rest. A session with a
 pending or recently failed operation shows a badge after the account (`◜ moving to
-work` animates while active, `✗ move failed`); Right moves focus onto the badge,
+work` animates while active, `✗ move failed`), and a queued one `◌ restart queued`; Right moves focus onto the badge,
 Enter opens that operation's progress or details over the list, and Left returns.
 A finished operation's dialog offers `Dismiss` before `Close`: it hides that badge
 for good (kept in `dismissed-operations.json` beside the preferences, pruned when
 the backend no longer lists the operation). Running operations cannot be
 dismissed, and a newer operation on the same session shows its badge again.
-The selected row's timer or state (`stale`) hangs right when no badge is shown.
+The selected row's account name and static provider icon are bold at the selected
+accent level (other rows use the dim level; an animated icon keeps its own styling);
+with focus on the badge they return to the dim level, unbolded. Without a badge, the
+selected row's live counter (`(1:01)`, the shared counter format) or state (`stale`)
+follows one space after that row's own content and is shown only when it fits whole.
+The counter uses `active_since`; when that is null it uses the attachment process
+start (`attachment.process_start`) only after checking it against this host's
+`/proc`, otherwise no counter is shown.
 "Showing saved sessions; refreshing…" appears only on this list and only until
 fresh state arrives. Unavailable actions stay visible, greyed, with a short dim
 reason aligned in one column (`End session  · not supported for Claude Code`).
 
 Errors and status notices use a centered bottom line, separated from controls by
-one blank line. Menus reserve the status lane before calculating scroll capacity.
+one blank line. Without a notice, management pages use that lane for live operation
+counts (`◜ 2 running · 1 queued`, zero parts omitted, hidden when idle and when it
+does not fit); names stay in the Operations popup and badges, and text a dialog
+already shows is not repeated there.
+
+Operations are queued in the UI because the backend refuses a second operation on a
+reserved conversation and has no queue. Requests on different sessions or accounts
+run concurrently, up to three at once; requests on the same session or account run
+one at a time in order (a New session queues on its account, Resume on its session).
+A lifecycle action on a session with a running operation is offered as `queues after
+current`. The queue is kept in `operation-queue.json` beside the preferences, scoped
+to the backend root, and a detached `queue-worker` started by the popup dispatches
+it, so closing the popup neither drops nor repeats work. Each entry is marked
+running before its single attempt; an unconfirmed outcome becomes a failed entry and
+is never retried. Generation checks stay in force: a queued action whose session
+changed meanwhile fails with "choose the action again". Menus reserve the status lane before calculating scroll capacity.
 A failed preview/mutation closes its waiting dialog and shows the error there,
 without an automatic retry.
 

@@ -622,8 +622,8 @@ impl AccountsLayout {
         usage_focus: bool,
         moving: Option<usize>,
     ) {
-        let depressed = back || selected.is_none_or(|i| i >= accounts.len());
-        let name_focus = !depressed && !usage_focus;
+        let cursor_off = back || selected.is_none_or(|i| i >= accounts.len());
+        let name_focus = !cursor_off && !usage_focus;
         let mut y = top;
         for (index, account) in accounts.iter().enumerate().skip(first) {
             let mut usage = Usage::account(account);
@@ -633,6 +633,11 @@ impl AccountsLayout {
                 break;
             }
             let active = selected == Some(index) && !back;
+            let moving_row = moving == Some(index);
+            // While an account is moved, every other account looks exactly as it
+            // does with the cursor on the menu options above the accounts.
+            let depressed = cursor_off || moving.is_some() && !moving_row;
+            let before = moving_row.then(|| canvas.cells.clone());
             if active && !usage_focus {
                 canvas.accent_text(self.left, y, "▷", Accent::default());
             }
@@ -645,7 +650,6 @@ impl AccountsLayout {
                 bold: active && !usage_focus,
                 ..Accent::default()
             };
-            let moving_row = moving == Some(index);
             canvas.accent_text(
                 self.symbol_x,
                 y,
@@ -707,15 +711,142 @@ impl AccountsLayout {
                     },
                 );
             }
+            if let (Some(before), Some(theme)) = (before, canvas.theme.clone()) {
+                pulse_row(canvas, &before, &theme, y, y + height);
+            }
             y += height + 1;
         }
     }
 }
 
+/// The moving account's hue-shifted cells (bullet or icon, name, bars, statuses)
+/// pulse between the selected-bullet level and its dim level, sampled per cell,
+/// with the grabbed picker arrow's oscillation. Grey text is left alone.
+fn pulse_row(
+    canvas: &mut Canvas,
+    before: &[Cell],
+    theme: &crate::render::Theme,
+    top: usize,
+    bottom: usize,
+) {
+    for y in top..bottom.min(canvas.height) {
+        for x in 0..canvas.width {
+            let i = y * canvas.width + x;
+            let cell = &canvas.cells[i];
+            let [r, g, b] = cell.fg;
+            if *cell == before[i] || cell.glyph.trim().is_empty() || (r == g && g == b) {
+                continue;
+            }
+            canvas.cells[i].fg = theme.accent_pulse(x, y);
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn moving_row_pulses_between_accent_levels_and_others_look_inactive() {
+        let mut accounts = vec![account(), account(), account()];
+        accounts[0].id = "codex:one".into();
+        accounts[1].id = "codex:two".into();
+        accounts[2].id = "codex:three".into();
+        let layout = AccountsLayout::fit(&accounts, 100);
+        let mut field = crate::render::Field::new(100, 40, 1967);
+        let rows = |c: &Canvas, y: usize| c.cells[y * 100..(y + 1) * 100].to_vec();
+        let row_y = |i: usize| 3 + i * (layout.row_height(&Usage::account(&accounts[i])) + 1);
+        for time in [5000, 5250, 5500, 5750] {
+            let base = field.paint(time);
+            let theme = base.theme.clone().unwrap();
+            let mut moving = base.clone();
+            layout.paint(
+                &mut moving,
+                &accounts,
+                3,
+                40,
+                0,
+                Some(1),
+                false,
+                false,
+                Some(1),
+            );
+            // Other accounts: exactly the state with the cursor above the accounts.
+            let mut above = base.clone();
+            layout.paint(&mut above, &accounts, 3, 40, 0, None, false, false, None);
+            for i in [0, 2] {
+                assert_eq!(rows(&moving, row_y(i)), rows(&above, row_y(i)), "row {i}");
+            }
+            // The moving row: every hue-shifted cell is the pulse at its cell, and
+            // stays within [dark, light] on every channel.
+            let y = row_y(1);
+            let mut pulsed = 0;
+            for (x, cell) in rows(&moving, y).iter().enumerate() {
+                let [r, g, b] = cell.fg;
+                if cell.glyph.trim().is_empty()
+                    || (r == g && g == b)
+                    || cell == &base.cells[y * 100 + x]
+                {
+                    continue;
+                }
+                assert_eq!(cell.fg, theme.accent_pulse(x, y), "x={x} t={time}");
+                let level = |brightness| {
+                    theme
+                        .accent(
+                            x,
+                            y,
+                            &Accent {
+                                brightness,
+                                ..Accent::default()
+                            },
+                        )
+                        .fg
+                };
+                let (light, dark) = (level(1000), level(600));
+                for c in 0..3 {
+                    let (lo, hi) = (light[c].min(dark[c]), light[c].max(dark[c]));
+                    assert!((lo..=hi).contains(&cell.fg[c]), "x={x} t={time}");
+                }
+                pulsed += 1;
+            }
+            assert!(pulsed > 10, "icon, name and bars pulse ({pulsed})");
+        }
+        // Leaving move mode restores the normal selected styling.
+        let base = field.paint(5250);
+        let mut normal = base.clone();
+        layout.paint(
+            &mut normal,
+            &accounts,
+            3,
+            40,
+            0,
+            Some(1),
+            false,
+            false,
+            None,
+        );
+        let mut plain = base.clone();
+        layout.paint(&mut plain, &accounts, 3, 40, 0, Some(1), false, false, None);
+        assert_eq!(normal.cells, plain.cells);
+        let theme = base.theme.clone().unwrap();
+        let y = row_y(1);
+        let name = rows(&normal, y)
+            .iter()
+            .position(|c| c.glyph == "t")
+            .unwrap();
+        assert_eq!(
+            normal.cells[y * 100 + name].fg,
+            theme
+                .accent(
+                    name,
+                    y,
+                    &Accent {
+                        bold: true,
+                        ..Accent::default()
+                    }
+                )
+                .fg
+        );
+    }
     #[test]
     fn home_focus_dims_only_other_names_or_statuses_and_restores_on_exit() {
         let mut accounts = vec![account(), account(), account()];
@@ -855,7 +986,7 @@ mod tests {
                 assert_eq!(cell.fg, bar(x, 3), "{selected:?} {back} {focus} x={x}");
             }
         }
-        // `(moving)` follows the same rule.
+        // `(moving)` keeps the bold rule and pulses with the rest of its row.
         for (focus, on) in [(false, false), (true, true)] {
             let mut c = base.clone();
             let accounts = [bars.clone()];
@@ -867,7 +998,11 @@ mod tests {
                 .unwrap();
             for x in mx..mx + "(moving)".len() {
                 assert_eq!(c.cells[300 + x].bold, on, "moving focus={focus}");
-                assert_eq!(c.cells[300 + x].fg, bar(x, 3), "moving x={x}");
+                assert_eq!(
+                    c.cells[300 + x].fg,
+                    c.theme.as_ref().unwrap().accent_pulse(x, 3),
+                    "moving x={x}"
+                );
             }
         }
     }

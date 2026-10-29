@@ -52,6 +52,13 @@ Its reusable components are:
   Timeouts, malformed replies and failed receipt reads remain uncertain and never
   trigger automatic resubmission. Both launch APIs journal admission before
   starting a worker or terminal.
+- `op_queue`: UI operation queue (`operation-queue.json` beside preferences, root
+  scoped, flock-serialized atomic writes). Pure scheduling: FIFO per session/account
+  resource, at most `MAX_CONCURRENT` (3) running including backend operations it did
+  not start. A detached single-instance `queue-worker` settles running entries
+  against `api operations`/launch receipts and dispatches ready ones, marking each
+  running before its one attempt; uncertain outcomes become failed entries, never
+  retries. The popup registers work it starts directly so the cap and order hold.
 - `launch_intent`: private UI submission evidence beside preferences in
   `launch-intents/`, scoped to the configured backend root. A click persists its
   original UUID/request before spawning a detached one-shot public-CLI submitter.

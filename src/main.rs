@@ -46,6 +46,18 @@ enum Command {
         #[arg(long)]
         binary: PathBuf,
     },
+    /// Dispatches the UI operation queue after the popup closes; one per queue.
+    #[command(hide = true)]
+    QueueWorker {
+        #[arg(long)]
+        queue: PathBuf,
+        #[arg(long)]
+        journal: PathBuf,
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        binary: PathBuf,
+    },
     Popup,
     Open,
     /// Runs a backend login plan handed over by the manager in a plugin pane.
@@ -110,6 +122,7 @@ enum Message {
     Focused(Result<(), String>),
     Saved(Result<(), String>),
     Created(sessionsation_ui::app::Target, PathBuf, Result<(), String>),
+    Queue(Vec<sessionsation_ui::op_queue::Entry>),
 }
 impl Message {
     fn kind(&self) -> &'static str {
@@ -129,6 +142,7 @@ impl Message {
             Message::Focused(_) => "focused",
             Message::Saved(_) => "saved",
             Message::Created(..) => "created",
+            Message::Queue(_) => "queue",
         }
     }
 }
@@ -137,6 +151,7 @@ struct Effects {
     sender: mpsc::Sender<Message>,
     preferences: PathBuf,
     launch_journal: sessionsation_ui::launch_intent::Journal,
+    queue: sessionsation_ui::op_queue::Store,
     initial: PathBuf,
     env: Arc<BTreeMap<String, String>>,
     directory_limit: Arc<Semaphore>,
@@ -315,6 +330,34 @@ impl Effects {
             }
         }
     }
+    /// Apply queue edits durably, start the worker when work is pending, and
+    /// send the saved queue back to the view.
+    fn write_queue(&self, commands: Vec<sessionsation_ui::op_queue::Command>) {
+        let store = self.queue.clone();
+        let tx = self.sender.clone();
+        let (client, journal) = (self.client.clone(), self.launch_journal.clone());
+        tokio::task::spawn_blocking(move || {
+            let Ok((_, entries)) = store.update(|entries| {
+                for command in commands {
+                    sessionsation_ui::op_queue::apply(entries, command);
+                }
+            }) else {
+                return;
+            };
+            spawn_queue_worker(&store, &client, &journal, &entries);
+            let _ = tx.blocking_send(Message::Queue(entries));
+        });
+    }
+    fn read_queue(&self) {
+        let store = self.queue.clone();
+        let tx = self.sender.clone();
+        let (client, journal) = (self.client.clone(), self.launch_journal.clone());
+        tokio::task::spawn_blocking(move || {
+            let entries = store.load();
+            spawn_queue_worker(&store, &client, &journal, &entries);
+            let _ = tx.blocking_send(Message::Queue(entries));
+        });
+    }
     fn inventory(&self) {
         let tx = self.sender.clone();
         let client = self.client.clone();
@@ -362,6 +405,54 @@ impl Effects {
                 .map(|_| ())
                 .map_err(|e| e.to_string());
             let _ = tx.send(Message::Focused(result)).await;
+        });
+    }
+}
+/// Start a detached queue worker when entries wait or run. It exits at once if
+/// another worker owns the queue, and outlives this popup otherwise.
+fn spawn_queue_worker(
+    store: &sessionsation_ui::op_queue::Store,
+    client: &Client,
+    journal: &sessionsation_ui::launch_intent::Journal,
+    entries: &[sessionsation_ui::op_queue::Entry],
+) {
+    use std::os::unix::process::CommandExt;
+    if !entries
+        .iter()
+        .any(|e| e.state != sessionsation_ui::op_queue::State::Failed)
+        || store.worker_running()
+    {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut command = std::process::Command::new(exe);
+    command
+        .arg("queue-worker")
+        .arg("--queue")
+        .arg(&store.path)
+        .arg("--journal")
+        .arg(&journal.directory)
+        .arg("--root")
+        .arg(&store.root)
+        .arg("--binary")
+        .arg(&client.binary)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setsid only detaches the child from this terminal session.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    if let Ok(mut child) = command.spawn() {
+        std::thread::spawn(move || {
+            let _ = child.wait();
         });
     }
 }
@@ -458,6 +549,33 @@ async fn run() -> Result<()> {
                 root,
             }
             .submit(&client, &request_id)
+            .await
+        }
+        Command::QueueWorker {
+            queue,
+            journal,
+            root,
+            binary,
+        } => {
+            let client = Client {
+                binary,
+                root: root.clone(),
+                herdr: PathBuf::new(),
+                socket: PathBuf::new(),
+                session: String::new(),
+            };
+            let store = sessionsation_ui::op_queue::Store {
+                path: queue,
+                root: root.clone(),
+            };
+            sessionsation_ui::op_queue::worker::run(
+                store,
+                client,
+                sessionsation_ui::launch_intent::Journal {
+                    directory: journal,
+                    root,
+                },
+            )
             .await
         }
         Command::Popup => popup(args.preferences).await,
@@ -603,6 +721,8 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
     {
         app.manager.dismissed = operations.into_iter().collect();
     }
+    let queue_store = sessionsation_ui::op_queue::Store::beside(&pref, &client.root);
+    app.manager.set_queue(queue_store.load());
     let accounts_cache_path = pref.with_file_name("accounts-cache.json");
     let loaded = Instant::now();
     if let Some(accounts) =
@@ -621,6 +741,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
             directory: pref.with_file_name("launch-intents"),
             root: client.root.clone(),
         },
+        queue: queue_store.clone(),
         preferences: pref,
         initial,
         env: Arc::new(std::env::vars().collect()),
@@ -678,7 +799,7 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
          _=term_signal.recv()=>{arm="term";woke=Instant::now();app.exit=true;},_ = hup_signal.recv()=>{arm="hup";woke=Instant::now();app.exit=true;},
          _=frame.tick()=>{arm="frame";woke=Instant::now();next=app.flush_navigation();app.dirty=true;},
          _=refresh.tick(),if !inventory_pending=>{arm="refresh";woke=Instant::now();inventory_pending=true;effects.inventory();let intents=app.manager.refresh_poll();next=app.management(intents);},
-         _=session_refresh.tick()=>{arm="session_refresh";woke=Instant::now();next=app.refresh_live();},
+         _=session_refresh.tick()=>{arm="session_refresh";woke=Instant::now();next=app.refresh_live();effects.read_queue();},
          _=receipt.tick(),if app.request.is_some()&&!app.success&&receipt_pending.as_deref()!=app.request.as_ref().and_then(|r|r["request_id"].as_str())=>{arm="receipt";woke=Instant::now();receipt_pending=app.request.as_ref().and_then(|r|r["request_id"].as_str()).map(str::to_owned);effects.receipt(app.request.as_ref().unwrap()["request_id"].as_str().unwrap().into(),app.request.as_ref().unwrap()["session_id"].is_string());},
          message=rx.recv()=>{woke=Instant::now();arm=message.as_ref().map_or("closed",Message::kind);match message.context("Input channel closed")? {
          Message::Background(color)=>{app.terminal_background=color;app.dirty=true;},
@@ -694,21 +815,27 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           Message::SessionFocused(result)=>{match result{Ok(())=>app.exit=true,Err(e)=>{let intents=app.manager.failure(e);next=app.management(intents);}}app.dirty=true;},
           Message::Theme(result)=>{match result{Ok((palette,note))=>{app.manager.palette=palette;if let Some(note)=note{app.manager.note=note;}},Err(e)=>app.manager.note=e}app.dirty=true;},
           Message::Created(target,path,result)=>{next=app.directories_created(target,path,result);},
+          Message::Queue(entries)=>{app.manager.set_queue(entries);app.dirty=true;},
           Message::Directory(revision,result)=>app.listing(revision,result),
           Message::Validation(revision,result)=>app.validation(revision,result),
           Message::Receipt(id,result)=>{if receipt_pending.as_deref()==Some(id.as_str()){receipt_pending=None;}
           if app.request.as_ref().and_then(|r|r["request_id"].as_str()) != Some(id.as_str()) { continue; } match result {
-           Ok(r)=>match r["phase"].as_str().unwrap_or("uncertain") {
+           Ok(r)=>{if matches!(r["phase"].as_str(),Some("running"|"failed"|"cancelled"|"recovered"|"complete")){app.manager.launch_settled(&id);}match r["phase"].as_str().unwrap_or("uncertain") {
             "running" if !app.success=>{app.success=true;if app.launch_background {app.manager.note="Session is running; open Operations or Focus tab when ready.".into();app.prefs.last_account=app.request.as_ref().and_then(|r|r["account_id"].as_str().map(str::to_owned));next.push(Effect::Save);}else if let Some(tab)=r["tab_id"].as_str(){effects.focus(tab.into());}else{app.error="Session running; receipt has no tab identity. Esc closes.".into();}},
             "failed" | "cancelled" | "recovered"=>{app.request=None;app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",&sessionsation_ui::messages::describe(r["detail"].as_str().unwrap_or("inspect launch status")));},
             phase=>{app.error=format!("{}: {}",sessionsation_ui::messages::phase(phase),r["detail"].as_str().unwrap_or("waiting for confirmed handoff"));},
-           },Err(e)=>{app.error=sessionsation_ui::app::reconciliation_message(&e);}
+           }},Err(e)=>{app.error=sessionsation_ui::app::reconciliation_message(&e);}
           }
-          if !app.success {app.manager.note=app.error.clone();}
+          // The launch dialog already says this; the bottom lane does not repeat it.
+          if !(app.success||app.launch_dialog&&app.manager.dialog.is_some()) {app.manager.note=app.error.clone();}
           if app.launch_dialog&&let Some(d)=&mut app.manager.dialog{d.body=vec![app.error.clone()];if app.success || app.error.starts_with("Launch failed:"){d.finish();}}app.dirty=true;},
           Message::Focused(result)=>{match result { Ok(())=>{app.prefs.last_account=app.draft.account.clone();next.push(Effect::Save);},Err(e)=>{app.error=format!("Session is running; tab focus failed: {e}. Esc closes.");}}app.dirty=true;},
           Message::Saved(result)=>{if let Err(e)=result{app.error=format!("Preferences were not saved: {e}");if !app.success{app.page=Page::Config;}app.dirty=true;}else if app.success && !app.launch_background {app.exit=true;}},
          }}
+        }
+        let queued = std::mem::take(&mut app.manager.queue_out);
+        if !queued.is_empty() {
+            effects.write_queue(queued);
         }
         if let Some(operations) = app.manager.dismissed_out.take() {
             let (path, root) = (dismissed_path.clone(), cache_root.clone());

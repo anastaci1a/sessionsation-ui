@@ -35,12 +35,27 @@ pub struct Badge {
     pub id: String,
     pub text: String,
     pub active: bool,
+    /// Waiting in the UI operation queue; not started yet.
+    pub queued: bool,
+}
+/// Operation spinner frames (badges, the Operations popup and the status summary).
+pub const OPERATION_SPINNER_FRAMES: [&str; 4] = ["◜", "◝", "◞", "◟"];
+/// Milliseconds per operation spinner frame.
+pub const OPERATION_SPINNER_FRAME_MS: u64 = 150;
+/// Marker for an operation waiting in the queue.
+pub const QUEUED_ICON: &str = "◌";
+/// The shared operation spinner frame at `now_ms`.
+pub fn operation_spinner(now_ms: u64) -> &'static str {
+    OPERATION_SPINNER_FRAMES
+        [(now_ms / OPERATION_SPINNER_FRAME_MS % OPERATION_SPINNER_FRAMES.len() as u64) as usize]
 }
 impl Badge {
-    /// Animated arc for active work, a cross for failures.
+    /// Animated arc for active work, a dotted circle while queued, a cross for failures.
     pub fn icon(&self, now_ms: u64) -> &'static str {
         if self.active {
-            ["◜", "◝", "◞", "◟"][(now_ms / 150 % 4) as usize]
+            operation_spinner(now_ms)
+        } else if self.queued {
+            QUEUED_ICON
         } else {
             "✗"
         }
@@ -69,6 +84,9 @@ fn session_gate(s: &Value, label: &str, capability: &str) -> Row {
     if row.enabled {
         return row;
     }
+    if pending(s) && s["availability"] != "running" && QUEUEABLE.contains(&capability) {
+        return queue_gate(label);
+    }
     let reason = if pending(s) {
         "operation running"
     } else if capability == "archive" && s["availability"] == "archived" {
@@ -82,11 +100,28 @@ fn session_gate(s: &Value, label: &str, capability: &str) -> Row {
     };
     row.with_reason(reason)
 }
+/// Lifecycle capabilities whose actions queue behind a running operation.
+const QUEUEABLE: [&str; 8] = [
+    "switch_account",
+    "move_space",
+    "move_project",
+    "change_directory",
+    "restart",
+    "stop",
+    "archive",
+    "delete",
+];
+/// While another operation runs on the session, the action is accepted and queued.
+fn queue_gate(label: &str) -> Row {
+    Row::gate(label, true).with_reason("queues after current")
+}
 /// A disabled lifecycle row: the shared reason, or a pending operation.
 fn live_gate(s: &Value, label: &str, capability: &str) -> Row {
     let row = Row::gate(label, s["capabilities"][capability] == true);
     if row.enabled {
         row
+    } else if pending(s) && QUEUEABLE.contains(&capability) {
+        queue_gate(label)
     } else if pending(s) {
         row.with_reason("operation running")
     } else {
@@ -586,6 +621,29 @@ pub fn marquee(text: &str, width: usize, now_ms: u64) -> String {
         ellipsize(&format!("…{}", tail(offset)), width)
     }
 }
+/// Start (Unix seconds) of the session's attachment process, when the backend
+/// reports `attachment.process_start` (Linux /proc start ticks) and that same
+/// process is still alive on this host. Read once per state update, never while
+/// painting; any mismatch or unreadable value yields nothing.
+pub fn attachment_started(session: &Value) -> Option<i64> {
+    let attachment = &session["attachment"];
+    let pid = attachment["pid"].as_u64()?;
+    let ticks = attachment["process_start"].as_u64()?;
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // Fields after the parenthesised command; starttime is field 22 overall.
+    let after = stat.rsplit_once(')')?.1;
+    let start: u64 = after.split_whitespace().nth(19)?.parse().ok()?;
+    if start != ticks {
+        return None;
+    }
+    let boot: i64 = std::fs::read_to_string("/proc/stat")
+        .ok()?
+        .lines()
+        .find_map(|l| l.strip_prefix("btime ")?.trim().parse().ok())?;
+    // SAFETY: sysconf has no preconditions.
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    (hz > 0).then(|| boot + (ticks / hz as u64) as i64)
+}
 /// What a session row shows after its account column while selected and no
 /// badge occupies that place.
 fn hover_detail(session: &Value, now: i64) -> Option<String> {
@@ -597,8 +655,12 @@ fn hover_detail(session: &Value, now: i64) -> Option<String> {
         Some("host unavailable".into())
     } else if session["availability"] != "running" {
         None
-    } else if let Some(start) = session["active_since"].as_i64() {
-        Some(duration(now - start))
+    } else if let Some(start) = session["active_since"]
+        .as_i64()
+        .or_else(|| session["attachment_since"].as_i64())
+    {
+        // The live counter, in the shared `duration` format.
+        Some(format!("({})", duration(now - start)))
     } else if session["activity"] == "unknown" {
         Some("state unknown".into())
     } else {
@@ -775,13 +837,25 @@ pub fn paint_with(
         let y = 3 + index - options.scroll;
         let selected = options.selected == index && !options.back;
         let mut x = left + 2 + name_width;
+        // This row's own visible end: its account tag, or its name without accounts.
+        let row_end = if show_accounts {
+            x + 1 + UnicodeWidthStr::width(account_tag(session).as_str())
+        } else {
+            left + 2 + UnicodeWidthStr::width(rows[index].label.trim_end())
+        };
         if show_accounts {
             let icon = row_icon(session, now_ms, extras.spinners);
             let glows = row_glows(session, extras.spinners);
             let tag = account_tag(session);
             let rest = tag.split_once(' ').map_or("", |(_, r)| r);
             let tint = dim(if selected { SECONDARY } else { MUTED }, options.back);
-            let icon_level = if mode { 600 } else { level(options.back) };
+            // The selected-bullet level only on the selected row; others (and the
+            // back arrow or badge focus) use the dim bullet level.
+            let icon_level = if mode { 600 } else { level(!selected) };
+            // The selected row's account name and static icon are bold until focus
+            // moves onto its badge; an animated icon keeps its own styling.
+            let strong = selected && !mode;
+            let animated = busy(session);
             if glows {
                 let fg = canvas.theme.as_ref().map_or(MUTED, |t| t.arrow_pulse());
                 canvas.widget_text(
@@ -801,7 +875,7 @@ pub fn paint_with(
                     icon,
                     Accent {
                         brightness: icon_level,
-                        bold: false,
+                        bold: strong && !animated,
                         flash: false,
                         ..Accent::default()
                     },
@@ -813,6 +887,7 @@ pub fn paint_with(
                     icon,
                     Cell {
                         fg: tint,
+                        bold: strong && !animated,
                         ..Cell::default()
                     },
                     false,
@@ -836,8 +911,8 @@ pub fn paint_with(
                     y,
                     rest,
                     Accent {
-                        brightness: level(options.back),
-                        bold: false,
+                        brightness: if mode { 600 } else { level(!selected) },
+                        bold: strong,
                         flash: false,
                         ..Accent::default()
                     },
@@ -849,6 +924,7 @@ pub fn paint_with(
                     rest,
                     Cell {
                         fg: tint,
+                        bold: strong,
                         ..Cell::default()
                     },
                     false,
@@ -884,7 +960,7 @@ pub fn paint_with(
                         y,
                         icon,
                         Cell {
-                            fg: dim(FAILURE, options.back),
+                            fg: dim(if badge.queued { SECONDARY } else { FAILURE }, options.back),
                             ..Cell::default()
                         },
                         false,
@@ -930,10 +1006,11 @@ pub fn paint_with(
             }
         } else if selected
             && let Some(detail) = hover_detail(session, now)
-            && UnicodeWidthStr::width(detail.as_str()) <= room
+            // One space after this row's content, shown whole or not at all.
+            && row_end + 1 + UnicodeWidthStr::width(detail.as_str()) < canvas.width
         {
             canvas.widget_text(
-                x + 2,
+                row_end + 1,
                 y,
                 &detail,
                 Cell {
@@ -1162,6 +1239,16 @@ mod tests {
         assert!(is_claude(&json!({"account_id":"claude:x"})));
     }
     #[test]
+    fn operation_glyphs_are_single_cells() {
+        for g in OPERATION_SPINNER_FRAMES.iter().chain([&QUEUED_ICON, &"✗"]) {
+            assert_eq!(UnicodeWidthStr::width(*g), 1, "{g}");
+        }
+        let frames: Vec<_> = (0..5)
+            .map(|i| operation_spinner(i * OPERATION_SPINNER_FRAME_MS))
+            .collect();
+        assert_eq!(frames, ["◜", "◝", "◞", "◟", "◜"]);
+    }
+    #[test]
     fn duration_matches_reference() {
         assert_eq!(duration(-1), "0:00");
         assert_eq!(duration(61), "1:01");
@@ -1186,6 +1273,204 @@ mod tests {
             json!({"id":"b","name":"docs","provider":"claude","account_id":"claude:main","availability":"running","activity":"idle"}),
             json!({"id":"c","name":"old-notes","account_id":"codex:work","availability":"saved"}),
         ]
+    }
+    #[test]
+    fn live_counter_is_parenthesised_one_space_after_its_own_row() {
+        let mut sessions = sessions();
+        // A short account tag on the selected row: the counter follows it, not
+        // the shared account column of longer tags.
+        sessions[0]["account_id"] = json!("codex:g");
+        sessions[2]["account_id"] = json!("codex:a-much-longer-account");
+        let mut field = crate::render::Field::new(100, 20, 1967);
+        let mut c = field.paint(4000);
+        paint(
+            &mut c,
+            &mut Options::default(),
+            &sessions,
+            true,
+            18,
+            61 + 1,
+            19,
+        );
+        let line = text(&c, 3);
+        let tag = line.find("⬢ g").map(|b| line[..b].chars().count()).unwrap();
+        let counter = line
+            .find("(1:01)")
+            .map(|b| line[..b].chars().count())
+            .expect("counter in the shared duration format, in parentheses");
+        assert_eq!(counter, tag + "⬢ g".chars().count() + 1);
+        // All or nothing: a narrow screen hides it rather than clipping it.
+        let mut field = crate::render::Field::new(30, 20, 1967);
+        let mut c = field.paint(4100);
+        paint(
+            &mut c,
+            &mut Options::default(),
+            &sessions,
+            true,
+            18,
+            90062,
+            19,
+        );
+        let line = text(&c, 3);
+        assert!(!line.contains('(') && !line.contains(':'), "{line}");
+    }
+    #[test]
+    fn counter_falls_back_to_a_verified_local_attachment_start_only() {
+        let me = std::process::id();
+        let stat = std::fs::read_to_string(format!("/proc/{me}/stat")).unwrap();
+        let ticks: u64 = stat
+            .rsplit_once(')')
+            .unwrap()
+            .1
+            .split_whitespace()
+            .nth(19)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let s = json!({"attachment":{"pid":me,"process_start":ticks}});
+        let start = attachment_started(&s).expect("live process with matching start");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(start <= now && now - start < 3600, "{start} vs {now}");
+        // A recycled PID (different start) or missing fields give no counter.
+        assert_eq!(
+            attachment_started(&json!({"attachment":{"pid":me,"process_start":ticks + 1}})),
+            None
+        );
+        assert_eq!(attachment_started(&json!({"attachment":{"pid":me}})), None);
+        let running = json!({"availability":"running","attachment_since":now - 61});
+        assert_eq!(hover_detail(&running, now).as_deref(), Some("(1:01)"));
+        assert_eq!(
+            hover_detail(&json!({"availability":"running","activity":"busy"}), now),
+            None
+        );
+    }
+    #[test]
+    fn account_and_icon_use_the_light_level_only_on_the_selected_row() {
+        let sessions = sessions();
+        let mut field = crate::render::Field::new(100, 20, 1967);
+        let mut c = field.paint(4000);
+        let mut options = Options::default();
+        paint(&mut c, &mut options, &sessions, true, 18, 62, 19);
+        let theme = c.theme.clone().unwrap();
+        let level = |x: usize, y: usize, brightness: i64| {
+            theme
+                .accent(
+                    x,
+                    y,
+                    &Accent {
+                        brightness,
+                        bold: false,
+                        flash: false,
+                        ..Accent::default()
+                    },
+                )
+                .fg
+        };
+        let at = |c: &Canvas, y: usize, glyph: &str| {
+            text(c, y)
+                .find(glyph)
+                .map(|b| text(c, y)[..b].chars().count())
+                .unwrap()
+        };
+        // Row 3 (busy codex, selected) and row 4 (idle claude, not selected).
+        let (sel_icon, sel_name) = (at(&c, 3, "⬢"), at(&c, 3, "gate1"));
+        assert_eq!(c.cells[3 * 100 + sel_icon].fg, level(sel_icon, 3, 1000));
+        assert_eq!(c.cells[3 * 100 + sel_name].fg, level(sel_name, 3, 1000));
+        let (icon, name) = (at(&c, 4, "✻"), at(&c, 4, "main"));
+        assert_eq!(c.cells[4 * 100 + icon].fg, level(icon, 4, 600));
+        assert_eq!(c.cells[4 * 100 + name].fg, level(name, 4, 600));
+        // Moving the cursor swaps the levels.
+        options.selected = 1;
+        let mut c = field.paint(4000);
+        paint(&mut c, &mut options, &sessions, true, 18, 62, 19);
+        assert_eq!(c.cells[4 * 100 + icon].fg, level(icon, 4, 1000));
+        assert_eq!(c.cells[3 * 100 + sel_name].fg, level(sel_name, 3, 600));
+    }
+    #[test]
+    fn selected_account_and_static_icon_are_bold_until_the_badge_takes_focus() {
+        // Row 3: busy codex (animated icon); row 4: idle claude (static icon).
+        let sessions = sessions();
+        let mut badges = std::collections::BTreeMap::new();
+        for id in ["a", "b"] {
+            badges.insert(
+                id.to_owned(),
+                Badge {
+                    kind: "operation".into(),
+                    id: "op".into(),
+                    text: "moving".into(),
+                    active: true,
+                    queued: false,
+                },
+            );
+        }
+        let draw = |selected: usize, focus: bool| {
+            let mut c = crate::render::Field::new(100, 20, 1967).paint(4000);
+            let mut options = Options {
+                selected,
+                ..Options::default()
+            };
+            paint_with(
+                &mut c,
+                &mut options,
+                &sessions,
+                true,
+                18,
+                62,
+                19,
+                Extras {
+                    badges: Some(&badges),
+                    badge_focus: focus,
+                    ..Extras::default()
+                },
+            );
+            c
+        };
+        let find = |c: &Canvas, y: usize, s: &str| {
+            let line = text(c, y);
+            line.find(s).map(|b| line[..b].chars().count()).unwrap()
+        };
+        let level = |c: &Canvas, x: usize, y: usize, brightness: i64| {
+            c.theme
+                .as_ref()
+                .unwrap()
+                .accent(
+                    x,
+                    y,
+                    &Accent {
+                        brightness,
+                        bold: false,
+                        flash: false,
+                        ..Accent::default()
+                    },
+                )
+                .fg
+        };
+        // Static icon row selected: icon and name bold at the light level.
+        let c = draw(1, false);
+        let (icon, name) = (find(&c, 4, "✻"), find(&c, 4, "main"));
+        for x in [icon, name] {
+            let cell = &c.cells[4 * 100 + x];
+            assert!(cell.bold, "x={x}");
+            assert_eq!(cell.fg, level(&c, x, 4, 1000));
+        }
+        // Badge focus: unbold and the dark level.
+        let c = draw(1, true);
+        for x in [icon, name] {
+            let cell = &c.cells[4 * 100 + x];
+            assert!(!cell.bold, "x={x}");
+            assert_eq!(cell.fg, level(&c, x, 4, 600));
+        }
+        // Animated icon: never bolded here, in either state; the name follows the rule.
+        for focus in [false, true] {
+            let c = draw(0, focus);
+            let spin = find(&c, 3, "⬢");
+            assert!(!c.cells[3 * 100 + spin].bold);
+            let name = find(&c, 3, "gate1");
+            assert_eq!(c.cells[3 * 100 + name].bold, !focus);
+        }
     }
     #[test]
     fn every_row_has_a_busy_icon_and_dim_provider_account_column() {
@@ -1255,12 +1540,12 @@ mod tests {
         c.cells[y * c.width + x].fg
     }
     /// Running rows colour the account name with the icon's own position-based
-    /// accent at each cell; names stay plain.
+    /// accent at each cell (light only on the selected row); names stay plain.
     #[test]
     fn running_account_names_use_the_icon_accent_at_their_own_cells_and_names_stay_plain() {
         let sessions = sessions();
         let mut field = crate::render::Field::new(100, 20, 1967);
-        for (selected, back, level) in [(1, false, 1000), (0, false, 1000), (1, true, 600)] {
+        for (selected, back, level) in [(1, false, 1000), (0, false, 600), (1, true, 600)] {
             let mut c = field.paint(5000);
             let mut o = Options {
                 selected,
@@ -1489,6 +1774,7 @@ mod tests {
                 id: "op".into(),
                 text: "moving to work".into(),
                 active: true,
+                queued: false,
             },
         );
         badges.insert(
@@ -1498,6 +1784,7 @@ mod tests {
                 id: "op2".into(),
                 text: "move failed".into(),
                 active: false,
+                queued: false,
             },
         );
         let draw = |now: u64, focus: bool| {
@@ -1540,6 +1827,7 @@ mod tests {
                 id: "op".into(),
                 text: "moving to work".into(),
                 active: true,
+                queued: false,
             },
         );
         let draw = |focus: bool| {

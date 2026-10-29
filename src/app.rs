@@ -34,6 +34,8 @@ fn align_pickers(rows: &mut [Row]) {
         }
     }
 }
+/// Accent level of the selected row bullet.
+const SELECTED_BULLET_LEVEL: i64 = 1000;
 /// Spaces between the longest settings name and the grey settings values.
 const SETTINGS_VALUE_GAP: usize = 3;
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -212,6 +214,8 @@ pub struct App {
     auto_space: bool,
     pub dirty: bool,
     pending_child: Option<PathBuf>,
+    /// Draft revision last started or queued; the same draft is not submitted twice.
+    submitted: Option<u64>,
     popup_size: Option<(Page, crate::popup::Size)>,
     status: crate::status::Status,
 }
@@ -270,6 +274,7 @@ impl App {
             picker: None,
             anim_ms: 0,
             pending_child: None,
+            submitted: None,
             popup_size: None,
             status: crate::status::Status::default(),
         }
@@ -282,14 +287,10 @@ impl App {
                 Intent::Api(id, args) => effects.push(Effect::Api(id, args)),
                 Intent::LaunchLogin(argv) => effects.push(Effect::LaunchLogin(argv)),
                 Intent::New => {
-                    if self.request.is_some() && !self.success {
-                        self.manager.note="A launch is still in progress; inspect Operations before starting another.".into();
-                    } else {
-                        self.restore_new_draft();
-                        self.request = None;
-                        self.success = false;
-                        effects.extend(self.push(Page::Summary, String::new()));
-                    }
+                    // A launch still in progress keeps running; another Start queues
+                    // behind it when its account is busy.
+                    self.restore_new_draft();
+                    effects.extend(self.push(Page::Summary, String::new()));
                 }
                 Intent::Settings => effects.extend(self.push(Page::Config, String::new())),
                 Intent::Focus(session) => effects.push(Effect::FocusSession(
@@ -305,11 +306,6 @@ impl App {
                     effects.extend(self.push(Page::Accounts, String::new()));
                 }
                 Intent::Resume(session) => {
-                    if self.request.is_some() && !self.success {
-                        self.manager.note =
-                            "Inspect the pending launch in Operations first.".into();
-                        continue;
-                    }
                     self.restore_new_draft();
                     self.new_draft = Some((self.draft.clone(), self.auto_account, self.auto_space));
                     let original = &session["original_host"];
@@ -345,8 +341,6 @@ impl App {
                     self.resume = Some(session);
                     self.auto_account = false;
                     self.auto_space = false;
-                    self.request = None;
-                    self.success = false;
                     effects.extend(self.push(Page::Summary, String::new()));
                     effects.extend(self.revalidate());
                 }
@@ -1475,7 +1469,7 @@ impl App {
         self.ready()
             && self.launch_supported()
             && (!self.pending || self.resume.is_some())
-            && self.request.is_none()
+            && self.submitted != Some(self.draft.revision)
             && (self.resume.is_some()
                 || (self.manager.sessions_known && !self.manager.cached_snapshot))
     }
@@ -1484,13 +1478,76 @@ impl App {
             return vec![];
         }
         if let Some(request) = self.creation_request() {
+            self.submitted = Some(self.draft.revision);
+            if !self.launch_or_queue(&request) {
+                return self.leave_queued();
+            }
             self.request = Some(request.clone());
+            self.success = false;
             self.launch_background = false;
             self.launch_dialog = true;
             self.manager.dialog = Some(crate::dialog::Dialog::progress("Starting session"));
             return vec![Effect::Start(request)];
         }
         vec![]
+    }
+    /// Register a direct launch with the queue, or queue it when its target or
+    /// this view's launch slot is busy. Returns true when it starts now.
+    fn launch_or_queue(&mut self, request: &Value) -> bool {
+        use crate::op_queue::{Action, Command, Entry};
+        let resume = self.resume.is_some();
+        let (resource, kind) = if resume {
+            (
+                format!("session:{}", request["session_id"].as_str().unwrap_or("")),
+                "resume-launch",
+            )
+        } else {
+            (
+                format!("account:{}", request["account_id"].as_str().unwrap_or("")),
+                "launch",
+            )
+        };
+        let provider = request["account_id"]
+            .as_str()
+            .and_then(|a| a.split_once(':'))
+            .map_or("codex", |(p, _)| p);
+        let subject = format!(
+            "{} {}",
+            crate::usage::provider_symbol(provider),
+            request["name"].as_str().unwrap_or("")
+        );
+        let mut entry = Entry::new(
+            resource.clone(),
+            kind,
+            subject,
+            Action::Launch {
+                kind: kind.into(),
+                request: request.clone(),
+            },
+        );
+        let slot_busy = self.request.is_some() && !self.success;
+        if slot_busy || !self.manager.can_start_now(&resource) {
+            self.manager.queue.push(entry.clone());
+            self.manager.queue_out.push(Command::Enqueue(entry));
+            return false;
+        }
+        entry.operation_id = request["request_id"].as_str().map(str::to_owned);
+        self.manager.queue.push({
+            let mut running = entry.clone();
+            running.state = crate::op_queue::State::Running;
+            running.started_at = Some(crate::op_queue::now());
+            running
+        });
+        self.manager.queue_out.push(Command::Register(entry));
+        true
+    }
+    /// A queued Start returns to the page it was opened from; the queue owns it.
+    fn leave_queued(&mut self) -> Vec<Effect> {
+        let mut effects = vec![];
+        while !self.stack.is_empty() {
+            effects.extend(self.pop());
+        }
+        effects
     }
     fn activate(&mut self) -> Vec<Effect> {
         if Self::is_popup(&self.page)
@@ -2109,6 +2166,7 @@ New directories are created only when the session starts."
         field.resize(width, height);
         field.options_top = 3;
         self.anim_ms = now;
+        self.manager.anim_ms = now;
         self.manager.spinners = self.prefs.spinners();
         field.background = Some(self.terminal_background);
         field.set_style(
@@ -2277,6 +2335,39 @@ New directories are created only when the session starts."
         let top = if self.is_form() { 5 } else { 3 };
         self.paint_choices(canvas, top, footer, &hints);
     }
+    /// The focused spinner row's live glyph wears the selected bullet's accent
+    /// (same function and level), sampled at the glyph's own cell.
+    fn paint_spinner_preview(&self, canvas: &mut Canvas, top: usize) {
+        let index = self.options.selected;
+        if self.options.back || index >= 3 || index < self.options.scroll {
+            return;
+        }
+        let s = self.prefs.spinners();
+        let glyph = match index {
+            0 => crate::session_list::claude_frame(s.claude, self.anim_ms),
+            1 => crate::session_list::codex_frame(s.codex, self.anim_ms),
+            _ => crate::session_list::gemini_frame(s.gemini, self.anim_ms),
+        };
+        let y = top + index - self.options.scroll;
+        if y >= canvas.height {
+            return;
+        }
+        let row = &canvas.cells[y * canvas.width..(y + 1) * canvas.width];
+        let Some(x) = row.iter().rposition(|c| c.glyph == glyph) else {
+            return;
+        };
+        let bold = row[x].bold;
+        canvas.accent_text(
+            x,
+            y,
+            glyph,
+            Accent {
+                brightness: SELECTED_BULLET_LEVEL,
+                bold,
+                ..Accent::default()
+            },
+        );
+    }
     fn paint_choices(&mut self, canvas: &mut Canvas, top: usize, footer: usize, hints: &[String]) {
         let rows = self.rows();
         let has_note = !self.error.is_empty()
@@ -2294,6 +2385,9 @@ New directories are created only when the session starts."
         let (left, capacity) = self
             .options
             .paint_menu(canvas, &rows, top, bottom, menu_controls);
+        if self.page == Page::Spinners {
+            self.paint_spinner_preview(canvas, top);
+        }
         if self.page != Page::Launching {
             self.options.paint_back(canvas, left, top, "Back");
         }
@@ -2917,7 +3011,7 @@ mod tests {
     fn app_manage_sessions_running_account_uses_the_icon_accent_through_the_real_render_path() {
         for width in [80usize, 120, 160] {
             for (selected, back, level) in
-                [(0usize, false, 1000i64), (1, false, 1000), (0, true, 600)]
+                [(0usize, false, 1000i64), (1, false, 600), (0, true, 600)]
             {
                 let mut a = app();
                 a.page = Page::Management;
@@ -3829,6 +3923,40 @@ mod tests {
         }
     }
     #[test]
+    fn focused_spinner_preview_uses_the_selected_bullet_accent_at_its_cell() {
+        use crate::render::Accent;
+        let mut a = app();
+        a.page = Page::Spinners;
+        for selected in 0..3 {
+            a.options.selected = selected;
+            let c = a.paint(&mut Field::new(80, 24, 1), 5000, 80, 24);
+            let s = a.prefs.spinners();
+            let glyph = match selected {
+                0 => crate::session_list::claude_frame(s.claude, 5000),
+                1 => crate::session_list::codex_frame(s.codex, 5000),
+                _ => crate::session_list::gemini_frame(s.gemini, 5000),
+            };
+            let label = ["Claude spinner", "Codex spinner", "Gemini spinner"][selected];
+            let y = (0..24).find(|&y| col_of(&c, y, label).is_some()).unwrap();
+            let row = &c.cells[y * 80..(y + 1) * 80];
+            let x = row.iter().rposition(|cell| cell.glyph == glyph).unwrap();
+            let want = c
+                .theme
+                .as_ref()
+                .unwrap()
+                .accent(
+                    x,
+                    y,
+                    &Accent {
+                        brightness: SELECTED_BULLET_LEVEL,
+                        ..Accent::default()
+                    },
+                )
+                .fg;
+            assert_eq!(row[x].fg, want, "{label}");
+        }
+    }
+    #[test]
     fn grabbed_selector_steps_every_other_element_back_and_restores_on_leaving() {
         use crate::render::Accent;
         use crate::widgets::{MUTED, SECONDARY};
@@ -4669,8 +4797,33 @@ mod resume_tests {
         assert!(a.launch_background);
         assert_eq!(a.page, Page::Home);
         assert_eq!(a.request, request);
-        assert!(a.management(vec![Intent::New]).is_empty());
+        // New Session opens again while the first launch is still pending; the
+        // unchanged draft cannot be submitted twice.
+        a.management(vec![Intent::New]);
+        assert_eq!(a.page, Page::Summary);
+        assert_eq!(a.request, request);
+        a.options.selected = 4;
+        assert!(a.activate().is_empty());
+        assert_eq!(
+            a.manager.queue.len(),
+            1,
+            "only the first launch is registered"
+        );
+        // A changed draft is accepted: the launch slot is busy, so it queues
+        // instead of starting, and the first request keeps being tracked.
+        a.draft.name = "Second".into();
+        a.draft.revision += 1;
+        a.options.selected = 4;
+        assert!(a.activate().iter().all(|e| !matches!(e, Effect::Start(_))));
+        assert_eq!(a.request, request);
         assert_eq!(a.page, Page::Home);
+        let states: Vec<_> = a.manager.queue.iter().map(|e| e.state).collect();
+        use crate::op_queue::State;
+        assert_eq!(states, [State::Running, State::Queued]);
+        assert!(matches!(
+            a.manager.queue_out.last(),
+            Some(crate::op_queue::Command::Enqueue(e)) if e.kind == "launch"
+        ));
     }
     fn mixed_app() -> App {
         let mut a = super::tests::app();

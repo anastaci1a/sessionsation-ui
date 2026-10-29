@@ -8,6 +8,8 @@ use crate::{
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
+mod queue;
+pub use queue::RECENT_LIMIT;
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -20,6 +22,8 @@ pub enum Page {
     Operations,
     Operation(String),
     Launch(&'static str, String),
+    /// Operations queue popup over the page it was opened from.
+    Queue,
 }
 #[derive(Clone, Debug)]
 pub enum Intent {
@@ -61,6 +65,8 @@ enum Purpose {
     LoginPoll(String),
     Observe(String),
     ActionCheck(Value, crate::session_list::Action),
+    /// Home move-mode save; holds the order the backend last reported.
+    Reorder(Vec<Account>),
 }
 #[derive(Clone, Debug)]
 enum Form {
@@ -86,6 +92,10 @@ enum Form {
     Confirm(Vec<String>),
     Progress,
     Operation(String),
+    /// A queued entry: Cancel or Close.
+    Queued(String),
+    /// A queue entry that failed to start: Dismiss or Close.
+    QueuedFailed(String),
 }
 #[derive(Clone)]
 enum Focus {
@@ -180,6 +190,16 @@ pub struct Manager {
     /// HERDR Space names by ID, for operation badges.
     pub space_names: BTreeMap<String, String>,
     ticks_since_operations: u32,
+    /// Snapshot of the UI operation queue (`operation-queue.json`).
+    pub queue: Vec<crate::op_queue::Entry>,
+    /// Queue edits to persist (taken by the event loop).
+    pub queue_out: Vec<crate::op_queue::Command>,
+    /// Direct mutation tokens and the queue entries registered for them.
+    direct: BTreeMap<u64, String>,
+    /// Paint time in milliseconds, for operation spinners.
+    pub anim_ms: u64,
+    /// Selected Operations popup item, kept through live updates.
+    queue_focus: Option<String>,
 }
 /// Operations page filter, cycled with Left/Right on its selector row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -221,6 +241,9 @@ pub struct LoginWait {
 const LOGIN_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 const LOGIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
 const CLOSE_WINDOW: std::time::Duration = crate::close_band::CLOSE_WINDOW;
+/// The operation counts take the status lane only when the list keeps at least
+/// four rows below the title rows (top 3 + 4 rows + the lane's 2).
+const SUMMARY_MIN_CONTROLS: usize = 9;
 impl Default for Manager {
     fn default() -> Self {
         Self {
@@ -281,6 +304,11 @@ impl Default for Manager {
             band_base: [16; 3],
             space_names: BTreeMap::new(),
             ticks_since_operations: 0,
+            queue: vec![],
+            queue_out: vec![],
+            direct: BTreeMap::new(),
+            anim_ms: 0,
+            queue_focus: None,
         }
     }
 }
@@ -999,17 +1027,15 @@ impl Manager {
                     .iter()
                     .map(|a| &a.id)
                     .eq(self.accounts.iter().map(|a| &a.id));
-                self.moving = None;
+                let original = self.moving.take().unwrap_or_default();
                 if unchanged {
                     return Some(vec![]);
                 }
-                Some(self.mutate(strings(&[
-                    "account",
-                    "reorder",
-                    &id,
-                    "--position",
-                    &at.to_string(),
-                ])))
+                // Saved silently: no progress or acknowledgement, only failures.
+                Some(self.request(
+                    strings(&["account", "reorder", &id, "--position", &at.to_string()]),
+                    Purpose::Reorder(original),
+                ))
             }
             KeyCode::Esc => {
                 let id = self.accounts.get(at).map(|a| a.id.clone());
@@ -1127,6 +1153,21 @@ impl Manager {
     }
     pub fn title(&self) -> String {
         match &self.page {
+            Page::Queue => {
+                return self.history.last().map_or_else(
+                    || "Operations".into(),
+                    |l| {
+                        Manager {
+                            page: l.page.clone(),
+                            sessions: self.sessions.clone(),
+                            archives: self.archives.clone(),
+                            operations: self.operations.clone(),
+                            ..Manager::default()
+                        }
+                        .title()
+                    },
+                );
+            }
             Page::Home => "",
             Page::Account(key) => {
                 let (provider, name) = key.split_once(':').unwrap_or(("codex", key.as_str()));
@@ -1170,6 +1211,7 @@ impl Manager {
         self.popup_size = None;
         self.usage_focus = false;
         self.home_column = 0;
+        self.queue_focus = None;
         self.steering_pick = None;
         self.options = Options::default();
         self.options.selected = self.rows().iter().position(|r| !r.separator).unwrap_or(0);
@@ -1418,6 +1460,7 @@ impl Manager {
                 ]
             }
             Page::Operations => self.operation_rows(),
+            Page::Queue => self.queue_rows(),
             Page::Operation(key) => {
                 let o = self
                     .operations
@@ -1754,10 +1797,15 @@ impl Manager {
             out.extend(self.refresh_sessions());
         }
         if (self.active_operation.is_some()
+            || !self.queue.is_empty()
+            || self
+                .operations
+                .iter()
+                .any(|o| !terminal(o["phase"].as_str().unwrap_or("")))
             || matches!(self.form, Form::Operation(_) | Form::OperationApproval(..))
             || matches!(
                 self.page,
-                Page::Operations | Page::Operation(_) | Page::Sessions
+                Page::Operations | Page::Operation(_) | Page::Sessions | Page::Queue
             ))
             && !self
                 .pending
@@ -1964,6 +2012,18 @@ impl Manager {
                     Some("idle") => s["activity"] = json!("idle"),
                     _ => {}
                 }
+            }
+            // Without `active_since`, the verified attachment process start on this
+            // host is the same measure; otherwise no counter is shown.
+            let since = (s["availability"] == "running" && s["active_since"].is_null())
+                .then(|| crate::session_list::attachment_started(s))
+                .flatten();
+            match (since, s.as_object_mut()) {
+                (Some(t), _) => s["attachment_since"] = json!(t),
+                (None, Some(o)) => {
+                    o.remove("attachment_since");
+                }
+                (None, None) => {}
             }
             match s["account_id"].as_str().and_then(|id| titles.get(id)) {
                 Some(t) => s["account_label"] = json!(t),
@@ -2192,6 +2252,17 @@ impl Manager {
         self.form = form;
     }
     fn mutate(&mut self, args: Vec<String>) -> Vec<Intent> {
+        if self.queue_or_register(&args) {
+            // Accepted into the queue: back to the list with the target selected.
+            if matches!(self.page, Page::Session(_) | Page::Spaces(_)) {
+                self.session_return = args
+                    .windows(2)
+                    .find(|w| w[0] == "--session")
+                    .map(|w| w[1].clone());
+                self.leave_to_list();
+            }
+            return vec![];
+        }
         self.mutation = args.clone();
         if args.first().is_none_or(|arg| arg != "respond") {
             self.session_return = args.windows(2).find(|w| w[0] == "--session").map(|w| {
@@ -2228,7 +2299,7 @@ impl Manager {
             self.note = "SESSION_NOT_FOUND".into();
             return;
         };
-        if s["capabilities"]["switch_account"] != true {
+        if s["capabilities"]["switch_account"] != true && !s["pending_operation_id"].is_string() {
             self.note = "The session is not currently available for account switching. Review its state in Manage sessions.".into();
             return;
         }
@@ -2309,6 +2380,33 @@ impl Manager {
         if key.code == KeyCode::Char('m') && self.can_start_move() {
             self.moving = Some(self.accounts.clone());
             return vec![];
+        }
+        if self.page == Page::Queue {
+            return match key.code {
+                KeyCode::Left | KeyCode::Esc | KeyCode::Char('o') => self.back(),
+                KeyCode::Enter | KeyCode::Char(' ') => self.activate_queue(),
+                KeyCode::Up | KeyCode::Down => {
+                    self.options
+                        .step_with_wrap(&self.rows(), false, key.code == KeyCode::Up, wrap);
+                    self.note_queue_focus();
+                    vec![]
+                }
+                KeyCode::Home | KeyCode::End => {
+                    self.options
+                        .boundary(&self.rows(), false, key.code == KeyCode::End);
+                    self.note_queue_focus();
+                    vec![]
+                }
+                KeyCode::PageUp | KeyCode::PageDown => {
+                    self.options.page(&self.rows(), key.code == KeyCode::PageUp);
+                    self.note_queue_focus();
+                    vec![]
+                }
+                _ => vec![],
+            };
+        }
+        if key.code == KeyCode::Char('o') && self.moving.is_none() {
+            return self.open_queue();
         }
         let armed = self.close_armed.take();
         let filter_row =
@@ -2483,6 +2581,14 @@ impl Manager {
                     .as_str()
                     .map(|op| ("operation running".to_owned(), true, op)),
             };
+            // Running backend work first, then the queue (starting, queued or
+            // failed to start), then a recent backend failure.
+            if !badge.as_ref().is_some_and(|b| b.1)
+                && let Some(queued) = self.queue_badge(key)
+            {
+                out.insert(key.to_owned(), queued);
+                continue;
+            }
             if let Some((text, active, op)) = badge {
                 out.insert(
                     key.to_owned(),
@@ -2491,6 +2597,7 @@ impl Manager {
                         id: op.to_owned(),
                         text,
                         active,
+                        queued: false,
                     },
                 );
             }
@@ -2502,6 +2609,21 @@ impl Manager {
         let Some(badge) = self.selected_badge() else {
             self.badge_focus = false;
             return vec![];
+        };
+        if badge.kind == "queue" {
+            self.open_queue_entry(&badge.id);
+            return vec![];
+        }
+        self.open_operation(badge.id)
+    }
+    /// An operation's progress or details dialog over the current page.
+    fn open_operation(&mut self, key: String) -> Vec<Intent> {
+        let badge = crate::session_list::Badge {
+            kind: "operation".into(),
+            id: key,
+            text: String::new(),
+            active: false,
+            queued: false,
         };
         self.details_open = true;
         let o = self
@@ -2649,6 +2771,7 @@ impl Manager {
         }
         let index = self.options.selected;
         match self.page.clone() {
+            Page::Queue => return self.activate_queue(),
             Page::Home => match index {
                 0 => return vec![Intent::New],
                 1 => {
@@ -2757,7 +2880,7 @@ impl Manager {
                 {
                     self.enter(Page::Session(id(session).into()));
                 } else {
-                    self.enter(Page::Operations);
+                    return self.open_queue();
                 }
                 return self.refresh();
             }
@@ -2828,8 +2951,10 @@ impl Manager {
                         .get(index)
                         .map(|(_, a)| *a);
                 let action = action.unwrap_or(crate::session_list::Action::Unavailable);
+                // A busy session queues the action; the backend checks it when it starts.
                 if s["availability"] == "running"
                     && !crate::session_list::is_native_provider(&s)
+                    && !s["pending_operation_id"].is_string()
                     && !matches!(
                         action,
                         crate::session_list::Action::Focus
@@ -3248,6 +3373,20 @@ impl Manager {
                 &sequence.to_string(),
             ]));
         }
+        if let Form::Queued(key) = self.form.clone() {
+            self.dismiss();
+            if button == 0 {
+                self.cancel_queued(&key);
+            }
+            return vec![];
+        }
+        if let Form::QueuedFailed(key) = self.form.clone() {
+            self.dismiss();
+            if button == 0 {
+                self.dismiss_queued(&key);
+            }
+            return vec![];
+        }
         if let Form::Operation(key) = self.form.clone() {
             if self
                 .dialog
@@ -3280,6 +3419,8 @@ impl Manager {
             | Form::Progress
             | Form::Operation(_)
             | Form::OperationApproval(..)
+            | Form::Queued(_)
+            | Form::QueuedFailed(_)
             | Form::LoginWait(_)
             | Form::SessionDetails(_) => {
                 self.dismiss();
@@ -3455,6 +3596,9 @@ impl Manager {
         let Some(purpose) = self.pending.remove(&token) else {
             return vec![];
         };
+        if matches!(purpose, Purpose::Mutation) {
+            self.direct_answered(token, &result);
+        }
         let cached_req = self.cached_tokens.remove(&token);
         if let Purpose::LoginPoll(key) = purpose {
             if let Ok(value) = result {
@@ -3487,6 +3631,18 @@ impl Manager {
         let value = match result {
             Ok(v) => v,
             Err(e) => {
+                if let Purpose::Reorder(original) = &purpose {
+                    // Back to the backend's order, the moved account still selected.
+                    let moved = self.selected_account();
+                    self.accounts = original.clone();
+                    if let Some(i) =
+                        moved.and_then(|key| self.accounts.iter().position(|a| a.id == key))
+                    {
+                        self.options.selected = 5 + i;
+                    }
+                    self.note = e.clone();
+                    return vec![];
+                }
                 if let Purpose::LiveSteering(key) = &purpose {
                     // A failed read is shown on the row, not as a page note.
                     self.steering.remove(key);
@@ -3521,6 +3677,7 @@ impl Manager {
         };
         match purpose {
             Purpose::ActionCheck(..) | Purpose::LoginPoll(_) => unreachable!(),
+            Purpose::Reorder(_) => {}
             Purpose::DeleteAvailability(key) => {
                 self.deletion_previews.insert(key, value);
             }
@@ -4010,7 +4167,6 @@ impl Manager {
                     }
                     return vec![];
                 }
-                self.note = "Operation acknowledged; refresh to see current state.".into();
                 if let Some(argv) = login_plan(&value["login"]["argv"]) {
                     if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
                         // The plan is a backend-owned exec argv; the UI only hands it
@@ -4100,6 +4256,10 @@ impl Manager {
     }
     pub fn paint_at(&mut self, canvas: &mut Canvas, footer: usize, now: i64) {
         let _ = footer; // retained for callers; the layout derives rows from the canvas
+        if self.page == Page::Queue {
+            self.paint_queue(canvas, footer, now);
+            return;
+        }
         if let Page::Spaces(key) = self.page.clone() {
             let options = self.options.clone();
             let dialog = self.dialog.take();
@@ -4180,7 +4340,19 @@ impl Manager {
             } else {
                 "Esc: Back"
             });
-            hint_lines(&tokens, canvas.width)
+            let lines = hint_lines(&tokens, canvas.width);
+            // The `o` hint joins only when it needs no extra hint row.
+            if self.operation_summary().is_some() {
+                tokens.insert(tokens.len() - 1, "o: Operations");
+                let with = hint_lines(&tokens, canvas.width);
+                if with.len() == lines.len() {
+                    with
+                } else {
+                    lines
+                }
+            } else {
+                lines
+            }
         };
         // Saved-session notice: only on the session list, only until fresh state.
         let note = if self.note.is_empty() && self.page == Page::Sessions && self.cached_snapshot {
@@ -4188,8 +4360,15 @@ impl Manager {
         } else {
             self.note.clone()
         };
+        // With no notice, the lane shows the live operation counts (whole or not at all).
         let controls_start = canvas.height.saturating_sub(hints.len());
-        let list_controls = if note.is_empty() {
+        // Shown whole or not at all, and never at the cost of the list itself.
+        let summary = if note.is_empty() && controls_start >= SUMMARY_MIN_CONTROLS {
+            self.fitted_summary(canvas.width)
+        } else {
+            None
+        };
+        let list_controls = if note.is_empty() && summary.is_none() {
             controls_start
         } else {
             controls_start.saturating_sub(2)
@@ -4300,6 +4479,8 @@ impl Manager {
         }
         if !note.is_empty() {
             crate::widgets::paint_status(canvas, controls_start, &note);
+        } else if let Some(summary) = &summary {
+            self.paint_summary(canvas, controls_start, summary);
         }
         crate::widgets::paint_hints(canvas, &hints);
         if let Some(phase) = self
@@ -4570,6 +4751,7 @@ mod tests {
         ];
         m.options.selected = m.rows().len() - 1;
         m.key(enter);
+        all_operations(&mut m);
         assert_eq!(m.page, Page::Operations);
         m.options.selected = 3;
         m.key(enter);
@@ -4582,6 +4764,8 @@ mod tests {
             m.operation_keys()[m.options.selected],
             Some(("operation".into(), "o1".into()))
         );
+        m.key(escape);
+        assert_eq!(m.page, Page::Queue);
         m.key(escape);
         assert_eq!(m.page, Page::Sessions);
         assert_eq!(m.options.selected, m.rows().len() - 1);
@@ -4768,6 +4952,7 @@ mod tests {
         );
         assert!(args.windows(2).any(|w| w == ["--confirm", "stable"]));
         m.dialog = None;
+        m.queue.clear(); // the archive operation finished
         m.options.selected = 5;
         m.activate();
         assert!(m.submit(0, vec!["wrong".into()]).is_empty());
@@ -5095,6 +5280,7 @@ mod tests {
         assert_eq!(m.page, Page::Sessions);
         assert_eq!(m.options.selected, 1);
         for command in ["archive", "delete-session"] {
+            m.queue.clear(); // the previous operation finished
             m.mutate(strings(&[command, "--session", "two"]));
             m.submit(0, vec![]);
             assert_eq!(m.page, Page::Sessions);
@@ -5356,6 +5542,7 @@ mod tests {
             m.go(Page::Sessions);
             m.options.selected = m.rows().len() - 1; // the Operations row
             m.activate();
+            all_operations(&mut m);
             assert_eq!(m.page, Page::Operations);
             assert_eq!(m.options.selected, 0);
             m.options.selected = previous;
@@ -5375,8 +5562,19 @@ mod tests {
         else {
             panic!("operations were not requested: {sent:?}")
         };
+        all_operations(&mut m);
         m.response(*token, Ok(json!(m.operations.clone())));
         assert_eq!(m.options.selected, 0);
+    }
+    /// The Operations entry opens the queue popup; its All operations row opens the list.
+    fn all_operations(m: &mut super::Manager) {
+        assert_eq!(m.page, super::Page::Queue);
+        m.options.selected = m
+            .rows()
+            .iter()
+            .position(|r| r.label == "All operations")
+            .unwrap();
+        m.activate();
     }
     fn screen_text(c: &Canvas) -> String {
         c.cells
@@ -5441,6 +5639,29 @@ mod tests {
             matches!(&sent[..], [Intent::Api(_, a)] if a == &strings(&["account", "reorder", "claude:claude-main", "--position", "2"])),
             "{sent:?}"
         );
+        // Saved silently: no dialog, no acknowledgement text.
+        let [Intent::Api(token, _)] = &sent[..] else {
+            unreachable!()
+        };
+        assert!(m.dialog.is_none());
+        m.response(*token, Ok(json!({"ok":true})));
+        assert!(m.dialog.is_none() && m.note.is_empty());
+        let moved = ids(&m);
+        // A failed save reverts to the backend's order and surfaces the error.
+        m.options.selected = 6;
+        m.key(key(KeyCode::Char('m')));
+        m.key(key(KeyCode::Up));
+        let sent = m.key(key(KeyCode::Enter));
+        let [Intent::Api(token, _)] = &sent[..] else {
+            panic!("{sent:?}")
+        };
+        m.response(
+            *token,
+            Err("ACCOUNT_ORDER_CONFLICT: changed elsewhere".into()),
+        );
+        assert_eq!(ids(&m), moved);
+        assert!(m.dialog.is_none() && !m.note.is_empty());
+        assert_eq!(m.accounts[m.options.selected - 5].id, moved[1]);
         // Not advertised: no move mode and no hint.
         let mut m = dual_providers();
         m.options.selected = 6;
@@ -5532,6 +5753,7 @@ mod tests {
         // Sessions -> Operations -> Operation, a nested chain, then all the way back.
         m.options.selected = m.rows().len() - 1;
         m.key(key(KeyCode::Enter));
+        all_operations(&mut m);
         assert_eq!(m.page, Page::Operations);
         assert_eq!(m.options.selected, 0);
         m.options.selected = 3;
@@ -5540,6 +5762,8 @@ mod tests {
         assert_eq!(m.options.selected, 0);
         m.key(key(KeyCode::Esc));
         assert_eq!((m.page.clone(), m.options.selected), (Page::Operations, 3));
+        m.key(key(KeyCode::Esc));
+        assert_eq!(m.page, Page::Queue);
         m.key(key(KeyCode::Esc));
         assert_eq!(m.page, Page::Sessions);
         assert_eq!(m.options.selected, m.rows().len() - 1);
@@ -5550,6 +5774,7 @@ mod tests {
         m.key(key(KeyCode::Enter));
         m.options.selected = m.rows().len() - 1;
         m.key(key(KeyCode::Enter));
+        all_operations(&mut m);
         assert_eq!((m.page.clone(), m.options.selected), (Page::Operations, 0));
         // Home -> an account page starts at its first row, back lands on the account.
         m.go(Page::Home);
@@ -5684,7 +5909,7 @@ mod tests {
     fn manage_sessions_running_account_uses_the_icon_accent_and_name_stays_plain() {
         for width in [80usize, 120, 160] {
             for (selected, back, level) in
-                [(0usize, false, 1000i64), (1, false, 1000), (0, true, 600)]
+                [(0usize, false, 1000i64), (1, false, 600), (0, true, 600)]
             {
                 let mut m = setup();
                 m.page = Page::Sessions;

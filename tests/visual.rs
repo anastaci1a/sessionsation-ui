@@ -100,6 +100,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("operations-compact", 50, 20),
         ("operations-tiny", 40, 10),
         ("sessions-badges", 100, 20),
+        ("operations-queue", 100, 24),
         ("session-details", 90, 26),
         ("account-details", 90, 30),
         ("appearance", 80, 20),
@@ -217,6 +218,28 @@ fn management_geometry_usage_markers_and_picker_columns() {
                     serde_json::json!({"id":"op2","kind":"archive_session","session_id":"b","phase":"failed","created_at":95}),
                 ];
                 m.badge_focus = true;
+            }
+            "operations-queue" => {
+                m.page = Page::Sessions;
+                m.sessions_known = true;
+                m.sessions = vec![
+                    serde_json::json!({"name":"liq-glass-lead","id":"a","account_id":"codex:gate1","availability":"running","activity":"busy","active_since":1}),
+                    serde_json::json!({"name":"docs","id":"c","provider":"claude","account_id":"claude:main","availability":"running","native_status":"idle","activity":"idle"}),
+                ];
+                m.operations = vec![
+                    serde_json::json!({"id":"op1","kind":"move_space","source_session_id":"a","phase":"dispatching","created_at":90000}),
+                    serde_json::json!({"id":"op2","kind":"restart","source_session_id":"c","phase":"complete","created_at":89000}),
+                ];
+                let mut queued = sessionsation_ui::op_queue::Entry::new(
+                    "session:a".into(),
+                    "restart",
+                    "⏣ liq-glass-lead".into(),
+                    sessionsation_ui::op_queue::Action::Api { args: vec![] },
+                );
+                queued.created_at = 90010;
+                m.queue = vec![queued];
+                m.options.selected = m.rows().len() - 1;
+                m.key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
             }
             "session-details" => {
                 m.page = Page::Session("a".into());
