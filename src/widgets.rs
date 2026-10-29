@@ -186,6 +186,8 @@ pub struct Row {
     field_padding: Option<std::ops::Range<usize>>,
     /// The preview is an interactive `‹ value ›` selector cycled with Left/Right.
     pub preview_choice: bool,
+    /// The choice is grabbed (picker mode): drawn `▲ value ▼` with the cursor on it.
+    pub preview_grabbed: bool,
     /// Leading label characters drawn in the bright text colour (typed prefix).
     pub highlight: usize,
 }
@@ -234,6 +236,7 @@ impl Row {
             preview_group: 0,
             field_padding: None,
             preview_choice: false,
+            preview_grabbed: false,
             highlight: 0,
         }
     }
@@ -352,6 +355,11 @@ impl Row {
         self.preview_gap = 2;
         self
     }
+    /// Mark a choice row as grabbed by its picker.
+    pub fn grabbed(mut self, grabbed: bool) -> Self {
+        self.preview_grabbed = grabbed && self.preview_choice;
+        self
+    }
     pub fn has_reason(&self) -> bool {
         !self.preview_selected_only
             && !self.right_preview
@@ -378,6 +386,7 @@ impl Row {
             preview_group: 0,
             field_padding: None,
             preview_choice: false,
+            preview_grabbed: false,
             highlight: 0,
         }
     }
@@ -393,6 +402,9 @@ impl Row {
         back: bool,
         show_preview: bool,
     ) {
+        // A grabbed picker moves the row cursor onto the value.
+        let grabbed = self.preview_grabbed && selected && !back;
+        let selected = selected && !grabbed;
         if let Some((status, accent)) = &self.status {
             let status_width = UnicodeWidthStr::width(status.as_str());
             let start = self
@@ -573,7 +585,18 @@ impl Row {
             && (!self.preview_selected_only || (selected && !back))
             && let Some(start) = self.preview_position(canvas.width, x)
         {
-            self.paint_preview(canvas, start, y, preview, selected && !back);
+            if grabbed {
+                canvas.accent_text(
+                    start.saturating_sub(2),
+                    y,
+                    "●",
+                    Accent {
+                        bold: true,
+                        ..Accent::default()
+                    },
+                );
+            }
+            self.paint_preview(canvas, start, y, preview, selected && !back, grabbed);
         }
     }
     fn paint_preview(
@@ -583,17 +606,32 @@ impl Row {
         y: usize,
         preview: &str,
         selected: bool,
+        grabbed: bool,
     ) {
         if self.preview_choice {
+            let selected = selected || grabbed;
             let arrow = Cell {
-                fg: if selected { SECONDARY } else { MUTED },
+                fg: if grabbed {
+                    SELECTED
+                } else if selected {
+                    SECONDARY
+                } else {
+                    MUTED
+                },
+                bold: grabbed,
                 ..Cell::default()
             };
             let inner = preview
                 .trim_start_matches("‹ ")
                 .trim_end_matches(" ›")
                 .to_owned();
-            canvas.widget_text(x, y, "‹ ", arrow.clone(), false);
+            canvas.widget_text(
+                x,
+                y,
+                if grabbed { "▲ " } else { "‹ " },
+                arrow.clone(),
+                false,
+            );
             canvas.widget_text(
                 x + 2,
                 y,
@@ -608,7 +646,7 @@ impl Row {
             canvas.widget_text(
                 x + 2 + UnicodeWidthStr::width(inner.as_str()),
                 y,
-                " ›",
+                if grabbed { " ▼" } else { " ›" },
                 arrow,
                 false,
             );
@@ -1022,6 +1060,7 @@ impl Options {
                     y,
                     &text,
                     true,
+                    false,
                 );
             }
         }

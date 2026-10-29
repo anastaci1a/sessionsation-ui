@@ -146,6 +146,8 @@ struct Saved {
     popup_size: Option<(Page, crate::popup::Size)>,
 }
 pub struct App {
+    /// Preferences held when the inline value picker was entered (revert target).
+    picker: Option<Box<Preferences>>,
     navigation: crate::widgets::Navigation,
     pub manager: crate::management::Manager,
     pub page: Page,
@@ -239,6 +241,7 @@ impl App {
             auto_account: true,
             auto_space: true,
             dirty: true,
+            picker: None,
             pending_child: None,
             popup_size: None,
             status: crate::status::Status::default(),
@@ -453,8 +456,12 @@ impl App {
             ]),
             Page::Appearance => {
                 let mut rows = vec![
-                    Row::yes("Starfield").with_choice(self.prefs.starfield.label()),
-                    Row::yes("Brightness").with_choice(self.prefs.brightness.label()),
+                    Row::yes("Starfield")
+                        .with_choice(self.prefs.starfield.label())
+                        .grabbed(self.picker.is_some() && self.options.selected == 0),
+                    Row::yes("Brightness")
+                        .with_choice(self.prefs.brightness.label())
+                        .grabbed(self.picker.is_some() && self.options.selected == 1),
                 ];
                 for row in &mut rows {
                     row.preview_column = Some(2 + "Brightness".len() + 4);
@@ -462,7 +469,11 @@ impl App {
                 rows
             }
             Page::Directories => {
-                let mut rows = vec![Row::yes("Default directory").with_choice(self.mode_label())];
+                let mut rows = vec![
+                    Row::yes("Default directory")
+                        .with_choice(self.mode_label())
+                        .grabbed(self.picker.is_some()),
+                ];
                 rows.extend(settings_rows(vec![
                     (
                         Row::gate("Global root", self.prefs.mode == Mode::Global),
@@ -1049,6 +1060,25 @@ impl App {
                 _ => false,
             }
     }
+    /// Grab the selected choice: Up/Down preview values until committed or cancelled.
+    fn enter_picker(&mut self) {
+        self.picker = Some(Box::new(self.prefs.clone()));
+    }
+    /// Keys while a value is grabbed. Esc reverts; Left/Enter/Space commit.
+    fn picker_key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        match key.code {
+            KeyCode::Up | KeyCode::Down => self.cycle_choice(key.code == KeyCode::Up),
+            KeyCode::Left | KeyCode::Enter | KeyCode::Char(' ') => self.picker = None,
+            KeyCode::Esc => {
+                if let Some(saved) = self.picker.take() {
+                    self.prefs = *saved;
+                }
+            }
+            _ => {}
+        }
+        self.dirty = true;
+        vec![]
+    }
     fn cycle_choice(&mut self, previous: bool) {
         use crate::preferences::{Brightness, Starfield, cycle};
         match (&self.page, self.options.selected) {
@@ -1439,12 +1469,12 @@ impl App {
                 _ => self.push(Page::Directories, String::new()),
             },
             Page::Appearance => {
-                self.cycle_choice(false);
+                self.enter_picker();
                 vec![]
             }
             Page::Directories => match self.options.selected {
                 0 => {
-                    self.cycle_choice(false);
+                    self.enter_picker();
                     vec![]
                 }
                 1 => self.push(
@@ -1729,6 +1759,9 @@ impl App {
             }
             return vec![];
         }
+        if self.picker.is_some() {
+            return self.picker_key(key);
+        }
         match key.code {
             KeyCode::Esc => self.pop(),
             KeyCode::Enter => self.activate(),
@@ -1797,8 +1830,8 @@ impl App {
                 );
                 vec![]
             }
-            KeyCode::Left | KeyCode::Right if self.choice_row() => {
-                self.cycle_choice(key.code == KeyCode::Left);
+            KeyCode::Right if self.choice_row() => {
+                self.enter_picker();
                 vec![]
             }
             KeyCode::Left | KeyCode::Right if self.is_form() => {
@@ -2025,7 +2058,9 @@ New directories are created only when the session starts."
         canvas
     }
     fn control_tokens(&self) -> &'static [&'static str] {
-        if self.start_confirmation.is_some() || self.create_confirmation.is_some() {
+        if self.picker.is_some() {
+            &["▲/▼: Choose", "Enter: Set", "Esc: Cancel"]
+        } else if self.start_confirmation.is_some() || self.create_confirmation.is_some() {
             &["▲/▼: Choose", "Enter: Select", "Esc: Cancel"]
         } else if matches!(self.page, Page::Directory(_)) {
             if self.directory_ghost().is_empty() {
@@ -2126,6 +2161,7 @@ New directories are created only when the session starts."
             canvas.text(0, 1, &format!(" {title}"), bar, false);
         }
         if matches!(self.page, Page::Home | Page::Management) {
+            self.manager.band_base = self.terminal_background;
             self.manager.paint(canvas, footer);
             self.page = if self.manager.page == crate::management::Page::Home {
                 Page::Home
@@ -3270,6 +3306,54 @@ mod tests {
         );
     }
     #[test]
+    fn picker_esc_reverts_without_popping_and_left_reaches_back_arrow() {
+        use crate::preferences::Starfield;
+        let mut a = app();
+        a.page = Page::Appearance;
+        a.options.selected = 0;
+        assert_eq!(a.prefs.starfield, Starfield::Normal);
+        // Normal mode: Left reaches the back arrow, Right leaves it again.
+        key(&mut a, KeyCode::Left);
+        assert!(a.options.back && a.picker.is_none());
+        key(&mut a, KeyCode::Right);
+        assert!(!a.options.back && a.picker.is_none());
+        assert_eq!(a.prefs.starfield, Starfield::Normal);
+        // Picker mode: grabbed rendering and picker hints.
+        key(&mut a, KeyCode::Right);
+        assert!(a.rows()[0].preview_grabbed && !a.rows()[1].preview_grabbed);
+        assert_eq!(
+            a.control_tokens(),
+            ["▲/▼: Choose", "Enter: Set", "Esc: Cancel"]
+        );
+        key(&mut a, KeyCode::Down);
+        key(&mut a, KeyCode::Down);
+        assert_eq!(a.prefs.starfield, Starfield::Off);
+        assert_eq!(
+            a.options.selected, 0,
+            "Up/Down change the value, not the row"
+        );
+        key(&mut a, KeyCode::Right);
+        assert!(a.picker.is_some(), "Right does nothing in picker mode");
+        key(&mut a, KeyCode::Esc);
+        assert!(a.picker.is_none());
+        assert_eq!(a.prefs.starfield, Starfield::Normal, "Esc reverts");
+        assert_eq!(
+            a.page,
+            Page::Appearance,
+            "picker Esc does not leave the page"
+        );
+        assert!(!a.rows()[0].preview_grabbed);
+        // The grabbed row paints `▲ value ▼` and the cursor sits on the value.
+        key(&mut a, KeyCode::Right);
+        let c = a.paint(&mut Field::new(80, 24, 1), 4000, 80, 24);
+        let text: String = c.cells.iter().map(|c| c.glyph.as_str()).collect();
+        assert!(text.contains("▲ Normal ▼"));
+        key(&mut a, KeyCode::Esc);
+        let c = a.paint(&mut Field::new(80, 24, 1), 4000, 80, 24);
+        let text: String = c.cells.iter().map(|c| c.glyph.as_str()).collect();
+        assert!(text.contains("‹ Normal ›") && !text.contains("▲ Normal"));
+    }
+    #[test]
     fn settings_are_submenus_with_aligned_values_and_cycling_choices() {
         use crate::preferences::{Brightness, Starfield};
         let mut a = app();
@@ -3287,13 +3371,20 @@ mod tests {
         assert_eq!(rows[0].preview.as_deref(), Some("‹ Normal ›"));
         assert!(rows[0].preview_choice && rows[1].preview_choice);
         key(&mut a, KeyCode::Right);
-        assert_eq!(a.prefs.starfield, Starfield::Lively);
-        key(&mut a, KeyCode::Right);
-        assert_eq!(a.prefs.starfield, Starfield::Off);
-        assert!(!a.options.back, "Left/Right cycle instead of going back");
+        assert!(a.picker.is_some(), "Right enters the picker");
         key(&mut a, KeyCode::Down);
+        assert_eq!(a.prefs.starfield, Starfield::Lively);
+        key(&mut a, KeyCode::Down);
+        assert_eq!(a.prefs.starfield, Starfield::Off);
         key(&mut a, KeyCode::Left);
+        assert!(a.picker.is_none() && !a.options.back, "Left commits");
+        assert_eq!(a.prefs.starfield, Starfield::Off);
+        key(&mut a, KeyCode::Down);
+        key(&mut a, KeyCode::Enter);
+        key(&mut a, KeyCode::Up);
         assert_eq!(a.prefs.brightness, Brightness::Dim);
+        key(&mut a, KeyCode::Char(' '));
+        assert!(a.picker.is_none());
         // Off paints no stars at all; leaving the page saves.
         let c = a.paint(&mut Field::new(80, 24, 1967), 4000, 80, 24);
         assert!(
@@ -3311,6 +3402,8 @@ mod tests {
         assert_eq!(a.page, Page::Directories);
         assert_eq!(a.rows()[0].preview.as_deref(), Some("‹ Global ›"));
         key(&mut a, KeyCode::Right);
+        key(&mut a, KeyCode::Down);
+        key(&mut a, KeyCode::Enter);
         assert_eq!(a.prefs.mode, Mode::PerSpace);
         // Persisted beside the other preferences.
         let tmp = tempfile::tempdir().unwrap();
