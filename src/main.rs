@@ -822,8 +822,8 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           if app.request.as_ref().and_then(|r|r["request_id"].as_str()) != Some(id.as_str()) { continue; } match result {
            Ok(r)=>{if matches!(r["phase"].as_str(),Some("running"|"failed"|"cancelled"|"recovered"|"complete")){app.manager.launch_settled(&id);}match r["phase"].as_str().unwrap_or("uncertain") {
             "running" if !app.success=>{app.success=true;if app.launch_background {app.manager.note="Session is running; open Operations or Focus tab when ready.".into();app.prefs.last_account=app.request.as_ref().and_then(|r|r["account_id"].as_str().map(str::to_owned));next.push(Effect::Save);}else if let Some(tab)=r["tab_id"].as_str(){effects.focus(tab.into());}else{app.error="Session running; receipt has no tab identity. Esc closes.".into();}},
-            "failed" | "cancelled" | "recovered"=>{app.request=None;app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",&sessionsation_ui::messages::describe(r["detail"].as_str().unwrap_or("inspect launch status")));},
-            phase=>{app.error=format!("{}: {}",sessionsation_ui::messages::phase(phase),r["detail"].as_str().unwrap_or("waiting for confirmed handoff"));},
+            "failed" | "cancelled" | "recovered"=>{app.request=None;app.error=format!("Launch failed: {}. Esc closes; no automatic retry.",sessionsation_ui::messages::describe(r["detail"].as_str().unwrap_or("inspect launch status")).trim_end_matches('.'));},
+            phase=>{app.error=sessionsation_ui::messages::join(&sessionsation_ui::messages::phase(phase),r["detail"].as_str().unwrap_or("waiting for confirmed handoff"));},
            }},Err(e)=>{app.error=sessionsation_ui::app::reconciliation_message(&e);}
           }
           // The launch dialog already says this; the bottom lane does not repeat it.

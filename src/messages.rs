@@ -147,6 +147,20 @@ pub fn phase(value: &str) -> String {
         first.to_uppercase().collect::<String>() + chars.as_str()
     })
 }
+/// A status lead and its detail as one line: a lead that is already a sentence
+/// is followed by the detail as the next sentence, never by a colon (`.:`).
+pub fn join(lead: &str, detail: &str) -> String {
+    let lead = lead.trim_end();
+    let detail = detail.trim();
+    if detail.is_empty() {
+        return lead.to_owned();
+    }
+    if lead.ends_with(['.', '!', '?', '…']) {
+        format!("{lead} {detail}")
+    } else {
+        format!("{}: {detail}", lead.trim_end_matches(':'))
+    }
+}
 pub fn operation_phase(kind: &str, value: &str) -> String {
     if kind == "move_space" {
         return match value {
@@ -181,5 +195,12 @@ mod tests {
         assert_eq!(phase("unknown"), "Checking operation state");
         assert!(operation_phase("move_space", "dispatching").contains("keeps running"));
         assert!(!operation_phase("move_space", "admitted").contains("Launch"));
+        assert_eq!(
+            join(&phase("admitted"), "waiting"),
+            "Launch accepted; preparing its terminal. waiting"
+        );
+        assert_eq!(join("Preparing", "waiting"), "Preparing: waiting");
+        assert_eq!(join("Done.", ""), "Done.");
+        assert!(!join(&phase("uncertain"), "detail").contains(".:"));
     }
 }

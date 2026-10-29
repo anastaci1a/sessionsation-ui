@@ -1149,11 +1149,18 @@ impl App {
     fn enter_picker(&mut self) {
         self.picker = Some(Box::new(self.prefs.clone()));
     }
-    /// Keys while a value is grabbed. Esc reverts; Left/Enter/Space commit.
+    /// Keys while a value is grabbed. Esc reverts; Left/Enter/Space commit and
+    /// save at once, so a set value persists without leaving the page.
     fn picker_key(&mut self, key: KeyEvent) -> Vec<Effect> {
+        let mut effects = vec![];
         match key.code {
             KeyCode::Up | KeyCode::Down => self.cycle_choice(key.code == KeyCode::Up),
-            KeyCode::Left | KeyCode::Enter | KeyCode::Char(' ') => self.picker = None,
+            KeyCode::Left | KeyCode::Enter | KeyCode::Char(' ') if self.picker.take().is_some() => {
+                effects.push(Effect::Save);
+                if self.page == Page::Directories {
+                    effects.extend(self.revalidate());
+                }
+            }
             KeyCode::Esc => {
                 if let Some(saved) = self.picker.take() {
                     self.prefs = *saved;
@@ -1162,7 +1169,7 @@ impl App {
             _ => {}
         }
         self.dirty = true;
-        vec![]
+        effects
     }
     fn cycle_choice(&mut self, previous: bool) {
         use crate::preferences::step;
@@ -2370,7 +2377,15 @@ New directories are created only when the session starts."
     }
     fn paint_choices(&mut self, canvas: &mut Canvas, top: usize, footer: usize, hints: &[String]) {
         let rows = self.rows();
-        let has_note = !self.error.is_empty()
+        // The launch dialog already says this; the bottom lane does not repeat it.
+        let repeated = self.launch_dialog
+            && self
+                .manager
+                .dialog
+                .as_ref()
+                .is_some_and(|d| d.shows(&self.error));
+        let error_shown = !self.error.is_empty() && !repeated;
+        let has_note = error_shown
             || self.pending
             || self.page == Page::Launching
             || self.page == Page::Summary && self.resume.is_none() && !self.manager.sessions_known
@@ -2431,8 +2446,10 @@ New directories are created only when the session starts."
             );
         }
 
-        let note = if !self.error.is_empty() {
+        let note = if error_shown {
             self.error.clone()
+        } else if self.launch_dialog && self.manager.dialog.is_some() {
+            String::new()
         } else if self.page == Page::Summary
             && self.resume.is_none()
             && !self.manager.sessions_known
@@ -3606,6 +3623,28 @@ mod tests {
             matches!(key(&mut a, KeyCode::Enter).as_slice(), [Effect::Start(r)]
             if r["directory"]["create"] == json!(["/projects/new-a"]))
         );
+    }
+    #[test]
+    fn setting_a_value_with_enter_saves_at_once() {
+        use crate::preferences::Starfield;
+        let mut a = app();
+        a.page = Page::Appearance;
+        a.options.selected = 0;
+        key(&mut a, KeyCode::Enter);
+        assert!(a.picker.is_some());
+        assert!(
+            key(&mut a, KeyCode::Down).is_empty(),
+            "previews are not saved"
+        );
+        let effects = key(&mut a, KeyCode::Enter);
+        assert!(matches!(effects.as_slice(), [Effect::Save]), "Enter saves");
+        assert_eq!(a.prefs.starfield, Starfield::Sparse);
+        assert_eq!(a.page, Page::Appearance, "still on the page");
+        // Esc reverts and saves nothing.
+        key(&mut a, KeyCode::Enter);
+        key(&mut a, KeyCode::Down);
+        assert!(key(&mut a, KeyCode::Esc).is_empty());
+        assert_eq!(a.prefs.starfield, Starfield::Sparse);
     }
     #[test]
     fn picker_esc_reverts_without_popping_and_left_reaches_back_arrow() {
