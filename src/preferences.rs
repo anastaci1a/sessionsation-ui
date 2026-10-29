@@ -161,6 +161,32 @@ impl GeminiSpinner {
         }
     }
 }
+/// Permissions of sessions the popup starts (Settings > New session permissions).
+/// YOLO (top, default) runs providers without approval prompts; Default keeps the
+/// providers' own prompts. Sent as the launch request's `permissions` field.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NewSessionPermissions {
+    #[default]
+    Yolo,
+    Default,
+}
+impl NewSessionPermissions {
+    pub const ALL: [Self; 2] = [Self::Yolo, Self::Default];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Yolo => "YOLO",
+            Self::Default => "Default",
+        }
+    }
+    /// The backend's `permissions` request value.
+    pub fn request_value(self) -> &'static str {
+        match self {
+            Self::Yolo => "yolo",
+            Self::Default => "default",
+        }
+    }
+}
 /// The chosen busy spinner of each provider.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Spinners {
@@ -207,6 +233,8 @@ pub struct Preferences {
     pub codex_spinner: CodexSpinner,
     #[serde(default, deserialize_with = "lenient")]
     pub gemini_spinner: GeminiSpinner,
+    #[serde(default, deserialize_with = "lenient")]
+    pub new_session_permissions: NewSessionPermissions,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -233,6 +261,7 @@ impl Default for Preferences {
             claude_spinner: ClaudeSpinner::default(),
             codex_spinner: CodexSpinner::default(),
             gemini_spinner: GeminiSpinner::default(),
+            new_session_permissions: NewSessionPermissions::default(),
             extra: serde_json::Map::new(),
         }
     }
@@ -413,6 +442,34 @@ mod spinner_tests {
         assert_eq!(old.codex_spinner, CodexSpinner::FillPulse);
         assert_eq!(old.gemini_spinner, GeminiSpinner::Twinkle);
         assert_eq!(old.claude_spinner, ClaudeSpinner::Claude);
+        assert_eq!(old.new_session_permissions, NewSessionPermissions::Yolo);
+    }
+    #[test]
+    fn new_session_permissions_default_to_yolo_and_persist() {
+        assert_eq!(NewSessionPermissions::ALL[0], NewSessionPermissions::Yolo);
+        assert_eq!(
+            *NewSessionPermissions::ALL.last().unwrap(),
+            NewSessionPermissions::Default
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("prefs.json");
+        let p = Preferences {
+            new_session_permissions: NewSessionPermissions::Default,
+            ..Default::default()
+        };
+        p.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("\"new_session_permissions\": \"default\""),
+            "{text}"
+        );
+        assert_eq!(
+            Preferences::load(&path).unwrap().new_session_permissions,
+            NewSessionPermissions::Default
+        );
+        let unknown: NewSessionPermissions =
+            serde_json::from_value(serde_json::json!("ask")).unwrap_or_default();
+        assert_eq!(unknown, NewSessionPermissions::Yolo);
     }
     #[test]
     fn unknown_fields_and_choices_from_newer_builds_load_and_survive_a_save() {

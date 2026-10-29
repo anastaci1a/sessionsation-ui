@@ -3,8 +3,8 @@ use crate::{
     directory::Listing,
     draft::{Directory, Draft, Space, valid_name},
     preferences::{
-        Brightness, ClaudeSpinner, CodexSpinner, GeminiSpinner, Mode, Preferences, Starfield,
-        choice_arrow,
+        Brightness, ClaudeSpinner, CodexSpinner, GeminiSpinner, Mode, NewSessionPermissions,
+        Preferences, Starfield, choice_arrow,
     },
     render::{Accent, Canvas, Cell, Field},
     widgets::{NAME_MAX_CHARS, Options, Row, TextInput, UNSET},
@@ -134,6 +134,8 @@ pub enum Page {
     Config,
     Appearance,
     Spinners,
+    /// Settings > Permissions: the New session permissions picker.
+    Permissions,
     Directories,
     Roots,
     Accounts,
@@ -403,7 +405,7 @@ impl App {
         self.picker.is_some()
             && matches!(
                 self.page,
-                Page::Appearance | Page::Spinners | Page::Directories
+                Page::Appearance | Page::Spinners | Page::Permissions | Page::Directories
             )
     }
     pub fn rows(&self) -> Vec<Row> {
@@ -473,26 +475,49 @@ impl App {
                     })
                     .collect()
             }
-            Page::Config => settings_rows(vec![
-                (
-                    Row::yes("Stars"),
-                    format!(
-                        "{} · {}",
-                        self.prefs.starfield.label(),
-                        self.prefs.brightness.label()
+            Page::Config => {
+                let mut rows = settings_rows(vec![
+                    (
+                        Row::yes("Stars"),
+                        format!(
+                            "{} · {}",
+                            self.prefs.starfield.label(),
+                            self.prefs.brightness.label()
+                        ),
                     ),
-                ),
-                (Row::yes("Default directories"), self.mode_label().into()),
-                (
-                    Row::yes("Spinners"),
-                    format!(
-                        "{} · {} · {}",
-                        self.prefs.claude_spinner.label(),
-                        self.prefs.codex_spinner.label(),
-                        self.prefs.gemini_spinner.label()
+                    (Row::yes("Default directories"), self.mode_label().into()),
+                    (
+                        Row::yes("Spinners"),
+                        format!(
+                            "{} · {} · {}",
+                            self.prefs.claude_spinner.label(),
+                            self.prefs.codex_spinner.label(),
+                            self.prefs.gemini_spinner.label()
+                        ),
                     ),
-                ),
-            ]),
+                    (
+                        Row::yes("Permissions"),
+                        self.prefs.new_session_permissions.label().into(),
+                    ),
+                ]);
+                align_pickers(&mut rows);
+                rows
+            }
+            Page::Permissions => {
+                let mut rows = vec![
+                    Row::yes("New session permissions")
+                        .with_picker(
+                            self.prefs.new_session_permissions.label(),
+                            choice_arrow(
+                                &NewSessionPermissions::ALL,
+                                self.prefs.new_session_permissions,
+                            ),
+                        )
+                        .grabbed(self.picker.is_some() && self.options.selected == 0),
+                ];
+                align_pickers(&mut rows);
+                rows
+            }
             Page::Appearance => {
                 let mut rows = vec![
                     Row::yes("Starfield")
@@ -765,7 +790,12 @@ impl App {
         self.revision += 1;
         let save = matches!(
             self.page,
-            Page::Config | Page::Roots | Page::Appearance | Page::Spinners | Page::Directories
+            Page::Config
+                | Page::Roots
+                | Page::Appearance
+                | Page::Spinners
+                | Page::Permissions
+                | Page::Directories
         );
         if self.page == Page::Accounts {
             self.switch = None;
@@ -851,12 +881,21 @@ impl App {
                 request["directory"] =
                     json!({"path":path,"create":create,"confirmed_existing":confirmed});
             }
+            self.add_permissions(&mut request);
             return Some(request);
         }
-        Some(
-            json!({"version":1,"request_id":uuid::Uuid::new_v4().to_string(),"account_id":self.draft.account.as_ref()?,"name":self.draft.name,"host":self.host,"space":space,"directory":{"path":path,"create":create,"confirmed_existing":confirmed}}),
-        )
+        let mut request = json!({"version":1,"request_id":uuid::Uuid::new_v4().to_string(),"account_id":self.draft.account.as_ref()?,"name":self.draft.name,"host":self.host,"space":space,"directory":{"path":path,"create":create,"confirmed_existing":confirmed}});
+        self.add_permissions(&mut request);
+        Some(request)
     }
+    /// Settings > New session permissions, sent only to a backend that accepts the
+    /// field (contract revision 19); an older one keeps its own default.
+    fn add_permissions(&self, request: &mut Value) {
+        if self.manager.capabilities["launch_permissions"]["request_field"] == "permissions" {
+            request["permissions"] = json!(self.prefs.new_session_permissions.request_value());
+        }
+    }
+
     pub fn validation(&mut self, revision: u64, result: Result<(), String>) {
         if revision != self.draft.revision {
             return;
@@ -1141,6 +1180,7 @@ impl App {
             && match self.page {
                 Page::Appearance => self.options.selected < 2,
                 Page::Spinners => self.options.selected < 3,
+                Page::Permissions => self.options.selected == 0,
                 Page::Directories => self.options.selected == 0,
                 _ => false,
             }
@@ -1189,6 +1229,13 @@ impl App {
             }
             (Page::Spinners, 2) => {
                 self.prefs.gemini_spinner = step(&GeminiSpinner::ALL, self.prefs.gemini_spinner, up)
+            }
+            (Page::Permissions, 0) => {
+                self.prefs.new_session_permissions = step(
+                    &NewSessionPermissions::ALL,
+                    self.prefs.new_session_permissions,
+                    up,
+                )
             }
             (Page::Directories, 0) => self.prefs.mode = step(&MODES, self.prefs.mode, up),
             _ => {}
@@ -1630,9 +1677,10 @@ impl App {
             Page::Config => match self.options.selected {
                 0 => self.push(Page::Appearance, String::new()),
                 1 => self.push(Page::Directories, String::new()),
-                _ => self.push(Page::Spinners, String::new()),
+                2 => self.push(Page::Spinners, String::new()),
+                _ => self.push(Page::Permissions, String::new()),
             },
-            Page::Appearance | Page::Spinners => {
+            Page::Appearance | Page::Spinners | Page::Permissions => {
                 self.enter_picker();
                 vec![]
             }
@@ -2294,6 +2342,7 @@ New directories are created only when the session starts."
             Page::Config => "Settings",
             Page::Appearance => "Stars",
             Page::Spinners => "Spinners",
+            Page::Permissions => "Permissions",
             Page::Directories => "Default directories",
             Page::Roots => "Space roots",
             Page::Accounts => "Choose account",
@@ -3699,6 +3748,48 @@ mod tests {
         assert!(text.contains("Starfield  › Normal"));
     }
     #[test]
+    fn new_session_permissions_picker_lists_yolo_first_and_persists() {
+        let mut a = app();
+        a.page = Page::Config;
+        assert_eq!(a.rows()[3].label, "Permissions");
+        assert_eq!(a.rows()[3].preview.as_deref(), Some("YOLO"));
+        a.options.selected = 3;
+        a.activate();
+        assert_eq!(a.page, Page::Permissions);
+        assert_eq!(a.rows()[0].label, "New session permissions");
+        assert_eq!(a.rows()[0].preview.as_deref(), Some("↓ YOLO"));
+        key(&mut a, KeyCode::Enter);
+        assert_eq!(a.page, Page::Permissions, "the picker is grabbed in place");
+        assert!(a.rows()[0].preview_grabbed);
+        key(&mut a, KeyCode::Up);
+        assert_eq!(
+            a.prefs.new_session_permissions,
+            NewSessionPermissions::Yolo,
+            "YOLO is the top"
+        );
+        key(&mut a, KeyCode::Down);
+        assert_eq!(
+            a.prefs.new_session_permissions,
+            NewSessionPermissions::Default
+        );
+        assert_eq!(a.rows()[0].preview.as_deref(), Some("↑ Default"));
+        key(&mut a, KeyCode::Esc);
+        assert_eq!(
+            a.prefs.new_session_permissions,
+            NewSessionPermissions::Yolo,
+            "Esc reverts"
+        );
+        key(&mut a, KeyCode::Enter);
+        key(&mut a, KeyCode::Down);
+        let effects = key(&mut a, KeyCode::Enter);
+        assert!(effects.iter().any(|e| matches!(e, Effect::Save)));
+        assert_eq!(
+            a.prefs.new_session_permissions,
+            NewSessionPermissions::Default
+        );
+        assert!(!a.rows()[0].preview_grabbed);
+    }
+    #[test]
     fn spinner_pickers_cycle_preview_live_and_persist() {
         use crate::preferences::{ClaudeSpinner, CodexSpinner, GeminiSpinner};
         let mut a = app();
@@ -4770,6 +4861,13 @@ mod resume_tests {
         assert!(request.get("confirm_unfinished").is_none());
         a.resume.as_mut().unwrap()["confirm_unfinished"] = json!(true);
         assert_eq!(a.creation_request().unwrap()["confirm_unfinished"], true);
+        // New session permissions: sent only once the backend negotiates the field.
+        assert!(a.creation_request().unwrap().get("permissions").is_none());
+        a.manager.capabilities["launch_permissions"] = json!({"request_field":"permissions"});
+        assert_eq!(a.creation_request().unwrap()["permissions"], "yolo");
+        a.prefs.new_session_permissions = NewSessionPermissions::Default;
+        assert_eq!(a.creation_request().unwrap()["permissions"], "default");
+        a.prefs.new_session_permissions = NewSessionPermissions::Yolo;
         assert_eq!(a.draft.directory.path(), Some(Path::new("/saved/path")));
         a.manager.capabilities["resume"]["directory_selection"] = json!(true);
         assert!(a.rows()[3].enabled);

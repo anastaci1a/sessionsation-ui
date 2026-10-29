@@ -516,6 +516,13 @@ file are kept on save and unknown values read as the default, so an older build
 still opens it. **Default directories** chooses global or per-Space defaults and
 holds the roots; its values share one column. Leave
 unset clears that default and its pending creation plan.
+**Permissions** holds the **New session permissions** selector: **YOLO** (top, the
+default) starts new
+and resumed sessions without approval prompts (Codex approval `never` with full
+access, Claude `--dangerously-skip-permissions`, Gemini `--approval-mode yolo`);
+**Default** keeps each provider's own prompts. It is sent as the launch request's
+`permissions` only to a backend that negotiates it (contract revision 19); an older
+backend uses its own default.
 The session-directory picker retains its two top actions. Configuration uses short
 labels; path previews follow the shared hover-only, list-wide fit rule.
 
