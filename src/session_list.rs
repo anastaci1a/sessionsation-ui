@@ -664,15 +664,25 @@ pub fn paint_with(
         let y = 3 + index - options.scroll;
         let selected = options.selected == index && !options.back;
         let mut x = left + 2 + name_width;
+        // One left-to-right wave over name, icon and account; the selected row
+        // at full brightness, the others at the dim list level.
+        let sweep_level = if selected { 1000 } else { 600 };
+        let sweep_origin = left + 2;
+        let account_rest = if show_accounts {
+            let tag = account_tag(session);
+            UnicodeWidthStr::width(tag.split_once(' ').map_or("", |(_, r)| r))
+        } else {
+            0
+        };
+        let sweep_span = name_width + 2 + if show_accounts { 2 + account_rest } else { 0 };
         if idle(session) {
-            let origin = left + 2;
             canvas.sweep_recolor(
-                origin,
+                sweep_origin,
                 y,
                 name_width,
-                origin,
-                name_width + 2,
-                level(options.back),
+                sweep_origin,
+                sweep_span,
+                sweep_level,
             );
         }
         if show_accounts {
@@ -715,7 +725,14 @@ pub fn paint_with(
                 false,
             );
             if idle(session) {
-                canvas.sweep_recolor(x + 1, y, 1, left + 2, name_width + 2, level(options.back));
+                canvas.sweep_recolor(
+                    x + 1,
+                    y,
+                    2 + account_rest,
+                    sweep_origin,
+                    sweep_span,
+                    sweep_level,
+                );
             }
             x += columns;
         }
@@ -1058,7 +1075,7 @@ mod tests {
         let x = |line: &str, glyph: char| line.chars().position(|g| g == glyph).unwrap();
         assert_eq!(x(&busy, '⠙'), x(&saved, '⏣'));
         assert_eq!(x(&busy, '⠙'), x(&idle, '✻'));
-        let tag = &c.cells[4 * 100 + x(&idle, '✻') + 2];
+        let tag = &c.cells[6 * 100 + x(&saved, '⏣') + 2];
         assert_eq!(tag.fg, MUTED);
         assert!(!tag.bold);
         assert!(!c.cells[3 * 100 + x(&busy, '⠙')].bold);
@@ -1136,6 +1153,38 @@ mod tests {
         let theme = c.theme.clone().unwrap();
         let ends: Vec<_> = (0..60).map(|o| theme.idle_sweep(o, 20)).collect();
         assert!(ends.iter().any(|c| *c != ends[0]));
+    }
+    #[test]
+    fn idle_sweep_covers_account_and_dims_when_unselected() {
+        let sessions = sessions();
+        let mut field = crate::render::Field::new(100, 20, 1967);
+        let paint_sel = |field: &mut crate::render::Field, selected: usize| {
+            let mut c = field.paint(5000);
+            let mut o = Options {
+                selected,
+                ..Options::default()
+            };
+            paint(&mut c, &mut o, &sessions, true, 18, 62, 19);
+            c
+        };
+        let sel = paint_sel(&mut field, 1);
+        let unsel = paint_sel(&mut field, 0);
+        let line = text(&sel, 4);
+        let icon = line.chars().position(|g| g == '✻').unwrap();
+        let account = icon + 2..icon + 6;
+        for x in account.clone() {
+            assert_ne!(tint_of(&sel, 4, x), MUTED);
+            assert_ne!(tint_of(&sel, 4, x), SECONDARY);
+        }
+        let name = line.chars().position(|g| g == 'd').unwrap();
+        for x in (name..name + 4).chain(icon..icon + 1).chain(account) {
+            let (a, b) = (tint_of(&sel, 4, x), tint_of(&unsel, 4, x));
+            assert!(
+                b.iter().map(|n| u32::from(*n)).sum::<u32>()
+                    < a.iter().map(|n| u32::from(*n)).sum::<u32>(),
+                "x={x} {a:?} {b:?}"
+            );
+        }
     }
     #[test]
     fn row_icon_frames_follow_the_provider_while_busy() {
