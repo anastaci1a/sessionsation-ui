@@ -296,6 +296,21 @@ Restore reverses deregistration. Delete removes local account files and credenti
 while preserving saved/archived conversations. The upstream provider account is
 unchanged. Both confirmations require the displayed friendly provider-name label.
 
+Gemini accounts choose a sign-in mode from the backend's ordered `auth_modes`
+(`api capabilities`, contract revision 21). Add (after `account add`) and Log in open
+a choice dialog listing them in backend order (Google login, Google Workspace login,
+API key). An option the backend marks `available: false` is drawn struck through,
+cannot be chosen, and shows the backend `reason` as a dim parenthetical only while the
+cursor is on it; availability and reason are never hard-coded. A Google option runs
+`account auth gemini:NAME --mode google` and then the returned login plan like any
+login. API key opens a masked field (each character drawn as `•`, never in clear) and
+runs `account auth gemini:NAME --mode api-key --key-stdin`; the key travels only as
+stdin JSON `{"api_key": …}`, is cleared from the dialog when sent, and is excluded from
+arguments, `Debug` output and traces. The result reports valid, rejected (backend
+reason) or saved-but-unverified (with its code). Account Details show `Auth` (Google or
+API key) and, for API key, whether a key is saved. A backend without `auth_modes`
+keeps the plain Login confirmation.
+
 Delete opens an intent preview without scanning account files. The CLI checks
 activity, preserves history and deletes data only after confirmation. Active
 sessions block deletion. Progress offers Continue in background, which detaches

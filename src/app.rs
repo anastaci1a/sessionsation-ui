@@ -154,6 +154,8 @@ pub enum Effect {
     Save,
     Exit,
     Api(u64, Vec<String>),
+    /// Request with secret stdin JSON; `Debug` and traces never show the secret.
+    ApiInput(u64, Vec<String>, crate::management::Secret),
     FocusSession(Value, bool),
     LaunchLogin(Vec<String>),
     /// Create confirmed settings folders in order (parents first).
@@ -287,6 +289,9 @@ impl App {
             use crate::management::Intent;
             match intent {
                 Intent::Api(id, args) => effects.push(Effect::Api(id, args)),
+                Intent::ApiInput(id, args, secret) => {
+                    effects.push(Effect::ApiInput(id, args, secret))
+                }
                 Intent::LaunchLogin(argv) => effects.push(Effect::LaunchLogin(argv)),
                 Intent::New => {
                     // A launch still in progress keeps running; another Start queues
@@ -2535,6 +2540,23 @@ New directories are created only when the session starts."
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn secret_api_effects_never_show_the_secret_in_debug_or_args() {
+        let secret = crate::management::Secret(json!({"api_key":"AIzaSECRETkey"}));
+        let effect = Effect::ApiInput(
+            3,
+            vec!["account".into(), "auth".into(), "gemini:a".into()],
+            secret.clone(),
+        );
+        assert!(!format!("{effect:?}").contains("SECRET"));
+        assert!(
+            !format!(
+                "{:?}",
+                crate::management::Intent::ApiInput(3, vec![], secret)
+            )
+            .contains("SECRET")
+        );
+    }
     #[test]
     fn account_picker_opens_on_current_or_default_and_preserves_identity() {
         for current in [None, Some("codex:b")] {

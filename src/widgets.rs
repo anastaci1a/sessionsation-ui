@@ -10,7 +10,7 @@ pub const UNSET: &str = "not set";
 pub const NAME_MAX_CHARS: usize = 30;
 pub use crate::navigation::{Navigation, SelectionNavigation};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct TextInput {
     pub value: String,
     /// UTF-8 byte offset at a grapheme boundary.
@@ -18,7 +18,25 @@ pub struct TextInput {
     pub max_chars: Option<usize>,
     /// Faint completion drawn after the value while the cursor is at its end.
     pub ghost: String,
+    /// Secret input: each grapheme is drawn as a mask character, never the text.
+    pub secret: bool,
 }
+/// Debug output redacts secret input so a dialog or intent dump never holds it.
+impl std::fmt::Debug for TextInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("TextInput");
+        if self.secret {
+            s.field("value", &"<redacted>");
+        } else {
+            s.field("value", &self.value);
+        }
+        s.field("cursor", &self.cursor)
+            .field("max_chars", &self.max_chars)
+            .field("secret", &self.secret)
+            .finish()
+    }
+}
+const SECRET_MASK: &str = "•";
 impl TextInput {
     pub fn new(value: String) -> Self {
         let cursor = value.len();
@@ -27,6 +45,23 @@ impl TextInput {
             cursor,
             max_chars: None,
             ghost: String::new(),
+            secret: false,
+        }
+    }
+    pub fn secret(mut self) -> Self {
+        self.secret = true;
+        self
+    }
+    /// What is drawn for a secret input: one mask per grapheme, cursor preserved.
+    fn masked(&self) -> Self {
+        let before = self.value[..self.cursor].graphemes(true).count();
+        let total = self.value.graphemes(true).count();
+        Self {
+            value: SECRET_MASK.repeat(total),
+            cursor: SECRET_MASK.len() * before,
+            max_chars: None,
+            ghost: String::new(),
+            secret: false,
         }
     }
     pub fn limited(mut self, max_chars: usize) -> Self {
@@ -103,6 +138,11 @@ impl TextInput {
     ) {
         if width < 3 {
             return;
+        }
+        if self.secret {
+            return self
+                .masked()
+                .paint_focused(canvas, x, y, width, valid, focused);
         }
         let style = Cell {
             fg: if valid { [238; 3] } else { [215, 0, 0] },
@@ -444,7 +484,7 @@ impl Row {
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, selected: bool, back: bool) {
         self.paint_with_preview(canvas, x, y, selected, back, true);
     }
-    fn paint_with_preview(
+    pub(crate) fn paint_with_preview(
         &self,
         canvas: &mut Canvas,
         x: usize,
@@ -659,7 +699,7 @@ impl Row {
         }
     }
     #[allow(clippy::too_many_arguments)]
-    fn paint_preview(
+    pub(crate) fn paint_preview(
         &self,
         canvas: &mut Canvas,
         x: usize,

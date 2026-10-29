@@ -28,6 +28,8 @@ pub enum Page {
 #[derive(Clone, Debug)]
 pub enum Intent {
     Api(u64, Vec<String>),
+    /// A request whose stdin JSON carries a secret; the secret is never logged.
+    ApiInput(u64, Vec<String>, Secret),
     New,
     Settings,
     Resume(Value),
@@ -36,6 +38,23 @@ pub enum Intent {
     /// Run a backend login plan in a HERDR pane; the plan is never logged.
     LaunchLogin(Vec<String>),
     Exit,
+}
+/// Stdin JSON for a backend request that carries a secret. It never appears in
+/// arguments, `Debug` output or traces.
+#[derive(Clone, PartialEq)]
+pub struct Secret(pub Value);
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(<redacted>)")
+    }
+}
+/// One Gemini sign-in option as the backend lists it in `auth_modes`.
+#[derive(Clone, Debug)]
+struct AuthChoice {
+    mode: String,
+    label: String,
+    available: bool,
+    reason: Option<String>,
 }
 /// Where a session is placed: an existing Space by id, or a Space to create by label.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,6 +87,8 @@ enum Purpose {
     LiveSteering(String),
     Limits(String),
     Mutation,
+    /// Gemini API-key save and validation (secret stdin, up to ~15 s).
+    AuthKey(String),
     LoginPoll(String),
     Observe(String),
     ActionCheck(Value, crate::session_list::Action),
@@ -81,6 +102,10 @@ enum Form {
     AddProvider(Vec<&'static str>),
     Add(String),
     Login(String),
+    /// Gemini sign-in choice for an account, in backend order.
+    GeminiAuth(String, Vec<AuthChoice>),
+    /// Masked API-key entry for a Gemini account.
+    GeminiKey(String),
     LoginWait(String),
     AccountRename(String),
     Limits(String),
@@ -425,6 +450,24 @@ fn usage_lines(a: &Account, now: i64) -> Vec<String> {
         ),
         ("Status", usage.status.clone()),
     ];
+    // Gemini sign-in mode and key presence exactly as the backend publishes them.
+    if a.provider() == "gemini"
+        && let Some(mode) = a.details.get("auth_mode").and_then(Value::as_str)
+    {
+        let api_key = mode == "api_key";
+        facts.push((
+            "Auth",
+            if api_key {
+                "API key".into()
+            } else {
+                "Google".into()
+            },
+        ));
+        if api_key && let Some(present) = a.details.get("api_key_present").and_then(Value::as_bool)
+        {
+            facts.push(("API key", if present { "saved" } else { "missing" }.into()));
+        }
+    }
     // The account home exactly as the backend publishes it; never derived here.
     if let Some(home) = a
         .details
@@ -1080,7 +1123,147 @@ impl Manager {
             Self::details_layout(d);
         }
     }
+    /// The backend's ordered Gemini sign-in options; `None` for an older backend
+    /// that does not publish `auth_modes` (the plain login flow then applies).
+    fn gemini_auth_modes(&self) -> Option<Vec<AuthChoice>> {
+        let modes = self.capabilities["providers"]
+            .as_array()?
+            .iter()
+            .find(|p| p["id"] == "gemini")?["auth_modes"]
+            .as_array()?;
+        let choices: Vec<AuthChoice> = modes
+            .iter()
+            .filter_map(|m| {
+                Some(AuthChoice {
+                    mode: m["mode"].as_str()?.to_owned(),
+                    label: clean(m["label"].as_str()?),
+                    available: m["available"] == true,
+                    reason: m["reason"]
+                        .as_str()
+                        .map(clean)
+                        .filter(|r| !r.trim().is_empty()),
+                })
+            })
+            .collect();
+        (!choices.is_empty()).then_some(choices)
+    }
+    /// Gemini sign-in choice. Unavailable options are struck through, cannot be
+    /// chosen, and show the backend's reason only while the cursor is on them.
+    fn show_gemini_auth(&mut self, key: &str, choices: Vec<AuthChoice>) {
+        let mut buttons: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
+        buttons.push("Cancel");
+        self.show(
+            "Gemini login",
+            vec![format!("Choose how {} signs in.", account_label(key))],
+            &buttons,
+            Form::GeminiAuth(key.to_owned(), choices.clone()),
+        );
+        let d = self.dialog.as_mut().unwrap();
+        for (row, choice) in d.buttons.iter_mut().zip(&choices) {
+            let mut gated = Row::gate(choice.label.as_str(), choice.available);
+            if let (false, Some(reason)) = (choice.available, &choice.reason) {
+                gated = gated.with_preview(format!("({reason})"));
+                gated.preview_fg = crate::widgets::MUTED;
+            }
+            *row = gated;
+        }
+        d.selected = choices.iter().position(|c| c.available).unwrap_or(0);
+        d.separate_cancel();
+    }
+    fn show_gemini_key(&mut self, key: &str) {
+        self.show(
+            "Gemini API key",
+            vec![format!(
+                "Enter the API key for {}. It is sent to the CLI over stdin and is never shown or logged.",
+                account_label(key)
+            )],
+            &["Save key", "Cancel"],
+            Form::GeminiKey(key.to_owned()),
+        );
+        let d = self.dialog.as_mut().unwrap();
+        d.separate_cancel();
+        d.fields
+            .push(Field::new("API key", "").validated(Rule::Required).secret());
+    }
+    /// Send the key through stdin only, then drop it from the dialog state.
+    fn submit_gemini_key(&mut self, key: &str, secret: String) -> Vec<Intent> {
+        let args = strings(&["account", "auth", key, "--mode", "api-key", "--key-stdin"]);
+        let mut progress = Dialog::progress("Verifying API key");
+        progress.body = vec![
+            format!(
+                "Saving and verifying the API key for {}…",
+                account_label(key)
+            ),
+            "This can take up to 15 seconds.".into(),
+        ];
+        progress.size = self.dialog.as_ref().and_then(|d| d.size);
+        // The entry dialog (and its field) is replaced; nothing keeps the clear text.
+        self.dialog = Some(progress);
+        self.form = Form::Progress;
+        self.sequence += 1;
+        self.pending
+            .insert(self.sequence, Purpose::AuthKey(key.to_owned()));
+        self.foreground = Some(self.sequence);
+        vec![Intent::ApiInput(
+            self.sequence,
+            args,
+            Secret(json!({ "api_key": secret })),
+        )]
+    }
+    fn gemini_key_checked(&mut self, key: &str, value: &Value, shown: bool) {
+        let validation = &value["validation"];
+        let code = validation["code"]
+            .as_str()
+            .map(clean)
+            .filter(|c| !c.is_empty());
+        let reason = validation["reason"]
+            .as_str()
+            .map(clean)
+            .filter(|r| !r.is_empty());
+        let (title, body) = match validation["state"].as_str() {
+            Some("valid") => (
+                "API key saved",
+                vec![format!(
+                    "The Gemini API key for {} was saved and verified.",
+                    account_label(key)
+                )],
+            ),
+            Some("auth_failed") => (
+                "API key rejected",
+                vec![
+                    format!(
+                        "Gemini did not accept the API key for {}.",
+                        account_label(key)
+                    ),
+                    reason
+                        .or(code)
+                        .unwrap_or_else(|| "The key is invalid.".into()),
+                ],
+            ),
+            _ => (
+                "API key saved",
+                vec![
+                    format!(
+                        "The API key for {} is saved but could not be verified{}.",
+                        account_label(key),
+                        code.map(|c| format!(" ({c})")).unwrap_or_default()
+                    ),
+                    reason.unwrap_or_else(|| "Try the account again later.".into()),
+                ],
+            ),
+        };
+        if shown {
+            self.show(title, body, &["Close"], Form::None);
+        } else {
+            self.note = body.join(" ");
+        }
+    }
     fn show_login(&mut self, key: &str) {
+        if self.provider_of(key) == "gemini"
+            && let Some(choices) = self.gemini_auth_modes()
+        {
+            return self.show_gemini_auth(key, choices);
+        }
         self.show(
             "Login",
             vec![format!("Start provider login for {key}?")],
@@ -3556,6 +3739,27 @@ impl Manager {
             self.dismiss();
             return vec![];
         }
+        if let Form::GeminiAuth(key, choices) = self.form.clone() {
+            self.dialog = None;
+            self.form = Form::None;
+            match choices.get(button) {
+                Some(c) if c.available && c.mode == "google" => {
+                    return self.mutate(strings(&["account", "auth", &key, "--mode", "google"]));
+                }
+                Some(c) if c.available && c.mode == "api_key" => self.show_gemini_key(&key),
+                _ => {}
+            }
+            return vec![];
+        }
+        if let Form::GeminiKey(key) = self.form.clone() {
+            if button != 0 {
+                self.dialog = None;
+                self.form = Form::None;
+                return vec![];
+            }
+            let secret = std::mem::take(&mut self.dialog.as_mut().unwrap().fields[0].input.value);
+            return self.submit_gemini_key(&key, secret);
+        }
         if let Form::AddProvider(providers) = self.form.clone() {
             self.dialog = None;
             self.form = Form::None;
@@ -3649,7 +3853,7 @@ impl Manager {
                 )];
             }
             Form::Confirm(args) => args,
-            Form::AddProvider(_) => return vec![],
+            Form::AddProvider(_) | Form::GeminiAuth(..) | Form::GeminiKey(_) => return vec![],
             Form::Add(provider) => {
                 let name = value(0);
                 if name.is_empty()
@@ -3858,6 +4062,14 @@ impl Manager {
         };
         match purpose {
             Purpose::ActionCheck(..) | Purpose::LoginPoll(_) => unreachable!(),
+            Purpose::AuthKey(key) => {
+                let shown = matches!(self.form, Form::Progress) && self.foreground == Some(token);
+                if shown {
+                    self.foreground = None;
+                }
+                self.gemini_key_checked(&key, &value, shown);
+                return self.refresh();
+            }
             Purpose::Reorder(_) => {}
             Purpose::DeleteAvailability(key) => {
                 self.deletion_previews.insert(key, value);
@@ -4362,12 +4574,34 @@ impl Manager {
                     }
                     return vec![];
                 }
+                // A new Gemini account chooses its sign-in mode before any login plan runs.
+                if let [a, b, key] = &self.mutation[..]
+                    && a == "account"
+                    && b == "add"
+                    && self.provider_of(key) == "gemini"
+                    && matches!(self.form, Form::Progress)
+                    && self.foreground == Some(token)
+                    && let Some(choices) = self.gemini_auth_modes()
+                {
+                    let key = key.clone();
+                    self.foreground = None;
+                    self.show_gemini_auth(&key, choices);
+                    return self.refresh();
+                }
                 if let Some(argv) = login_plan(&value["login"]["argv"]) {
                     if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
                         // The plan is a backend-owned exec argv; the UI only hands it
                         // to a HERDR pane and polls the account. It handles no tokens.
                         let key = match &self.mutation[..] {
                             [a, b, key] if a == "account" && (b == "add" || b == "login") => {
+                                Some(key.clone())
+                            }
+                            [a, b, key, m, g]
+                                if a == "account"
+                                    && b == "auth"
+                                    && m == "--mode"
+                                    && g == "google" =>
+                            {
                                 Some(key.clone())
                             }
                             _ => None,
@@ -7779,6 +8013,290 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
             m.dialog.as_ref().unwrap().body[0],
             "Complete the Gemini CLI login in the opened pane…"
         );
+    }
+    const GEMINI_REASON: &str =
+        "retired by Google for personal accounts — use Antigravity, API key or Workspace";
+    fn gemini_auth_modes() -> Value {
+        json!([
+            {"id":"google_personal","mode":"google","label":"Google login","available":false,"reason":GEMINI_REASON},
+            {"id":"google_workspace","mode":"google","label":"Google Workspace login","available":true,"reason":null},
+            {"id":"api_key","mode":"api_key","label":"API key","available":true,"reason":null,"input":"stdin_json","field":"api_key"}
+        ])
+    }
+    fn gemini_auth_manager() -> Manager {
+        let mut m = triple_providers();
+        let providers = m.capabilities["providers"].as_array_mut().unwrap();
+        providers.last_mut().unwrap()["auth_modes"] = gemini_auth_modes();
+        m
+    }
+    fn key_event(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+    fn paint_dialog(m: &mut Manager) -> Canvas {
+        let mut c = Canvas::new(110, 30);
+        m.paint(&mut c, 29);
+        c
+    }
+    /// Screen row and first cell of the dialog row that is exactly `label`.
+    fn row_of(c: &Canvas, label: &str) -> (usize, usize) {
+        (0..c.height)
+            .find_map(|y| {
+                let cells: Vec<&str> = (0..c.width)
+                    .map(|x| c.cells[y * c.width + x].glyph.as_str())
+                    .collect();
+                let label: Vec<String> = label.chars().map(String::from).collect();
+                (0..cells.len().saturating_sub(label.len())).find_map(|x| {
+                    let hit = cells[x..x + label.len()]
+                        .iter()
+                        .zip(&label)
+                        .all(|(a, b)| a == b)
+                        && cells[x + label.len()] == " "
+                        && x >= 2
+                        && cells[x - 1] == " ";
+                    hit.then_some((y, x))
+                })
+            })
+            .unwrap_or_else(|| panic!("no row {label}:\n{}", screen_text(c)))
+    }
+    #[test]
+    fn gemini_auth_choice_lists_backend_modes_in_order_and_strikes_the_unavailable_one() {
+        let mut m = gemini_auth_manager();
+        m.show_login("gemini:gem-main");
+        let d = m.dialog.as_ref().unwrap();
+        let labels: Vec<_> = d.buttons.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Google login",
+                "Google Workspace login",
+                "API key",
+                "",
+                "Cancel"
+            ]
+        );
+        // Availability comes from the backend data, not from the UI.
+        let enabled: Vec<_> = d.buttons.iter().map(|b| b.enabled).collect();
+        assert_eq!(enabled[..3], [false, true, true]);
+        // The cursor starts on the first selectable option.
+        assert_eq!(d.selected, 1);
+        let c = paint_dialog(&mut m);
+        let (y, x) = row_of(&c, "Google login");
+        assert!(
+            (x..x + "Google login".len())
+                .filter(|col| c.cells[y * c.width + col].glyph != " ")
+                .all(|col| c.cells[y * c.width + col].strike),
+            "unavailable option is crossed out"
+        );
+        let (y, x) = row_of(&c, "Google Workspace login");
+        assert!(!c.cells[y * c.width + x + 3].strike);
+        // A backend that marks every option available strikes nothing.
+        let mut open = gemini_auth_manager();
+        open.capabilities["providers"][2]["auth_modes"][0]["available"] = json!(true);
+        open.show_login("gemini:gem-main");
+        assert!(open.dialog.as_ref().unwrap().buttons[0].enabled);
+        assert_eq!(open.dialog.as_ref().unwrap().selected, 0);
+    }
+    #[test]
+    fn gemini_unavailable_choice_cannot_be_chosen_and_shows_its_reason_only_when_focused() {
+        let mut m = gemini_auth_manager();
+        m.show_login("gemini:gem-main");
+        let parenthetical = format!("({GEMINI_REASON})");
+        // Cursor on an available option: no reason anywhere.
+        let c = paint_dialog(&mut m);
+        assert!(!screen_text(&c).contains("retired by Google"));
+        // Move the cursor onto the struck-through option.
+        m.key(key_event(KeyCode::Up));
+        assert_eq!(m.dialog.as_ref().unwrap().selected, 0);
+        let c = paint_dialog(&mut m);
+        let text = screen_text(&c);
+        assert!(text.contains("(retired by Google"), "{text}");
+        let _ = parenthetical;
+        let at = (0..c.cells.len() - 1)
+            .find(|&i| c.cells[i].glyph == "(" && c.cells[i + 1].glyph == "r")
+            .unwrap();
+        assert_eq!(c.cells[at].fg, crate::widgets::MUTED, "darker grey");
+        assert!(!c.cells[at].strike, "the reason itself is not struck");
+        // Enter on it does nothing: no dialog change, no request.
+        assert!(m.key(key_event(KeyCode::Enter)).is_empty());
+        assert!(matches!(m.form, Form::GeminiAuth(..)));
+        // Leaving it hides the reason again.
+        m.key(key_event(KeyCode::Down));
+        assert!(!screen_text(&paint_dialog(&mut m)).contains("retired by Google"));
+    }
+    #[test]
+    fn gemini_workspace_choice_requests_google_mode_then_runs_the_login_plan() {
+        let mut m = gemini_auth_manager();
+        m.show_login("gemini:gem-main");
+        let sent = m.submit(1, vec![]);
+        let [Intent::Api(token, args)] = &sent[..] else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(
+            args,
+            &strings(&["account", "auth", "gemini:gem-main", "--mode", "google"])
+        );
+        let out = m.response(*token, Ok(json!({"account_id":"gemini:gem-main","provider":"gemini","auth_mode":"google","api_key_present":false,"auth_required":true,"auth_failed":false,"auth_failure_reason":null,"changed":true,"login_required":true,"login":{"action":"exec","argv":["sessionsation","account","login","gemini:gem-main"],"credentials_in_client":false}})));
+        assert!(
+            matches!(&out[..], [Intent::LaunchLogin(argv)] if argv == &strings(&["sessionsation","account","login","gemini:gem-main"]))
+        );
+        assert!(matches!(m.form, Form::LoginWait(_)));
+        assert_eq!(
+            m.dialog.as_ref().unwrap().body[0],
+            "Complete the Gemini CLI login in the opened pane…"
+        );
+    }
+    #[test]
+    fn gemini_add_flow_asks_for_the_auth_mode_before_any_login_plan() {
+        let mut m = gemini_auth_manager();
+        m.add_for("gemini");
+        let sent = m.submit(0, vec!["new".into()]);
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        let out = m.response(token, Ok(json!({"login":{"action":"exec","argv":["sessionsation","account","login","gemini:new"],"credentials_in_client":false},"auth":{"logged_in":false}})));
+        assert!(
+            out.iter().all(|i| !matches!(i, Intent::LaunchLogin(_))),
+            "the plan waits for the choice"
+        );
+        assert!(matches!(&m.form, Form::GeminiAuth(key, _) if key == "gemini:new"));
+        assert_eq!(m.dialog.as_ref().unwrap().buttons[2].label, "API key");
+    }
+    #[test]
+    fn gemini_without_auth_modes_keeps_the_plain_login_flow() {
+        let mut m = triple_providers();
+        m.show_login("gemini:gem-main");
+        assert!(matches!(m.form, Form::Login(_)));
+        let sent = m.submit(0, vec![]);
+        assert!(
+            matches!(&sent[..], [Intent::Api(_, args)] if args == &strings(&["account", "login", "gemini:gem-main"]))
+        );
+        let mut m = triple_providers();
+        m.add_for("gemini");
+        let sent = m.submit(0, vec!["new".into()]);
+        let Intent::Api(token, _) = sent[0] else {
+            panic!()
+        };
+        let out = m.response(token, Ok(json!({"login":{"action":"exec","argv":["sessionsation","account","login","gemini:new"],"credentials_in_client":false},"auth":{"logged_in":false}})));
+        assert!(matches!(&out[..], [Intent::LaunchLogin(_)]));
+    }
+    #[test]
+    fn gemini_api_key_goes_only_through_stdin_and_never_renders_or_logs() {
+        const KEY: &str = "AIzaSECRETkey-0123456789";
+        let mut m = gemini_auth_manager();
+        m.show_login("gemini:gem-main");
+        assert!(m.submit(2, vec![]).is_empty());
+        assert!(matches!(&m.form, Form::GeminiKey(key) if key == "gemini:gem-main"));
+        for ch in KEY.chars() {
+            m.key(key_event(KeyCode::Char(ch)));
+        }
+        // The masked field draws a mask per character, never a clear character.
+        let screen = screen_text(&paint_dialog(&mut m));
+        assert!(screen.contains(&"•".repeat(KEY.len())), "{screen}");
+        for part in ["AIza", "SECRET", "0123", "key-"] {
+            assert!(!screen.contains(part), "key text on screen: {part}");
+        }
+        // Debug output of the dialog never holds the key either.
+        assert!(!format!("{:?}", m.dialog).contains("SECRET"));
+        // Enter on Save key submits.
+        let sent = m.key(key_event(KeyCode::Enter));
+        let [Intent::ApiInput(token, args, secret)] = &sent[..] else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(
+            args,
+            &strings(&[
+                "account",
+                "auth",
+                "gemini:gem-main",
+                "--mode",
+                "api-key",
+                "--key-stdin"
+            ])
+        );
+        assert!(args.iter().all(|a| !a.contains("SECRET")));
+        assert_eq!(secret.0, json!({"api_key": KEY}));
+        assert!(!format!("{:?}", sent[0]).contains("SECRET"));
+        // Progress is shown, and no dialog or field state keeps the key.
+        let d = m.dialog.as_ref().unwrap();
+        assert!(d.busy && d.fields.is_empty() && d.body[0].contains("Saving and verifying"));
+        assert!(!format!("{:?}", m.dialog).contains("SECRET"));
+        let screen = screen_text(&paint_dialog(&mut m));
+        assert!(!screen.contains("SECRET") && screen.contains("Saving and verifying"));
+        // Valid: success note.
+        let out = m.response(*token, Ok(json!({"account_id":"gemini:gem-main","provider":"gemini","auth_mode":"api_key","api_key_present":true,"auth_required":false,"auth_failed":false,"auth_failure_reason":null,"validation":{"state":"valid","code":null,"reason":null}})));
+        assert!(out.iter().all(|i| matches!(i, Intent::Api(..))));
+        let d = m.dialog.as_ref().unwrap();
+        assert_eq!(d.title, "API key saved");
+        assert!(d.body[0].contains("saved and verified"));
+    }
+    #[test]
+    fn gemini_api_key_validation_outcomes_and_errors_are_reported() {
+        let respond = |validation: Value| {
+            let mut m = gemini_auth_manager();
+            m.show_gemini_key("gemini:gem-main");
+            let sent = m.submit(0, vec!["k".into()]);
+            let Intent::ApiInput(token, ..) = sent[0] else {
+                panic!()
+            };
+            m.response(token, Ok(json!({"validation": validation})));
+            m
+        };
+        let m = respond(
+            json!({"state":"auth_failed","code":"API_KEY_INVALID","reason":"API key not valid. Please pass a valid API key."}),
+        );
+        let d = m.dialog.as_ref().unwrap();
+        assert_eq!(d.title, "API key rejected");
+        assert!(d.body[1].contains("API key not valid"));
+        let m = respond(json!({"state":"inconclusive","code":"VALIDATION_TIMEOUT","reason":null}));
+        let d = m.dialog.as_ref().unwrap();
+        assert_eq!(d.title, "API key saved");
+        assert!(d.body[0].contains("saved but could not be verified (VALIDATION_TIMEOUT)"));
+        // A rejected request uses the existing error presentation.
+        let mut m = gemini_auth_manager();
+        m.show_gemini_key("gemini:gem-main");
+        let sent = m.submit(0, vec!["k".into()]);
+        let Intent::ApiInput(token, ..) = sent[0] else {
+            panic!()
+        };
+        m.response(token, Err("ACCOUNT_BUSY: try later".into()));
+        assert!(m.dialog.is_none());
+        assert_eq!(m.note, "ACCOUNT_BUSY: try later");
+        // An empty key cannot be submitted.
+        let mut m = gemini_auth_manager();
+        m.show_gemini_key("gemini:gem-main");
+        m.dialog.as_mut().unwrap().selected = 0;
+        assert!(m.key(key_event(KeyCode::Enter)).is_empty());
+        assert!(matches!(m.form, Form::GeminiKey(_)));
+    }
+    #[test]
+    fn secret_text_input_masks_graphemes_cursor_and_debug() {
+        let mut input = crate::widgets::TextInput::new(String::new()).secret();
+        input.insert("abXé");
+        let mut c = Canvas::new(30, 3);
+        input.paint_focused(&mut c, 0, 0, 20, true, true);
+        let text = screen_text(&c);
+        assert!(text.contains("> ••••"), "{text}");
+        assert!(!text.contains(['a', 'b', 'X', 'é']));
+        assert!(!format!("{input:?}").contains("abX"));
+        // Editing still works on the real value.
+        input.edit(KeyCode::Backspace);
+        assert_eq!(input.value, "abX");
+    }
+    #[test]
+    fn gemini_details_show_the_auth_mode_and_key_presence() {
+        let mut a = gemini("gem-main");
+        let lines = usage_lines(&a, 0);
+        assert!(fact(&lines, "Auth").is_none(), "older backend: no row");
+        a.details.insert("auth_mode".into(), json!("api_key"));
+        a.details.insert("api_key_present".into(), json!(true));
+        let lines = usage_lines(&a, 0);
+        assert_eq!(fact(&lines, "Auth").as_deref(), Some("API key"));
+        assert_eq!(fact(&lines, "API key").as_deref(), Some("saved"));
+        a.details.insert("auth_mode".into(), json!("google"));
+        a.details.insert("api_key_present".into(), json!(false));
+        let lines = usage_lines(&a, 0);
+        assert_eq!(fact(&lines, "Auth").as_deref(), Some("Google"));
+        assert!(fact(&lines, "API key").is_none());
     }
     #[test]
     fn gemini_sessions_use_claude_actions_native_label_and_status_gating() {

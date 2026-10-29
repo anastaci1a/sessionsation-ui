@@ -34,6 +34,8 @@ pub enum Rule {
     Any,
     AccountName,
     Percentage,
+    /// Any non-empty value (a secret that has no format to check here).
+    Required,
     Name,
     /// A HERDR Space label: the same rules as a new session's Space name.
     SpaceName,
@@ -64,6 +66,11 @@ impl Field {
             self.input = self.input.limited(NAME_MAX_CHARS);
         }
         self.rule = rule;
+        self
+    }
+    /// A masked field: the value is drawn as mask characters and never in clear.
+    pub fn secret(mut self) -> Self {
+        self.input = self.input.secret();
         self
     }
     pub fn paint_box(
@@ -136,6 +143,7 @@ impl Field {
         }
         match &self.rule {
             Rule::Any => true,
+            Rule::Required => !v.is_empty(),
             Rule::Exact(expected) => v == expected,
             Rule::Percentage => v
                 .parse::<f64>()
@@ -409,10 +417,21 @@ impl Dialog {
             normalized.pop();
         }
         let lines = normalized;
+        // A selected-only button note (a reason) that does not fit beside its label
+        // is shown below the buttons while it is selected; its rows stay reserved.
+        let left = canvas.width.saturating_sub(width) / 2;
+        let detached = usize::from(self.buttons.iter().any(|b| {
+            b.preview_selected_only
+                && b.preview.is_some()
+                && b.preview_position(left + width - 2, left + 2).is_none()
+        })) * 2;
         let base_reserved = if compact || self.buttons.is_empty() && self.fields.is_empty() {
             2
         } else {
-            self.fields.len() * 3 + self.buttons.len() + if self.fields.is_empty() { 3 } else { 4 }
+            self.fields.len() * 3
+                + self.buttons.len()
+                + detached
+                + if self.fields.is_empty() { 3 } else { 4 }
         };
         let viewport = (canvas.width, canvas.height);
         if self.size.is_none_or(|s| s.viewport != viewport) {
@@ -503,13 +522,36 @@ impl Dialog {
                 if !self.dismiss_button(index) && !self.fields.iter().all(Field::valid) {
                     button.enabled = false;
                 }
-                button.paint(
+                let selected = self.selected == slots + index;
+                let inline = button.preview_selected_only
+                    && button.preview_position(x + width - 2, x + 2).is_some();
+                button.paint_with_preview(
                     canvas,
                     x + 2,
                     row + index,
-                    self.selected == slots + index,
+                    selected,
                     false,
+                    !button.preview_selected_only || inline,
                 );
+                if selected
+                    && !inline
+                    && button.preview_selected_only
+                    && let Some(note) = button.preview.as_deref()
+                {
+                    let text = crate::widgets::ellipsize(note, width.saturating_sub(4));
+                    let at = row + self.buttons.len() + 1;
+                    if at < y + height - 1 {
+                        button.paint_preview(
+                            canvas,
+                            x + width.saturating_sub(UnicodeWidthStr::width(text.as_str())) / 2,
+                            at,
+                            &text,
+                            true,
+                            false,
+                            false,
+                        );
+                    }
+                }
             }
         }
         let hint = if self.wrapped > self.visible {

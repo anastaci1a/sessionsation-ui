@@ -187,6 +187,16 @@ impl Effects {
                         let _ = tx.send(Message::Managed(token, result)).await;
                     });
                 }
+                Effect::ApiInput(token, args, secret) => {
+                    tokio::spawn(async move {
+                        let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+                        let result = client
+                            .api(&refs, Some(secret.0))
+                            .await
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(Message::Managed(token, result)).await;
+                    });
+                }
                 Effect::FocusSession(session, direct) => {
                     tokio::spawn(async move {
                         let result = client
@@ -459,6 +469,8 @@ fn spawn_queue_worker(
 fn effect_kind(effect: &Effect) -> String {
     match effect {
         Effect::Api(token, args) => format!("api#{token} {}", args.join(" ")),
+        // Arguments only: the stdin secret is never part of a trace.
+        Effect::ApiInput(token, args, _) => format!("api#{token} {}", args.join(" ")),
         Effect::FocusSession(..) => "focus_session".into(),
         Effect::LaunchLogin(_) => "launch_login".into(),
         Effect::CreateDirectories(..) => "create_directories".into(),
