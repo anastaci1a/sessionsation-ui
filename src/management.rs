@@ -85,6 +85,7 @@ enum Purpose {
     Delete(String),
     DeleteAvailability(String),
     LiveSteering(String),
+    BypassWarning(String),
     Limits(String),
     Mutation,
     /// Gemini API-key save and validation (secret stdin, up to ~15 s).
@@ -195,6 +196,12 @@ pub struct Manager {
     steering_unavailable: BTreeMap<String, String>,
     /// The Live steering selector is grabbed: the choice pending Enter (true = On).
     steering_pick: Option<bool>,
+    /// Last bypass-warning state read for each Claude account (`api account bypass-warning`).
+    bypass: BTreeMap<String, Value>,
+    /// Why the bypass warning cannot be changed for an account.
+    bypass_unavailable: BTreeMap<String, String>,
+    /// The Bypass warning selector is grabbed: the choice pending Enter (true = Skip).
+    bypass_pick: Option<bool>,
     /// The Operations filter is grabbed: the value to restore on Esc.
     filter_grab: Option<OperationFilter>,
     pub active_operation: Option<String>,
@@ -315,6 +322,9 @@ impl Default for Manager {
             steering: BTreeMap::new(),
             steering_unavailable: BTreeMap::new(),
             steering_pick: None,
+            bypass: BTreeMap::new(),
+            bypass_unavailable: BTreeMap::new(),
+            bypass_pick: None,
             filter_grab: None,
             active_operation: None,
             foreground: None,
@@ -924,6 +934,40 @@ impl Manager {
             Err(reason) => Row::gate("Live steering", false).with_reason(reason),
         }
     }
+    /// The bypass-warning setting is offered for Claude accounts by a revision-22 backend.
+    fn bypass_warning_supported(&self, key: &str) -> bool {
+        self.provider_of(key) == "claude" && self.capabilities["claude_bypass_warning"].is_object()
+    }
+    /// The account's bypass-warning state: Some(skip) when it can be changed.
+    fn bypass_state(&self, key: &str) -> Result<bool, String> {
+        if let Some(reason) = self.bypass_unavailable.get(key) {
+            return Err(reason.clone());
+        }
+        let Some(v) = self.bypass.get(key) else {
+            return Err("checking…".into());
+        };
+        match v["bypass_warning"].as_str() {
+            Some("skip") => Ok(true),
+            Some("show") => Ok(false),
+            _ => Err("unknown".into()),
+        }
+    }
+    fn bypass_warning_row(&self, key: &str) -> Row {
+        match self.bypass_state(key) {
+            Ok(skip) => {
+                let skip = self.bypass_pick.unwrap_or(skip);
+                let mut row = Row::yes("Bypass warning")
+                    .with_picker(
+                        if skip { "Skip" } else { "Show" },
+                        crate::preferences::choice_arrow(&[true, false], skip),
+                    )
+                    .grabbed(self.bypass_pick.is_some());
+                row.info = Some("skip Claude's YOLO-mode startup warning".into());
+                row
+            }
+            Err(reason) => Row::gate("Bypass warning", false).with_reason(reason),
+        }
+    }
     fn logout_account_row(&self, key: &str, removed: bool) -> Row {
         let provider = self.provider_of(key);
         let supported = self.provider_cap(&provider, "account_logout");
@@ -1416,6 +1460,7 @@ impl Manager {
         self.home_column = 0;
         self.queue_focus = None;
         self.steering_pick = None;
+        self.bypass_pick = None;
         self.filter_grab = None;
         self.options = Options::default();
         self.options.selected = self.rows().iter().position(|r| !r.separator).unwrap_or(0);
@@ -1571,6 +1616,12 @@ impl Manager {
                 if self.live_steering_supported(key) {
                     rows.extend([Row::separator(), self.live_steering_row(key)]);
                 }
+                if self.bypass_warning_supported(key) {
+                    if !self.live_steering_supported(key) {
+                        rows.push(Row::separator());
+                    }
+                    rows.push(self.bypass_warning_row(key));
+                }
                 rows.extend([
                     Row::separator(),
                     Row::gate(
@@ -1594,7 +1645,7 @@ impl Manager {
                 for row in rows.iter_mut().filter(|r| r.preview_arrows) {
                     row.preview_column = Some(2 + longest + 1);
                 }
-                if self.steering_pick.is_some() {
+                if self.steering_pick.is_some() || self.bypass_pick.is_some() {
                     for row in &mut rows {
                         row.mode = if row.preview_grabbed {
                             crate::widgets::RowMode::Active
@@ -1958,6 +2009,18 @@ impl Manager {
             out.extend(self.request(
                 strings(&["account", "live-steering", &key]),
                 Purpose::LiveSteering(key),
+            ));
+        }
+        if let Page::Account(key) = self.page.clone()
+            && self.bypass_warning_supported(&key)
+            && !self
+                .pending
+                .values()
+                .any(|p| matches!(p, Purpose::BypassWarning(_)))
+        {
+            out.extend(self.request(
+                strings(&["account", "bypass-warning", &key]),
+                Purpose::BypassWarning(key),
             ));
         }
         if let Page::Account(key) = self.page.clone()
@@ -2588,6 +2651,17 @@ impl Manager {
         if self.steering_pick.is_some() {
             return self.steering_key(key.code);
         }
+        if self.bypass_pick.is_some() {
+            return self.bypass_key(key.code);
+        }
+        if matches!(
+            key.code,
+            KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ')
+        ) && let Some((_, skip)) = self.bypass_selected()
+        {
+            self.bypass_pick = Some(skip);
+            return vec![];
+        }
         if matches!(
             key.code,
             KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ')
@@ -2786,6 +2860,37 @@ impl Manager {
                 {
                     let flag = if pick { "--enable" } else { "--disable" };
                     return self.mutate(strings(&["account", "live-steering", &key, flag]));
+                }
+            }
+            _ => {}
+        }
+        vec![]
+    }
+    /// The selected row is an available Bypass warning selector: its account and state.
+    fn bypass_selected(&self) -> Option<(String, bool)> {
+        let Page::Account(key) = &self.page else {
+            return None;
+        };
+        if self.options.back || self.dialog.is_some() || !self.bypass_warning_supported(key) {
+            return None;
+        }
+        let skip = self.bypass_state(key).ok()?;
+        (self.rows().get(self.options.selected)?.label == "Bypass warning")
+            .then(|| (key.clone(), skip))
+    }
+    /// Keys while Bypass warning is grabbed: Up/Down choose, Esc reverts, Enter sets.
+    /// The value shown afterwards is the state the backend reports.
+    fn bypass_key(&mut self, code: KeyCode) -> Vec<Intent> {
+        match code {
+            KeyCode::Up | KeyCode::Down => self.bypass_pick = Some(code == KeyCode::Up),
+            KeyCode::Esc => self.bypass_pick = None,
+            KeyCode::Left | KeyCode::Enter | KeyCode::Char(' ') => {
+                if let Some(pick) = self.bypass_pick.take()
+                    && let Some((key, skip)) = self.bypass_selected()
+                    && pick != skip
+                {
+                    let flag = if pick { "--skip" } else { "--show" };
+                    return self.mutate(strings(&["account", "bypass-warning", &key, flag]));
                 }
             }
             _ => {}
@@ -4030,6 +4135,20 @@ impl Manager {
                         .insert(key.clone(), steering_reason(&e));
                     return vec![];
                 }
+                if let Purpose::BypassWarning(key) = &purpose {
+                    self.bypass.remove(key);
+                    self.bypass_unavailable
+                        .insert(key.clone(), steering_reason(&e));
+                    return vec![];
+                }
+                if let [a, b, key, ..] = &self.mutation[..]
+                    && a == "account"
+                    && b == "bypass-warning"
+                    && e.starts_with("SETTINGS_IS_SYMLINK")
+                {
+                    self.bypass_unavailable
+                        .insert(key.clone(), steering_reason(&e));
+                }
                 if let [a, b, key, ..] = &self.mutation[..]
                     && a == "account"
                     && b == "live-steering"
@@ -4084,6 +4203,16 @@ impl Manager {
                     self.steering_unavailable.remove(&key);
                 }
                 self.steering.insert(key, value);
+            }
+            Purpose::BypassWarning(key) => {
+                if self
+                    .bypass_unavailable
+                    .get(&key)
+                    .is_some_and(|r| r != SYMLINKED)
+                {
+                    self.bypass_unavailable.remove(&key);
+                }
+                self.bypass.insert(key, value);
             }
             Purpose::Archives => {
                 self.archives = value.as_array().cloned().unwrap_or_default();
@@ -4561,6 +4690,19 @@ impl Manager {
                 }
             }
             Purpose::Mutation => {
+                if value["setting"] == "skipDangerousModePermissionPrompt"
+                    && let Some(key) = value["account_id"].as_str()
+                {
+                    // The state the backend reports after the change, never the request.
+                    self.bypass_unavailable.remove(key);
+                    self.bypass.insert(key.to_owned(), value.clone());
+                    if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
+                        self.dialog = None;
+                        self.form = Form::None;
+                        self.foreground = None;
+                    }
+                    return vec![];
+                }
                 if value["setting"] == "crossSessionInbound"
                     && let Some(key) = value["account_id"].as_str()
                 {
@@ -4759,7 +4901,10 @@ impl Manager {
         }
         let hints = if self.moving.is_some() {
             hint_lines(&["▲/▼: Move", "Enter: Save", "Esc: Cancel"], canvas.width)
-        } else if self.steering_pick.is_some() || self.filter_grab.is_some() {
+        } else if self.steering_pick.is_some()
+            || self.bypass_pick.is_some()
+            || self.filter_grab.is_some()
+        {
             hint_lines(&["▲/▼: Choose", "Enter: Set", "Esc: Cancel"], canvas.width)
         } else if let Some(d) = &self.dialog {
             // The footer follows the top dialog.
@@ -4913,8 +5058,9 @@ impl Manager {
                         }
                     }
                 }
-                self.options.right_mode =
-                    self.steering_pick.is_some() || self.filter_grab.is_some();
+                self.options.right_mode = self.steering_pick.is_some()
+                    || self.bypass_pick.is_some()
+                    || self.filter_grab.is_some();
                 self.options
                     .paint_menu(canvas, &rows, 3, bottom, menu_controls)
             };
@@ -6674,6 +6820,105 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
         drive(&mut m, &client, intents).await;
         let r = row(&m).unwrap();
         assert!(!r.enabled && r.preview.as_deref().is_some_and(|p| p.starts_with("· ")));
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bypass_warning_reads_and_changes_through_the_backend() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let cli = tmp.path().join("sessionsation");
+        std::fs::write(&cli, r#"#!/usr/bin/env python3
+import json, pathlib, sys
+root=pathlib.Path(__file__).parent
+args=sys.argv[sys.argv.index('--api-version')+2:]
+def ok(result): print(json.dumps({'api_version':1,'ok':True,'result':result}))
+if args[:2]!=['account','bypass-warning']:ok({});sys.exit(0)
+with (root/'calls').open('a') as f:f.write(' '.join(args[2:])+'\n')
+value=(root/'value').read_text()
+if '--skip' in args:value='skip'
+elif '--show' in args:value='show'
+(root/'value').write_text(value)
+ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'skipDangerousModePermissionPrompt','value':value=='skip'})
+"#).unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let client = crate::client::Client {
+            binary: cli,
+            root: tmp.path().into(),
+            herdr: "unused".into(),
+            socket: "unused".into(),
+            session: "fixture".into(),
+        };
+        std::fs::write(tmp.path().join("value"), "skip").unwrap();
+        std::fs::write(tmp.path().join("calls"), "").unwrap();
+        let calls = || std::fs::read_to_string(tmp.path().join("calls")).unwrap();
+        async fn drive(m: &mut Manager, client: &crate::client::Client, mut intents: Vec<Intent>) {
+            while let Some(intent) = intents.pop() {
+                if let Intent::Api(token, args) = intent {
+                    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+                    let result = client.api(&refs, None).await.map_err(|e| e.to_string());
+                    intents.extend(m.response(token, result));
+                }
+            }
+        }
+        let key = "claude:main";
+        let mut m = Manager::default();
+        let mut claude = account(1);
+        claude.id = key.into();
+        let mut codex = account(2);
+        codex.id = "codex:other".into();
+        m.inventory(vec![claude, codex]);
+        m.capabilities = json!({"claude_bypass_warning":{"since_revision":22}});
+        let row = |m: &Manager| m.rows().into_iter().find(|r| r.label == "Bypass warning");
+        let press = |m: &mut Manager, code| m.key(KeyEvent::new(code, KeyModifiers::NONE));
+        m.go(Page::Account("codex:other".into()));
+        assert!(row(&m).is_none(), "Codex accounts never offer it");
+        // An older backend without the capability hides it.
+        m.capabilities = json!({});
+        m.go(Page::Account(key.into()));
+        assert!(row(&m).is_none());
+        m.capabilities = json!({"claude_bypass_warning":{"since_revision":22}});
+        m.go(Page::Account(key.into()));
+        assert!(!row(&m).unwrap().preview_choice, "unknown until read");
+        let intents = m.refresh();
+        drive(&mut m, &client, intents).await;
+        assert_eq!(calls(), "claude:main\n");
+        let r = row(&m).unwrap();
+        assert_eq!(r.preview.as_deref(), Some("↓ Skip"));
+        assert_eq!(
+            r.info.as_deref(),
+            Some("skip Claude's YOLO-mode startup warning")
+        );
+        m.options.selected = m
+            .rows()
+            .iter()
+            .position(|r| r.label == "Bypass warning")
+            .unwrap();
+        // Skip is the top option, Show the bottom one.
+        press(&mut m, KeyCode::Right);
+        assert!(row(&m).unwrap().preview_grabbed);
+        press(&mut m, KeyCode::Down);
+        assert_eq!(row(&m).unwrap().preview.as_deref(), Some("↑ Show"));
+        let intents = press(&mut m, KeyCode::Enter);
+        assert!(m.dialog.is_some(), "the usual operation progress");
+        drive(&mut m, &client, intents).await;
+        assert_eq!(calls(), "claude:main\nclaude:main --show\n");
+        assert!(m.dialog.is_none());
+        assert_eq!(row(&m).unwrap().preview.as_deref(), Some("↑ Show"));
+        assert!(!row(&m).unwrap().preview_grabbed);
+        // Back to Skip.
+        press(&mut m, KeyCode::Right);
+        press(&mut m, KeyCode::Up);
+        let intents = press(&mut m, KeyCode::Enter);
+        drive(&mut m, &client, intents).await;
+        assert!(calls().ends_with("claude:main --skip\n"));
+        assert_eq!(row(&m).unwrap().preview.as_deref(), Some("↓ Skip"));
+        // Esc reverts without a command; an unchanged choice sends nothing.
+        std::fs::write(tmp.path().join("calls"), "").unwrap();
+        press(&mut m, KeyCode::Right);
+        press(&mut m, KeyCode::Down);
+        assert!(press(&mut m, KeyCode::Esc).is_empty());
+        press(&mut m, KeyCode::Right);
+        assert!(press(&mut m, KeyCode::Enter).is_empty());
+        assert_eq!(calls(), "");
     }
     #[test]
     fn home_right_column_survives_single_column_rows() {

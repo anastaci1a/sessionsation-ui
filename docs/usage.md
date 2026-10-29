@@ -282,6 +282,10 @@ that reads `api account live-steering` and changes it with `--enable`/`--disable
 through the usual operation dialog; the value is always the backend's reply. An
 operator `hold`/`refuse`, a symlinked `settings.json` or a failed read shows the row
 unavailable with its reason.
+On a revision-22 backend they also get a `Bypass warning` selector (Skip on top, Show below)
+that reads `api account bypass-warning` and changes it with `--skip`/`--show`; it follows the
+same picker rules, shows the backend's reply afterwards and explains itself with the grey
+text "skip Claude's YOLO-mode startup warning".
 Deregister/Restore and Delete are enabled only when the provider reports
 `account_removal`/`account_deletion`; a disabled row shows the backend reason when
 published. Delete confirmations show backend semantics text when present (for Claude
