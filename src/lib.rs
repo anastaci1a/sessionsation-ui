@@ -8,6 +8,7 @@ pub mod directory;
 
 pub mod app;
 
+pub mod close_band;
 pub mod dialog;
 pub mod host_theme;
 pub mod management;

@@ -157,6 +157,10 @@ pub struct Manager {
     pub operation_filter: OperationFilter,
     /// First Esc on Home arms closing; a second within one second closes.
     close_armed: Option<std::time::Instant>,
+    /// Start of the running "Press Esc again" band animation.
+    close_band: Option<std::time::Instant>,
+    /// Terminal background beneath cells without one (for band fading).
+    pub band_base: [u8; 3],
     /// HERDR Space names by ID, for operation badges.
     pub space_names: BTreeMap<String, String>,
     ticks_since_operations: u32,
@@ -200,7 +204,7 @@ pub struct LoginWait {
 }
 const LOGIN_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 const LOGIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
-const CLOSE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+const CLOSE_WINDOW: std::time::Duration = crate::close_band::CLOSE_WINDOW;
 impl Default for Manager {
     fn default() -> Self {
         Self {
@@ -250,6 +254,8 @@ impl Default for Manager {
             badge_focus: false,
             operation_filter: OperationFilter::All,
             close_armed: None,
+            close_band: None,
+            band_base: [16; 3],
             space_names: BTreeMap::new(),
             ticks_since_operations: 0,
         }
@@ -2196,7 +2202,14 @@ impl Manager {
                 if armed.is_some_and(|t| t.elapsed() <= CLOSE_WINDOW) {
                     vec![Intent::Exit]
                 } else {
-                    self.close_armed = Some(std::time::Instant::now());
+                    let now = std::time::Instant::now();
+                    self.close_armed = Some(now);
+                    if self
+                        .close_band
+                        .is_none_or(|t| t.elapsed() >= crate::close_band::TOTAL)
+                    {
+                        self.close_band = Some(now);
+                    }
                     vec![]
                 }
             }
@@ -3895,11 +3908,7 @@ impl Manager {
                 tokens.push("m: Move");
             }
             tokens.push(if self.page == Page::Home && self.history.is_empty() {
-                if self.close_pending() {
-                    "Esc again to close"
-                } else {
-                    "Esc: Close"
-                }
+                "Esc: Close"
             } else {
                 "Esc: Back"
             });
@@ -4023,6 +4032,15 @@ impl Manager {
             crate::widgets::paint_status(canvas, controls_start, &note);
         }
         crate::widgets::paint_hints(canvas, &hints);
+        if let Some(phase) = self
+            .close_band
+            .and_then(|t| crate::close_band::phase(t.elapsed()))
+        {
+            let band = canvas.theme.as_ref().map_or([40; 3], |t| t.bar(false));
+            crate::close_band::paint(canvas, hints.len(), phase, self.band_base, band, [238; 3]);
+        } else {
+            self.close_band = None;
+        }
         if let Some(d) = &mut self.dialog {
             d.paint(canvas, &self.palette);
         }
@@ -5558,6 +5576,35 @@ mod tests {
         assert!(!m.dialog.as_ref().unwrap().fields[0].valid());
     }
     #[test]
+    fn esc_band_overlays_the_hint_rows_and_second_esc_closes_during_fade_in() {
+        use crate::close_band::{FADE_IN, FADE_OUT, HOLD, MESSAGE};
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let screen = |m: &mut Manager| {
+            let mut c = Canvas::new(100, 30);
+            m.paint_at(&mut c, 29, 100);
+            screen_text(&c)
+        };
+        let mut m = setup();
+        assert!(m.key(esc).is_empty());
+        // Mid fade-in the key is still handled: a second Esc closes at once.
+        m.close_band = Some(std::time::Instant::now() - FADE_IN / 2);
+        assert!(matches!(&m.key(esc)[..], [Intent::Exit]));
+        // During the hold the message is shown in place of the hints.
+        let mut m = setup();
+        m.key(esc);
+        m.close_band = Some(std::time::Instant::now() - FADE_IN - HOLD / 2);
+        let text = screen(&mut m);
+        assert!(text.contains(MESSAGE) && !text.contains("Esc: Close"));
+        // After the window the next Esc is a first press again.
+        m.close_armed =
+            Some(std::time::Instant::now() - crate::close_band::CLOSE_WINDOW - FADE_OUT / 100);
+        assert!(m.key(esc).is_empty());
+        // The band ends after its full length.
+        m.close_band = Some(std::time::Instant::now() - crate::close_band::TOTAL);
+        assert!(!screen(&mut m).contains(MESSAGE));
+        assert!(m.close_band.is_none());
+    }
+    #[test]
     fn home_needs_a_second_esc_within_a_second_and_footers_follow_context() {
         let mut m = setup();
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
@@ -5568,13 +5615,16 @@ mod tests {
         };
         assert!(footer(&mut m).contains("Esc: Close"));
         assert!(m.key(esc).is_empty(), "first Esc only arms");
-        assert!(footer(&mut m).contains("Esc again to close"));
+        assert!(
+            footer(&mut m).contains("Esc: Close"),
+            "hints are not renamed"
+        );
+        assert!(m.close_pending());
         assert!(matches!(&m.key(esc)[..], [Intent::Exit]));
         // An expired arm needs two presses again; other keys disarm.
         m.close_armed = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
         assert!(m.key(esc).is_empty());
         m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        assert!(!footer(&mut m).contains("Esc again"));
         assert!(m.key(esc).is_empty(), "disarmed by another key");
         m.close_armed = None;
         // Close itself still closes at once.
