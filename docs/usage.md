@@ -380,7 +380,9 @@ Enter opens that operation's progress or details over the list, and Left returns
 A finished operation's dialog offers `Dismiss` before `Close`: it hides that badge
 for good (kept in `dismissed-operations.json` beside the preferences, pruned when
 the backend no longer lists the operation). Running operations cannot be
-dismissed, and a newer operation on the same session shows its badge again.
+dismissed, and a newer operation on the same session shows its badge again. A
+dismissed operation's dialog offers `Undismiss` instead, which removes it from
+`dismissed-operations.json` so its badge shows again under the same rules.
 The selected row's account name and static provider icon are bold at the selected
 accent level (other rows use the dim level; an animated icon keeps its own styling);
 with focus on the badge they return to the dim level, unbolded. Without a badge, the

@@ -586,14 +586,20 @@ fn launch_status(record: &Value) -> &str {
         phase => phase,
     }
 }
-/// A finished operation's dialog: Dismiss, then Close, which keeps the focus.
-/// Repeated polls leave a finished dialog and its focus alone.
-fn finish_operation(d: &mut Dialog) {
-    if d.buttons.iter().any(|b| b.label == "Dismiss") {
+/// A finished operation's dialog: Dismiss (Undismiss once dismissed), then Close,
+/// which keeps the focus. Repeated polls leave a finished dialog and its focus alone.
+fn finish_operation(d: &mut Dialog, dismissed: bool) {
+    let label = if dismissed { "Undismiss" } else { "Dismiss" };
+    if let Some(b) = d
+        .buttons
+        .iter_mut()
+        .find(|b| b.label == "Dismiss" || b.label == "Undismiss")
+    {
+        b.label = label.into();
         return;
     }
     d.finish();
-    d.buttons.insert(0, Row::yes("Dismiss"));
+    d.buttons.insert(0, Row::yes(label));
     d.selected += 1;
 }
 const SYMLINKED: &str = "settings.json is a symlink";
@@ -2538,6 +2544,12 @@ impl Manager {
             self.badge_focus = false;
         }
     }
+    /// Show a dismissed operation's badge again, under the usual badge rules.
+    fn undismiss_operation(&mut self, key: &str) {
+        if self.dismissed.remove(key) {
+            self.dismissed_out = Some(self.dismissed.iter().cloned().collect());
+        }
+    }
     /// Keys while the Operations filter is grabbed: Up/Down choose (no wrap), Left,
     /// Enter and Space commit, Esc restores the value held when it was grabbed.
     fn filter_key(&mut self, code: KeyCode) -> Vec<Intent> {
@@ -2683,6 +2695,7 @@ impl Manager {
             .unwrap_or(Value::Null);
         let phase = o["phase"].as_str().unwrap_or("unknown");
         let finished = terminal(phase);
+        let dismissed = self.dismissed.contains(&badge.id);
         self.show(
             &kind_label(o["kind"].as_str().unwrap_or("operation")),
             Self::operation_body(&o, &badge.id),
@@ -2692,7 +2705,7 @@ impl Manager {
         if let Some(d) = &mut self.dialog {
             d.dim_from = Some(d.body.len().saturating_sub(2));
             if finished {
-                finish_operation(d);
+                finish_operation(d, dismissed);
             } else {
                 d.busy = true;
             }
@@ -3071,6 +3084,7 @@ impl Manager {
                 match index {
                     0 => {
                         self.details_open = true;
+                        let dismissed = self.dismissed.contains(&key);
                         self.show(
                             &kind_label(o["kind"].as_str().unwrap_or("operation")),
                             Self::operation_body(&o, &key),
@@ -3080,7 +3094,7 @@ impl Manager {
                         if let Some(d) = &mut self.dialog {
                             d.dim_from = Some(d.body.len().saturating_sub(2));
                             if terminal(o["phase"].as_str().unwrap_or("")) {
-                                finish_operation(d);
+                                finish_operation(d, dismissed);
                             }
                         }
                     }
@@ -3446,13 +3460,15 @@ impl Manager {
             return vec![];
         }
         if let Form::Operation(key) = self.form.clone() {
-            if self
+            match self
                 .dialog
                 .as_ref()
                 .and_then(|d| d.buttons.get(button))
-                .is_some_and(|b| b.label == "Dismiss")
+                .map(|b| b.label.as_str())
             {
-                self.dismiss_operation(&key);
+                Some("Dismiss") => self.dismiss_operation(&key),
+                Some("Undismiss") => self.undismiss_operation(&key),
+                _ => {}
             }
             self.dismiss();
             return vec![];
@@ -3966,7 +3982,7 @@ impl Manager {
                     d.dim_from = Some(d.body.len().saturating_sub(2));
                     d.title = kind_label(o["kind"].as_str().unwrap_or("operation"));
                     if terminal(o["phase"].as_str().unwrap_or("")) {
-                        finish_operation(d);
+                        finish_operation(d, self.dismissed.contains(key));
                     }
                 }
                 if let Some(key) = &self.active_operation
@@ -4309,7 +4325,7 @@ impl Manager {
                         if terminal(value["phase"].as_str().unwrap_or(""))
                             && let Some(d) = &mut self.dialog
                         {
-                            finish_operation(d);
+                            finish_operation(d, self.dismissed.contains(id(&value)));
                         }
                     }
                     return self.refresh();
@@ -6691,6 +6707,54 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
         );
         assert!(reloaded.dismissed.is_empty());
         assert_eq!(reloaded.dismissed_out.take().unwrap(), Vec::<String>::new());
+    }
+    #[test]
+    fn dismissed_operation_details_offer_undismiss_which_restores_the_badge() {
+        let mut m = setup();
+        m.sessions_known = true;
+        m.sessions = vec![
+            json!({"id":"s2","name":"other","account_id":"codex:account1","availability":"saved","capabilities":{}}),
+        ];
+        m.operations = vec![
+            json!({"id":"op2","kind":"move_space","session_id":"s2","phase":"failed","created_at":95}),
+        ];
+        m.go(Page::Sessions);
+        let labels = |m: &Manager| {
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .buttons
+                .iter()
+                .map(|b| b.label.clone())
+                .collect::<Vec<_>>()
+        };
+        // Not dismissed: Dismiss, as before.
+        m.open_operation("op2".into());
+        assert_eq!(labels(&m), ["Dismiss", "Close"]);
+        m.dismiss();
+        m.dismiss_operation("op2");
+        m.dismissed_out = None;
+        assert!(!m.badges().contains_key("s2"));
+        // Dismissed: the same option undoes it, with Close still focused.
+        m.open_operation("op2".into());
+        assert_eq!(labels(&m), ["Undismiss", "Close"]);
+        assert_eq!(m.dialog.as_ref().unwrap().selected, 1);
+        // A poll of the finished operation keeps the label and the focus.
+        if let Some(d) = &mut m.dialog {
+            finish_operation(d, true);
+        }
+        assert_eq!(labels(&m), ["Undismiss", "Close"]);
+        assert_eq!(m.dialog.as_ref().unwrap().selected, 1);
+        m.paint_at(&mut Canvas::new(100, 30), 29, 100);
+        m.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(m.dialog.is_none());
+        // Removed from dismissed-operations.json; the badge shows again.
+        assert!(m.dismissed.is_empty());
+        assert_eq!(m.dismissed_out.take().unwrap(), Vec::<String>::new());
+        assert_eq!(m.badges()["s2"].id, "op2");
+        m.open_operation("op2".into());
+        assert_eq!(labels(&m), ["Dismiss", "Close"]);
     }
     #[test]
     fn operation_ids_stay_out_of_the_list_and_details_are_titled_by_kind() {
