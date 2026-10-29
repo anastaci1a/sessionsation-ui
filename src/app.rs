@@ -2657,20 +2657,22 @@ mod tests {
         }
     }
     #[test]
-    fn rapid_legacy_presses_are_never_dropped_and_wrap_at_the_edge() {
+    fn rapid_legacy_presses_are_never_dropped_and_a_hold_stops_at_the_edge() {
         // Diagnosed on 8216b1a: quick re-presses at the last row were read as a
-        // hold and silently ignored. Every press now moves (or wraps once).
+        // hold and silently ignored. Every press now moves; a rapid stream from
+        // a non-edge row is one hold, so it stops at the edge instead of wrapping.
         let mut app = app();
         let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
         let rows = app.manager.rows().iter().filter(|r| !r.separator).count();
         for _ in 0..rows {
             assert!(app.key(down).is_empty());
         }
-        assert_eq!(app.manager.options.selected, 0, "the last press wrapped");
+        let last = app.manager.rows().len() - 1;
+        assert_eq!(app.manager.options.selected, last, "the hold stopped");
         assert!(app.flush_navigation().is_empty(), "nothing was deferred");
         let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
         app.key(up);
-        assert_eq!(app.manager.options.selected, app.manager.rows().len() - 1);
+        assert!(app.manager.options.selected < last, "Up moved back");
     }
     #[test]
     fn repeated_arrows_stop_and_a_released_press_wraps() {

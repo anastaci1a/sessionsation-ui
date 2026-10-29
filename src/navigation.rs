@@ -1,12 +1,13 @@
 //! Terminal-independent key gestures and axis-independent selection movement.
 //!
 //! Every key press is delivered immediately; nothing is deferred or dropped.
-//! Wrapping past an edge is limited per gesture instead: a press may wrap unless
-//! it continues a hold (the same direction within `HOLD_GAP`, or within
-//! `FIRST_REPEAT_GAP` of the hold's first press) that has already
-//! crossed an edge, and native repeat events never wrap. Legacy terminals such as
-//! Termux report a held arrow as a stream of presses without repeat or release
-//! events; such a hold crosses an edge at most once and never spins around.
+//! Wrapping past an edge is limited per gesture instead: only the first press of
+//! a gesture may wrap, and only when it is at the edge in its direction. Every
+//! later step of the same hold (the same direction within `HOLD_GAP`, or within
+//! `FIRST_REPEAT_GAP` of the hold's first press) stops at the edge it reaches,
+//! and native repeat events never wrap. Legacy terminals such as Termux report a
+//! held arrow as a stream of presses without repeat or release events; such a
+//! hold wraps at most once, on its first press, and never spins around.
 //! Their first auto-repeat arrives only after the keyboard's repeat delay, so a
 //! press within `FIRST_REPEAT_GAP` of the press that began a hold still belongs
 //! to that hold; only later slow presses start a new gesture.
@@ -36,13 +37,14 @@ impl Navigation {
     }
 }
 
-/// Wrap bookkeeping for one list: the current hold's direction, its last step
-/// and whether it has already crossed an edge.
+/// Wrap bookkeeping for one list: the current hold's direction and last step.
 #[derive(Clone, Debug, Default)]
 pub struct SelectionNavigation {
     direction: Option<bool>,
     last: Option<Instant>,
-    crossed: bool,
+    /// The last step was a native repeat: the terminal reports holds as
+    /// repeats, so a press after one follows a release and begins a gesture.
+    repeated: bool,
     /// The last step began a gesture, so the next may be its delayed first repeat.
     started: bool,
 }
@@ -85,27 +87,23 @@ impl SelectionNavigation {
             return selected;
         }
         let continuing = self.direction == Some(previous)
+            && !(press && self.repeated)
             && self.last.is_some_and(|at| {
                 let gap = now.saturating_duration_since(at);
                 gap < HOLD_GAP || self.started && gap < FIRST_REPEAT_GAP
             });
-        if !continuing {
-            self.crossed = false;
-        }
         self.started = !continuing;
+        self.repeated = !press;
         self.direction = Some(previous);
         self.last = Some(now);
-        let wrap = press && !self.crossed;
+        // Only a gesture's first press may wrap; the rest of a hold clamps.
+        let wrap = press && !continuing;
         let selected = selected.min(count - 1);
         let mut probe = selected;
         for _ in 0..count {
             let edge = previous && probe == 0 || !previous && probe + 1 == count;
-            if edge {
-                if !wrap {
-                    return selected;
-                }
-                // A hold crosses an edge at most once.
-                self.crossed = true;
+            if edge && !wrap {
+                return selected;
             }
             probe = if previous {
                 (probe + count - 1) % count
@@ -150,14 +148,15 @@ mod tests {
     }
     #[test]
     fn every_separate_or_rapid_press_moves_and_one_wrap_is_allowed() {
-        // Nine rows, Down × 10 from the top: the tenth press wraps to row 0,
-        // whatever the human or Termux gap between presses.
+        // Nine rows, Down × 10 from the top: separate taps wrap on the ninth
+        // press; a rapid Termux stream is one hold and stops at the bottom.
         for gap in [0, 3, 50, 100, 250, 400] {
+            let held = gap < HOLD_GAP.as_millis() as u64;
             let path = presses(9, 0, false, 10, gap, true);
             assert_eq!(path[..8], [1, 2, 3, 4, 5, 6, 7, 8], "gap {gap}");
-            assert_eq!(path[8], 0, "gap {gap} wraps");
+            assert_eq!(path[8], if held { 8 } else { 0 }, "gap {gap}");
             let path = presses(9, 8, true, 10, gap, true);
-            assert_eq!(path[8], 8, "Up wraps from the top too (gap {gap})");
+            assert_eq!(path[8], if held { 0 } else { 8 }, "Up gap {gap}");
         }
     }
     #[test]
@@ -274,5 +273,69 @@ mod tests {
         assert_eq!(s, 0);
         let s = nav.step_at(1, 4, true, true, now + Duration::from_secs(1), |i| i != 0);
         assert_eq!(s, 3);
+    }
+    #[test]
+    fn a_hold_from_a_non_edge_row_stops_at_the_edge_it_reaches() {
+        for delay in [250, 400, 600, 1000] {
+            // Up held from the bottom row of ten climbs to the top and stops.
+            let path = timed(10, 9, &hold(true, delay, 33, 40));
+            assert_eq!(path[..9], [8, 7, 6, 5, 4, 3, 2, 1, 0], "delay {delay}");
+            assert!(path[8..].iter().all(|r| *r == 0), "Up {delay}: {path:?}");
+            // Down held from the top row descends to the bottom and stops.
+            let path = timed(10, 0, &hold(false, delay, 33, 40));
+            assert_eq!(path[..9], [1, 2, 3, 4, 5, 6, 7, 8, 9], "delay {delay}");
+            assert!(path[8..].iter().all(|r| *r == 9), "Down {delay}: {path:?}");
+            // From the middle, in both directions.
+            let path = timed(10, 5, &hold(true, delay, 33, 40));
+            assert_eq!(path[..5], [4, 3, 2, 1, 0], "mid Up {delay}");
+            assert!(
+                path[4..].iter().all(|r| *r == 0),
+                "mid Up {delay}: {path:?}"
+            );
+            let path = timed(10, 5, &hold(false, delay, 33, 40));
+            assert_eq!(path[..4], [6, 7, 8, 9], "mid Down {delay}");
+            assert!(
+                path[3..].iter().all(|r| *r == 9),
+                "mid Down {delay}: {path:?}"
+            );
+        }
+        // A short list whose edge is reached by the delayed first repeat.
+        let path = timed(2, 1, &hold(true, 600, 33, 10));
+        assert!(path.iter().all(|r| *r == 0), "{path:?}");
+    }
+    #[test]
+    fn ssh_bursts_of_a_hold_from_a_non_edge_row_do_not_wrap() {
+        let mut steps = vec![(false, 0)];
+        for burst in 0..6u64 {
+            steps.extend((0..5).map(|_| (false, 450 + burst * 100)));
+        }
+        let path = timed(8, 2, &steps);
+        assert_eq!(path[..6], [3, 4, 5, 6, 7, 7]);
+        assert!(path[4..].iter().all(|r| *r == 7), "{path:?}");
+        let steps: Vec<_> = steps.iter().map(|(_, at)| (true, *at)).collect();
+        let path = timed(8, 4, &steps);
+        assert!(path[4..].iter().all(|r| *r == 0), "{path:?}");
+    }
+    #[test]
+    fn a_fresh_gesture_after_a_clamped_hold_wraps() {
+        // Hold Down from the top to the bottom, release, then tap Down.
+        let mut steps = hold(false, 500, 30, 20);
+        steps.push((false, 3000));
+        let path = timed(5, 0, &steps);
+        assert_eq!(path[19], 4, "{path:?}");
+        assert_eq!(path[20], 0, "a fresh tap wraps: {path:?}");
+    }
+    #[test]
+    fn a_press_after_native_repeats_is_a_fresh_gesture() {
+        // Enhanced terminals: press, repeats to the bottom, release, press.
+        let mut nav = SelectionNavigation::default();
+        let now = Instant::now();
+        let mut s = nav.step_at(3, 5, false, true, now, |_| true);
+        for i in 1..10 {
+            s = nav.step_at(s, 5, false, false, now + Duration::from_millis(i), |_| true);
+        }
+        assert_eq!(s, 4);
+        let s = nav.step_at(s, 5, false, true, now + Duration::from_millis(11), |_| true);
+        assert_eq!(s, 0, "the released press wraps");
     }
 }
