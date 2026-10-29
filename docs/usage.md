@@ -330,7 +330,7 @@ five finished or failed, newest first), then All operations (the full list below
 and Close. It updates live and keeps the selected item. A queued item offers Cancel
 and Close; a recent one Dismiss and Close; a running one its progress dialog.
 Esc/Left return to the opener at its remembered row.
-Operations has a filter row (`Show  ‹ All ›`, cycled with Left/Right: All, In
+Operations has a filter row (`Show › All`, an Up/Down picker like Settings: All, In
 progress, Failed, Completed) above day groups (`• Today`, `• Yesterday`, `• Mon Oct 26`;
 undated legacy records last). Each row shows relative creation time, the subject
 (provider symbol and session or account), a plain kind (Move to Space, Delete

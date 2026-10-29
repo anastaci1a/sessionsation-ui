@@ -162,6 +162,8 @@ pub struct Manager {
     steering_unavailable: BTreeMap<String, String>,
     /// The Live steering selector is grabbed: the choice pending Enter (true = On).
     steering_pick: Option<bool>,
+    /// The Operations filter is grabbed: the value to restore on Esc.
+    filter_grab: Option<OperationFilter>,
     pub active_operation: Option<String>,
     foreground: Option<u64>,
     details_open: bool,
@@ -201,7 +203,7 @@ pub struct Manager {
     /// Selected Operations popup item, kept through live updates.
     queue_focus: Option<String>,
 }
-/// Operations page filter, cycled with Left/Right on its selector row.
+/// Operations page filter, an Up/Down picker on its selector row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OperationFilter {
     #[default]
@@ -219,16 +221,12 @@ impl OperationFilter {
             Self::Completed => "Completed",
         }
     }
-    pub fn cycle(self, previous: bool) -> Self {
-        const ALL: [OperationFilter; 4] = [
-            OperationFilter::All,
-            OperationFilter::InProgress,
-            OperationFilter::Failed,
-            OperationFilter::Completed,
-        ];
-        let i = ALL.iter().position(|f| *f == self).unwrap_or(0);
-        ALL[if previous { (i + 3) % 4 } else { (i + 1) % 4 }]
-    }
+    pub const ALL: [OperationFilter; 4] = [
+        OperationFilter::All,
+        OperationFilter::InProgress,
+        OperationFilter::Failed,
+        OperationFilter::Completed,
+    ];
 }
 /// Automatic provider login in progress: the backend plan runs in a HERDR pane
 /// while the account is polled until it no longer needs authentication.
@@ -284,6 +282,7 @@ impl Default for Manager {
             steering: BTreeMap::new(),
             steering_unavailable: BTreeMap::new(),
             steering_pick: None,
+            filter_grab: None,
             active_operation: None,
             foreground: None,
             details_open: false,
@@ -1213,6 +1212,7 @@ impl Manager {
         self.home_column = 0;
         self.queue_focus = None;
         self.steering_pick = None;
+        self.filter_grab = None;
         self.options = Options::default();
         self.options.selected = self.rows().iter().position(|r| !r.separator).unwrap_or(0);
         self.note.clear();
@@ -1663,34 +1663,40 @@ impl Manager {
                 .map(|e| e.3)
         };
         let slots = self.operation_slots();
+        let describe = |kind: &str, key: &str| -> Option<(String, String, String, String)> {
+            find(kind, key).map(|r| {
+                let code = if kind == "operation" {
+                    r["kind"].as_str().unwrap_or("operation")
+                } else {
+                    kind
+                };
+                (
+                    relative(now, r["created_at"].as_i64()).replace("unknown", "—"),
+                    crate::widgets::ellipsize(&self.operation_subject(kind, r), 24),
+                    kind_label(code),
+                    operation_row_status(kind, r),
+                )
+            })
+        };
         let described: Vec<Option<(String, String, String, String)>> = slots
             .iter()
             .map(|slot| match slot {
-                Slot::Entry(kind, key) => find(kind, key).map(|r| {
-                    let code = if kind == "operation" {
-                        r["kind"].as_str().unwrap_or("operation")
-                    } else {
-                        kind.as_str()
-                    };
-                    (
-                        relative(now, r["created_at"].as_i64()).replace("unknown", "—"),
-                        crate::widgets::ellipsize(&self.operation_subject(kind, r), 24),
-                        kind_label(code),
-                        operation_row_status(kind, r),
-                    )
-                }),
+                Slot::Entry(kind, key) => describe(kind, key),
                 _ => None,
             })
             .collect();
+        // Column widths come from every operation, not the filtered subset, so the
+        // list stays put when the filter changes.
+        let everything: Vec<_> = entries.iter().filter_map(|e| describe(e.0, e.1)).collect();
         let width = |f: fn(&(String, String, String, String)) -> &String| {
-            described
+            everything
                 .iter()
-                .flatten()
                 .map(|d| UnicodeWidthStr::width(f(d).as_str()))
                 .max()
                 .unwrap_or(0)
         };
         let (time_w, subject_w, kind_w) = (width(|d| &d.0), width(|d| &d.1), width(|d| &d.2));
+        let row_width = time_w + subject_w + kind_w + 4;
         let pad = |text: &str, w: usize| {
             format!(
                 "{text}{}",
@@ -1701,7 +1707,20 @@ impl Manager {
             .iter()
             .zip(described)
             .map(|(slot, described)| match (slot, described) {
-                (Slot::Filter, _) => Row::yes("Show").with_choice(self.operation_filter.label()),
+                (Slot::Filter, _) => {
+                    let mut row = Row::yes("Show")
+                        .with_picker(
+                            self.operation_filter.label(),
+                            crate::preferences::choice_arrow(
+                                &OperationFilter::ALL,
+                                self.operation_filter,
+                            ),
+                        )
+                        .grabbed(self.filter_grab.is_some());
+                    row.preview_column = Some(2 + 4 + 1);
+                    row.min_width = row_width;
+                    row
+                }
                 (Slot::Heading(label), _) => Row::heading(label.clone()),
                 (Slot::Entry(..), Some((time, subject, kind, status))) => {
                     let label = format!(
@@ -2377,6 +2396,19 @@ impl Manager {
             self.steering_pick = Some(on);
             return vec![];
         }
+        if self.filter_grab.is_some() {
+            return self.filter_key(key.code);
+        }
+        if matches!(
+            key.code,
+            KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ')
+        ) && self.page == Page::Operations
+            && self.options.selected == 0
+            && !self.options.back
+        {
+            self.filter_grab = Some(self.operation_filter);
+            return vec![];
+        }
         if key.code == KeyCode::Char('m') && self.can_start_move() {
             self.moving = Some(self.accounts.clone());
             return vec![];
@@ -2409,8 +2441,6 @@ impl Manager {
             return self.open_queue();
         }
         let armed = self.close_armed.take();
-        let filter_row =
-            self.page == Page::Operations && self.options.selected == 0 && !self.options.back;
         match key.code {
             KeyCode::Home | KeyCode::End => {
                 self.options
@@ -2431,10 +2461,6 @@ impl Manager {
                     .step_with_wrap(&self.rows(), false, key.code == KeyCode::Up, wrap);
                 self.badge_focus = false;
                 self.apply_home_column();
-                vec![]
-            }
-            KeyCode::Left | KeyCode::Right if filter_row => {
-                self.operation_filter = self.operation_filter.cycle(key.code == KeyCode::Left);
                 vec![]
             }
             KeyCode::Left if matches!(self.page, Page::Spaces(_)) => vec![],
@@ -2501,6 +2527,27 @@ impl Manager {
             self.dismissed_out = Some(self.dismissed.iter().cloned().collect());
             self.badge_focus = false;
         }
+    }
+    /// Keys while the Operations filter is grabbed: Up/Down choose (no wrap), Left,
+    /// Enter and Space commit, Esc restores the value held when it was grabbed.
+    fn filter_key(&mut self, code: KeyCode) -> Vec<Intent> {
+        match code {
+            KeyCode::Up | KeyCode::Down => {
+                self.operation_filter = crate::preferences::step(
+                    &OperationFilter::ALL,
+                    self.operation_filter,
+                    code == KeyCode::Up,
+                );
+            }
+            KeyCode::Left | KeyCode::Enter | KeyCode::Char(' ') => self.filter_grab = None,
+            KeyCode::Esc => {
+                if let Some(saved) = self.filter_grab.take() {
+                    self.operation_filter = saved;
+                }
+            }
+            _ => {}
+        }
+        vec![]
     }
     /// The selected row is an available Live steering selector: its account and state.
     fn steering_selected(&self) -> Option<(String, bool)> {
@@ -2979,7 +3026,7 @@ impl Manager {
 
             Page::Operations => {
                 if index == 0 {
-                    self.operation_filter = self.operation_filter.cycle(false);
+                    self.filter_grab = Some(self.operation_filter);
                     return vec![];
                 }
                 if let Some((kind, key)) = self.operation_keys().get(index).cloned().flatten() {
@@ -4311,7 +4358,7 @@ impl Manager {
         }
         let hints = if self.moving.is_some() {
             hint_lines(&["▲/▼: Move", "Enter: Save", "Esc: Cancel"], canvas.width)
-        } else if self.steering_pick.is_some() {
+        } else if self.steering_pick.is_some() || self.filter_grab.is_some() {
             hint_lines(&["▲/▼: Choose", "Enter: Set", "Esc: Cancel"], canvas.width)
         } else if let Some(d) = &self.dialog {
             // The footer follows the top dialog.
@@ -4462,7 +4509,8 @@ impl Manager {
                         }
                     }
                 }
-                self.options.right_mode = self.steering_pick.is_some();
+                self.options.right_mode =
+                    self.steering_pick.is_some() || self.filter_grab.is_some();
                 self.options
                     .paint_menu(canvas, &rows, 3, bottom, menu_controls)
             };
@@ -5070,7 +5118,7 @@ mod tests {
         let rows = m.rows();
         assert_eq!(rows[0].label, "Show");
         assert!(rows[0].preview_choice);
-        assert_eq!(rows[0].preview.as_deref(), Some("‹ All ›"));
+        assert_eq!(rows[0].preview.as_deref(), Some("↓ All"));
         // The filter row sits directly above the first day heading.
         assert!(rows[1].separator);
         assert_eq!(rows[1].label, "Today");
@@ -5096,16 +5144,22 @@ mod tests {
                 .filter(|r| !r.separator)
                 .all(|r| r.preview_column == column)
         );
-        // Left/Right on the filter row cycles; the list follows.
+        // Grab the filter, choose; the list follows live.
+        let key = |m: &mut Manager, code| {
+            m.key(KeyEvent::new(code, KeyModifiers::NONE));
+        };
         m.options.selected = 0;
-        m.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        key(&mut m, KeyCode::Right);
+        assert!(m.filter_grab.is_some());
+        key(&mut m, KeyCode::Down);
         assert_eq!(m.operation_filter, OperationFilter::InProgress);
         assert_eq!(entries(&m), vec!["new"]);
-        m.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        key(&mut m, KeyCode::Down);
         assert_eq!(entries(&m), vec!["legacy"]);
-        m.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        m.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        // Esc reverts to the value held at the grab.
+        key(&mut m, KeyCode::Esc);
         assert_eq!(m.operation_filter, OperationFilter::All);
+        assert!(m.filter_grab.is_none());
         assert!(!m.options.back);
         m.options.selected = 2;
         m.activate();
@@ -6606,6 +6660,127 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
         let id_line = d.body.iter().position(|l| l.contains(a)).unwrap();
         assert!(d.dim_from.is_some_and(|i| i <= id_line), "IDs are dim");
     }
+    fn operations_manager() -> Manager {
+        let mut m = setup();
+        m.operations = vec![
+            json!({"id":"old","kind":"switch","phase":"complete","created_at":10,"updated_at":1000}),
+            json!({"id":"new","kind":"account_delete","account_id":"codex:fixture0","phase":"running","created_at":20,"updated_at":1}),
+            json!({"id":"legacy","kind":"move_space","phase":"failed","detail":"Destination Space is gone.","updated_at":2000}),
+        ];
+        m.go(Page::Operations);
+        m
+    }
+    fn press_key(m: &mut Manager, code: KeyCode) {
+        m.key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+    #[test]
+    fn operations_filter_picker_grabs_changes_without_wrap_commits_and_reverts() {
+        let mut m = operations_manager();
+        m.options.selected = 0;
+        assert_eq!(m.rows()[0].preview.as_deref(), Some("↓ All"));
+        for code in [KeyCode::Right, KeyCode::Enter, KeyCode::Char(' ')] {
+            press_key(&mut m, code);
+            assert!(m.filter_grab.is_some(), "{code:?} grabs");
+            assert!(m.rows()[0].preview_grabbed);
+            press_key(&mut m, KeyCode::Left);
+            assert!(m.filter_grab.is_none());
+            assert!(!m.options.back, "Left committed instead of going back");
+        }
+        press_key(&mut m, KeyCode::Right);
+        press_key(&mut m, KeyCode::Up);
+        assert_eq!(
+            m.operation_filter,
+            OperationFilter::All,
+            "no wrap at the top"
+        );
+        for _ in 0..6 {
+            press_key(&mut m, KeyCode::Down);
+        }
+        assert_eq!(
+            m.operation_filter,
+            OperationFilter::Completed,
+            "no wrap at the bottom"
+        );
+        assert_eq!(m.rows()[0].preview.as_deref(), Some("↑ Completed"));
+        press_key(&mut m, KeyCode::Up);
+        assert_eq!(m.rows()[0].preview.as_deref(), Some("↕ Failed"));
+        // Enter commits; the filter stays.
+        press_key(&mut m, KeyCode::Enter);
+        assert!(m.filter_grab.is_none());
+        assert_eq!(m.operation_filter, OperationFilter::Failed);
+        // Esc reverts and does not leave the page.
+        press_key(&mut m, KeyCode::Right);
+        press_key(&mut m, KeyCode::Up);
+        press_key(&mut m, KeyCode::Esc);
+        assert_eq!(m.operation_filter, OperationFilter::Failed);
+        assert_eq!(m.page, Page::Operations);
+        assert!(m.close_armed.is_none());
+        // Another row dims while grabbed.
+        press_key(&mut m, KeyCode::Right);
+        let mut c = Canvas::new(60, 16);
+        m.paint(&mut c, 15);
+        assert!(screen_text(&c).contains("Choose"), "{}", screen_text(&c));
+        press_key(&mut m, KeyCode::Esc);
+        // Left reaches the back arrow once the picker is not grabbed.
+        press_key(&mut m, KeyCode::Left);
+        assert!(m.options.back);
+        assert_eq!(m.page, Page::Operations);
+    }
+    #[test]
+    fn operations_list_does_not_move_when_the_filter_changes() {
+        let mut m = operations_manager();
+        let xs = |m: &mut Manager| -> (usize, usize, usize) {
+            let mut c = Canvas::new(80, 16);
+            m.paint(&mut c, 15);
+            let lines: Vec<String> = screen_text(&c).lines().map(str::to_owned).collect();
+            let col = |needle: &str| {
+                lines
+                    .iter()
+                    .find_map(|l| l.find(needle).map(|b| l[..b].chars().count()))
+                    .unwrap_or(usize::MAX)
+            };
+            (
+                col("Show"),
+                col("Today").min(col("Undated")),
+                col("›").min(col("↕")),
+            )
+        };
+        let all = xs(&mut m);
+        for f in OperationFilter::ALL {
+            m.operation_filter = f;
+            let got = xs(&mut m);
+            assert_eq!((got.0, got.2), (all.0, all.2), "{f:?}");
+        }
+        m.operation_filter = OperationFilter::Failed;
+        let failed = m.rows();
+        m.operation_filter = OperationFilter::All;
+        let rows = m.rows();
+        let entry_column = |r: &Vec<Row>| {
+            r.iter().find_map(|r| {
+                r.preview_column
+                    .filter(|_| !r.separator && r.label != "Show")
+            })
+        };
+        assert_eq!(entry_column(&failed), entry_column(&rows));
+        let width = |r: &Vec<Row>| Options::left(80, r);
+        for f in OperationFilter::ALL {
+            m.operation_filter = f;
+            assert_eq!(width(&m.rows()), width(&rows), "{f:?}");
+        }
+        let _ = all.1;
+    }
+    #[test]
+    fn no_left_right_chevron_selector_remains_in_the_sources() {
+        for (name, src) in [
+            ("widgets", include_str!("widgets.rs")),
+            ("management", include_str!("management.rs")),
+            ("app", include_str!("app.rs")),
+            ("session_list", include_str!("session_list.rs")),
+        ] {
+            let code = src.split("#[cfg(test)]").next().unwrap();
+            assert!(!code.contains('‹'), "{name} still draws a left chevron");
+        }
+    }
     #[test]
     fn scrolling_operations_keep_the_filter_and_a_range_counter() {
         let mut m = setup();
@@ -6616,7 +6791,7 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
         let mut c = Canvas::new(45, 16);
         m.paint(&mut c, 15);
         let text = screen_text(&c);
-        assert!(text.contains("Show  ‹ All ›"), "{text}");
+        assert!(text.contains("Show ›") && text.contains(" All"), "{text}");
         assert!(text.contains(" of 12"), "{text}");
         m.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         let mut c = Canvas::new(45, 16);

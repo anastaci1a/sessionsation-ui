@@ -184,7 +184,7 @@ pub struct Row {
     placeholder: bool,
     preview_group: u8,
     field_padding: Option<std::ops::Range<usize>>,
-    /// The preview is an interactive `‹ value ›` selector cycled with Left/Right.
+    /// The preview is an Up/Down picker (`› value`, grabbed `↕ value`).
     pub preview_choice: bool,
     /// The preview is grey afterthought text (a reason, a note): it never takes part
     /// in centering or width, and moves below the list when it does not fit.
@@ -203,6 +203,8 @@ pub struct Row {
     /// Right-side selection mode (grabbed selector or focused badge): how this row
     /// is styled while the mode is active.
     pub mode: RowMode,
+    /// Width this row reserves for centering regardless of its own text.
+    pub min_width: usize,
 }
 /// A row's part in a right-side selection mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -262,6 +264,7 @@ impl Row {
             preview_info: false,
             preview_arrows: false,
             preview_grabbed: false,
+            min_width: 0,
             highlight: 0,
             settings_value: false,
             info: None,
@@ -386,15 +389,6 @@ impl Row {
         self.preview_gap = 2;
         self
     }
-    /// An interactive value cycled with Left/Right, drawn as `‹ value ›` with dim
-    /// arrows and the active value highlighted.
-    pub fn with_choice(mut self, value: impl AsRef<str>) -> Self {
-        self.preview = Some(format!("‹ {} ›", value.as_ref()));
-        self.preview_selected_only = false;
-        self.preview_choice = true;
-        self.preview_gap = 2;
-        self
-    }
     /// A picker choice drawn `<arrow> value`; `arrow` is one of `↕ ↓ ↑`.
     pub fn with_picker(mut self, value: impl AsRef<str>, arrow: &str) -> Self {
         self.preview = Some(format!("{arrow} {}", value.as_ref()));
@@ -440,6 +434,7 @@ impl Row {
             preview_info: false,
             preview_arrows: false,
             preview_grabbed: false,
+            min_width: 0,
             highlight: 0,
             settings_value: false,
             info: None,
@@ -728,64 +723,6 @@ impl Row {
                     bold: grabbed,
                     ..Cell::default()
                 },
-                false,
-            );
-            return;
-        }
-        if self.preview_choice && self.mode == RowMode::Other {
-            // Another selector is grabbed: no arrows, value in the darker grey.
-            canvas.widget_text(
-                x + 2,
-                y,
-                preview.trim_start_matches("‹ ").trim_end_matches(" ›"),
-                Cell {
-                    fg: MUTED,
-                    ..Cell::default()
-                },
-                false,
-            );
-            return;
-        }
-        if self.preview_choice {
-            let selected = selected || grabbed;
-            let arrow = Cell {
-                fg: if grabbed {
-                    SELECTED
-                } else if selected {
-                    SECONDARY
-                } else {
-                    MUTED
-                },
-                bold: grabbed,
-                ..Cell::default()
-            };
-            let inner = preview
-                .trim_start_matches("‹ ")
-                .trim_end_matches(" ›")
-                .to_owned();
-            canvas.widget_text(
-                x,
-                y,
-                if grabbed { "▲ " } else { "‹ " },
-                arrow.clone(),
-                false,
-            );
-            canvas.widget_text(
-                x + 2,
-                y,
-                &inner,
-                Cell {
-                    fg: if selected { SELECTED } else { SECONDARY },
-                    bold: selected,
-                    ..Cell::default()
-                },
-                false,
-            );
-            canvas.widget_text(
-                x + 2 + UnicodeWidthStr::width(inner.as_str()),
-                y,
-                if grabbed { " ▼" } else { " ›" },
-                arrow,
                 false,
             );
             return;
@@ -1105,6 +1042,7 @@ impl Options {
                         UnicodeWidthStr::width(r.label.as_str()),
                         |(col, preview)| col.saturating_sub(2) + UnicodeWidthStr::width(preview),
                     )
+                    .max(r.min_width)
             })
             .max()
             .unwrap_or(0)

@@ -1135,7 +1135,7 @@ impl App {
             "Per Space"
         }
     }
-    /// Rows whose value is an interactive `‹ value ›` selector.
+    /// Rows whose value is an Up/Down picker.
     fn choice_row(&self) -> bool {
         !self.options.back
             && match self.page {
@@ -3657,7 +3657,7 @@ mod tests {
         key(&mut a, KeyCode::Esc);
         let c = a.paint(&mut Field::new(80, 24, 1), 4000, 80, 24);
         let text: String = c.cells.iter().map(|c| c.glyph.as_str()).collect();
-        assert!(text.contains("Starfield  › Normal") && !text.contains("‹ Normal ›"));
+        assert!(text.contains("Starfield  › Normal"));
     }
     #[test]
     fn spinner_pickers_cycle_preview_live_and_persist() {
