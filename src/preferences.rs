@@ -186,8 +186,9 @@ pub fn choice_arrow<T: Copy + PartialEq>(all: &[T], current: T) -> &'static str 
         _ => "↕",
     }
 }
+/// Unknown keys (from a newer build) are kept in `extra` and written back on save,
+/// and an unknown choice reads as its default, so rolling back never breaks the file.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Preferences {
     pub version: u32,
     pub mode: Mode,
@@ -196,16 +197,27 @@ pub struct Preferences {
     pub last_account: Option<String>,
     #[serde(default)]
     pub root_plans: BTreeMap<String, Vec<PathBuf>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub starfield: Starfield,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub brightness: Brightness,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub claude_spinner: ClaudeSpinner,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub codex_spinner: CodexSpinner,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub gemini_spinner: GeminiSpinner,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+/// A value this build does not know reads as the default instead of failing.
+fn lenient<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(T::deserialize(value).unwrap_or_default())
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -221,6 +233,7 @@ impl Default for Preferences {
             claude_spinner: ClaudeSpinner::default(),
             codex_spinner: CodexSpinner::default(),
             gemini_spinner: GeminiSpinner::default(),
+            extra: serde_json::Map::new(),
         }
     }
 }
@@ -400,5 +413,40 @@ mod spinner_tests {
         assert_eq!(old.codex_spinner, CodexSpinner::FillPulse);
         assert_eq!(old.gemini_spinner, GeminiSpinner::Twinkle);
         assert_eq!(old.claude_spinner, ClaudeSpinner::Claude);
+    }
+    #[test]
+    fn unknown_fields_and_choices_from_newer_builds_load_and_survive_a_save() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("prefs.json");
+        // Written by a newer build: an extra key, an extra nested setting and a
+        // spinner this build does not know.
+        std::fs::write(
+            &path,
+            r#"{"version":1,"mode":"global","global_root":null,"space_roots":{},"last_account":"codex:a",
+                "starfield":"lively","claude_spinner":"future_spin","codex_spinner":"benzene",
+                "future_toggle":true,"future_group":{"a":[1,2]}}"#,
+        )
+        .unwrap();
+        let mut p = Preferences::load(&path).unwrap();
+        assert_eq!(p.starfield, Starfield::Dense);
+        assert_eq!(p.codex_spinner, CodexSpinner::Benzene);
+        assert_eq!(
+            p.claude_spinner,
+            ClaudeSpinner::Claude,
+            "unknown reads as default"
+        );
+        assert_eq!(p.extra["future_toggle"], serde_json::json!(true));
+        // A change saved by this build keeps the newer build's keys.
+        p.brightness = Brightness::Bright;
+        p.save(&path).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["future_toggle"], true);
+        assert_eq!(saved["future_group"], serde_json::json!({"a":[1,2]}));
+        assert_eq!(saved["brightness"], "bright");
+        assert_eq!(saved["last_account"], "codex:a");
+        let again = Preferences::load(&path).unwrap();
+        assert_eq!(again.extra, p.extra);
+        assert_eq!(again.brightness, Brightness::Bright);
     }
 }
