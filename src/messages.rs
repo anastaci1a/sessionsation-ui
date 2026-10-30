@@ -46,7 +46,17 @@ pub fn describe(text: &str) -> String {
             "This provider does not support that action. No change was made."
         }
         "ACCOUNT_NAME_EXISTS" => {
-            "An account already uses this name. Account names are shared by all providers; choose another."
+            "An account of this provider already uses this name; choose another."
+        }
+        "ACCOUNT_SESSIONS_RUNNING" => {
+            "This account has running sessions. Stop them to rename the backend, or use Rename only."
+        }
+        "ACCOUNT_AMBIGUOUS" => {
+            "Several providers have an account with this name. Use the provider:name ID."
+        }
+        "ACCOUNT_NAME_UNCHANGED" => "The name is unchanged. Nothing was renamed.",
+        "ACCOUNT_HOME_EXISTS" | "ACCOUNT_HOME_ADOPTED" => {
+            "A folder with that name already exists. Choose another name; nothing was moved."
         }
         "ACCOUNT_PROVIDER_MISMATCH" | "ACCOUNT_PROVIDER_REQUIRED" => {
             "The account's provider does not match the request. Choose the account's provider and try again."

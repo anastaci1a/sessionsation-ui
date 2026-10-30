@@ -6,6 +6,8 @@ use unicode_width::UnicodeWidthStr;
 pub const SECONDARY: [u8; 3] = [188; 3];
 pub const MUTED: [u8; 3] = [108; 3];
 pub const SELECTED: [u8; 3] = [238; 3];
+/// Static palette yellow/orange (indexed 214) for warning marks.
+pub const WARN: [u8; 3] = [255, 175, 0];
 pub const UNSET: &str = "not set";
 pub const NAME_MAX_CHARS: usize = 30;
 pub use crate::navigation::{Navigation, SelectionNavigation};
@@ -253,6 +255,8 @@ pub struct Row {
     pub overflow: Option<(usize, usize, String)>,
     /// The full text of a shortened preview, shown as a marquee while selected.
     pub preview_full: Option<String>,
+    /// A trailing "⚠" in the label is drawn in the warning colour.
+    pub warn: bool,
 }
 /// A row's part in a right-side selection mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -320,6 +324,7 @@ impl Row {
             mode: RowMode::Normal,
             overflow: None,
             preview_full: None,
+            warn: false,
         }
     }
     pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
@@ -440,6 +445,10 @@ impl Row {
         self.preview_gap = 2;
         self
     }
+    pub fn with_warning(mut self) -> Self {
+        self.warn = true;
+        self
+    }
     /// Grey explanation for an unavailable row, shown in parentheses (no bullet)
     /// only while the row is hovered. All hover notes of a menu share one fit
     /// decision: beside their rows when every one fits, otherwise below the list.
@@ -547,6 +556,7 @@ impl Row {
             mode: RowMode::Normal,
             overflow: None,
             preview_full: None,
+            warn: false,
         }
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, selected: bool, back: bool) {
@@ -763,6 +773,23 @@ impl Row {
                     canvas.cells[y * canvas.width + x + 2 + col].strike = false;
                 }
                 col += unicode_width::UnicodeWidthChar::width(*ch).unwrap_or(0);
+            }
+        }
+        if self.warn && y < canvas.height {
+            let before: String = self.label.chars().take_while(|c| *c != '⚠').collect();
+            if before.len() < self.label.len() {
+                let at = x + 2 + UnicodeWidthStr::width(before.as_str());
+                canvas.widget_text(
+                    at,
+                    y,
+                    "⚠",
+                    Cell {
+                        fg: WARN,
+                        strike: false,
+                        ..Cell::default()
+                    },
+                    false,
+                );
             }
         }
         if let Some(preview) = &self.preview

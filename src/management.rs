@@ -113,6 +113,8 @@ enum Form {
     /// A login already running in its pane: its sign-in link, read from the screen.
     LoginLink(String),
     AccountRename(String),
+    /// Rename popup of a 1.30+ backend: key, the current name, name differs from folder.
+    AccountRenameBackend(String, String, bool),
     Limits(String),
     Remove(Value),
     Delete(Value),
@@ -679,6 +681,34 @@ fn backend_text(value: &Value) -> Vec<String> {
     }
     vec![]
 }
+/// The folder name differs from the display name (contract 1.30+).
+fn name_mismatch(a: &Account) -> bool {
+    a.details.get("name_mismatch").is_some_and(|v| v == true)
+}
+/// Short hover reason when the backend rename is unavailable for this account.
+fn rename_blocked(a: &Account) -> Option<String> {
+    if let Some(b) = a.details.get("backend_rename").filter(|b| b.is_object()) {
+        if b["available"] != false {
+            return None;
+        }
+        let code = b["reason"].as_str().unwrap_or("");
+        return Some(match code {
+            "ACCOUNT_SESSIONS_RUNNING" => "sessions running".to_owned(),
+            "" => "unavailable".to_owned(),
+            other => clean(
+                &other
+                    .trim_start_matches("ACCOUNT_")
+                    .to_lowercase()
+                    .replace('_', " "),
+            ),
+        });
+    }
+    a.details
+        .get("running_sessions")
+        .and_then(Value::as_u64)
+        .filter(|n| *n > 0)
+        .map(|_| "sessions running".to_owned())
+}
 fn account_label(id: &str) -> String {
     id.replacen(':', "-", 1)
 }
@@ -1042,10 +1072,97 @@ impl Manager {
             row.with_hover_reason(reason)
         }
     }
+    /// The backend (contract 1.30+) advertises the backend rename; older ones keep the
+    /// display-name-only rename.
+    fn rename_backend_ui(&self) -> bool {
+        self.capabilities["account_names"]["rename_backend"].is_object()
+    }
+    fn rekey_account(&mut self, old: &str, new: &str) {
+        let swap = |page: &mut Page| {
+            if matches!(page, Page::Account(k) if k == old) {
+                *page = Page::Account(new.to_owned());
+            }
+        };
+        swap(&mut self.page);
+        for location in &mut self.history {
+            swap(&mut location.page);
+        }
+        self.deletion_previews.remove(old);
+        self.steering.remove(old);
+        self.steering_unavailable.remove(old);
+        self.bypass.remove(old);
+        self.bypass_unavailable.remove(old);
+    }
+    fn sync_rename_dialog(&mut self) {
+        let Form::AccountRenameBackend(key, current, mismatch) = self.form.clone() else {
+            return;
+        };
+        let unavailable = self.account(&key).and_then(rename_blocked);
+        let provider_ok = self.provider_cap(&self.provider_of(&key), "account_rename");
+        let Some(d) = self.dialog.as_mut() else {
+            return;
+        };
+        let text = d
+            .fields
+            .first()
+            .map(|f| f.input.value.trim().to_owned())
+            .unwrap_or_default();
+        let same = text.is_empty() || text == current;
+        let update = same && mismatch;
+        let mut first = Row::gate(
+            if update {
+                "Update backend ⚠"
+            } else {
+                "Rename & update backend"
+            },
+            (!same || mismatch) && unavailable.is_none(),
+        );
+        if update {
+            first = first.with_warning();
+        }
+        if let Some(reason) = unavailable {
+            first = first.with_hover_reason(reason);
+        }
+        let only = Row::gate("Rename only", !same && provider_ok);
+        for (label, row) in [("Rename only", only)] {
+            if let Some(b) = d.buttons.iter_mut().find(|b| b.label == label) {
+                *b = row;
+            }
+        }
+        if let Some(b) = d
+            .buttons
+            .iter_mut()
+            .find(|b| b.label == "Update backend ⚠" || b.label == "Rename & update backend")
+        {
+            *b = first;
+        }
+    }
+    fn show_rename_backend(&mut self, a: &Account) {
+        let current = crate::usage::account_title_full(a);
+        let mismatch = name_mismatch(a);
+        self.show(
+            "Rename account",
+            vec![format!(
+                "Display name for {}. Update backend also renames the account folder and ID.",
+                account_label(&a.id)
+            )],
+            &["Rename & update backend", "Rename only", "Cancel"],
+            Form::AccountRenameBackend(a.id.clone(), current.clone(), mismatch),
+        );
+        let mut field = Field::new("Display name", current);
+        field.input = field.input.limited(NAME_MAX_CHARS);
+        self.dialog.as_mut().unwrap().fields.push(field);
+        self.sync_rename_dialog();
+    }
     fn rename_account_row(&self, key: &str) -> Row {
         let provider = self.provider_of(key);
         let row = Row::gate("Rename", self.provider_cap(&provider, "account_rename"));
         if self.provider_cap(&provider, "account_rename") {
+            if self.rename_backend_ui() && self.account(key).is_some_and(name_mismatch) {
+                return Row::yes("Rename ⚠")
+                    .with_warning()
+                    .with_hover_reason("name ≠ folder");
+            }
             row
         } else {
             let reason = self
@@ -2842,7 +2959,10 @@ impl Manager {
                 self.close_armed = None;
             }
             match d.key_with_wrap(key, wrap) {
-                dialog::Event::None => return vec![],
+                dialog::Event::None => {
+                    self.sync_rename_dialog();
+                    return vec![];
+                }
                 dialog::Event::Dismiss => {
                     if matches!(self.form, Form::OperationApproval(..)) {
                         return self.submit(1, vec![]);
@@ -3247,6 +3367,7 @@ impl Manager {
         if let Some(d) = &mut self.dialog {
             d.paste(text);
         }
+        self.sync_rename_dialog();
     }
     fn back(&mut self) -> Vec<Intent> {
         if self.page == Page::Home {
@@ -3485,7 +3606,17 @@ impl Manager {
                             Purpose::Limits(key),
                         );
                     }
-                    "Rename" if self.provider_cap(&self.provider_of(&key), "account_rename") => {
+                    "Rename" | "Rename ⚠"
+                        if self.provider_cap(&self.provider_of(&key), "account_rename") =>
+                    {
+                        if self.rename_backend_ui()
+                            && a.details
+                                .get("backend_rename")
+                                .is_some_and(Value::is_object)
+                        {
+                            self.show_rename_backend(&a);
+                            return vec![];
+                        }
                         let current = a
                             .details
                             .get("display_name")
@@ -4096,6 +4227,49 @@ impl Manager {
             }
             return vec![];
         }
+        if let Form::AccountRenameBackend(key, current, _) = self.form.clone() {
+            let enabled = self
+                .dialog
+                .as_ref()
+                .and_then(|d| d.buttons.get(button))
+                .is_some_and(|b| b.enabled);
+            if button > 1 || !enabled {
+                if button > 1 {
+                    self.dismiss();
+                }
+                return vec![];
+            }
+            let text: String = values
+                .first()
+                .map_or("", String::as_str)
+                .trim()
+                .chars()
+                .take(64)
+                .collect();
+            let generation = self
+                .account(&key)
+                .and_then(|a| a.details.get("generation"))
+                .map(|g| g.as_str().map_or_else(|| g.to_string(), str::to_owned))
+                .unwrap_or_default();
+            let mut args = strings(&[
+                "account",
+                if button == 0 {
+                    "rename-backend"
+                } else {
+                    "rename"
+                },
+                &key,
+            ]);
+            if button == 0 {
+                if !text.is_empty() && text != current {
+                    args.push(text);
+                }
+            } else {
+                args.extend(strings(&["--display-name", &text]));
+            }
+            args.extend(strings(&["--expected-generation", &generation]));
+            return self.mutate(args);
+        }
         if button != 0 {
             self.dialog = None;
             self.form = Form::None;
@@ -4276,6 +4450,7 @@ impl Manager {
                     Purpose::Relocation(args),
                 );
             }
+            Form::AccountRenameBackend(..) => return vec![],
             Form::AccountRename(key) => {
                 let name: String = value(0).trim().chars().take(64).collect();
                 strings(&["account", "rename", &key, "--display-name", &name])
@@ -4901,6 +5076,24 @@ impl Manager {
                 }
             }
             Purpose::Mutation => {
+                if let (Some(new), Some(old)) = (
+                    value["account_id"].as_str(),
+                    value["previous_account_id"].as_str(),
+                ) && new != old
+                {
+                    // The account id changed: follow it, drop per-id caches of the old id and
+                    // re-read accounts and sessions (their generations changed).
+                    self.rekey_account(old, new);
+                    if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
+                        self.show(
+                            "Saved",
+                            vec![format!("Account renamed to {}.", account_label(new))],
+                            &["Close"],
+                            Form::None,
+                        );
+                    }
+                    return self.refresh();
+                }
                 if value["setting"] == "skipDangerousModePermissionPrompt"
                     && let Some(key) = value["account_id"].as_str()
                 {
@@ -9397,6 +9590,181 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         m.options.selected = disable;
         m.activate();
         assert_eq!(m.dialog.as_ref().unwrap().title, "Disable account");
+    }
+    fn backend_rename_manager(mismatch: bool, running: u64) -> Manager {
+        let mut m = dual_providers();
+        m.capabilities["providers"][0]["account_rename"] = json!(true);
+        m.capabilities["account_names"] =
+            json!({"rename_backend": {"command": "account rename-backend"}});
+        let blocked = running > 0;
+        m.accounts[0]
+            .details
+            .insert("generation".into(), json!("g7"));
+        m.accounts[0]
+            .details
+            .insert("name_mismatch".into(), json!(mismatch));
+        m.accounts[0]
+            .details
+            .insert("running_sessions".into(), json!(running));
+        m.accounts[0].details.insert(
+            "backend_rename".into(),
+            json!({"available": !blocked, "reason": if blocked { json!("ACCOUNT_SESSIONS_RUNNING") } else { Value::Null }}),
+        );
+        m.go(Page::Account("codex:account1".into()));
+        m
+    }
+    fn popup_buttons(m: &Manager) -> Vec<(String, bool)> {
+        m.dialog
+            .as_ref()
+            .unwrap()
+            .buttons
+            .iter()
+            .map(|b| (b.label.clone(), b.enabled))
+            .collect()
+    }
+    #[test]
+    fn backend_rename_popup_follows_text_mismatch_and_running_sessions() {
+        let mut m = backend_rename_manager(true, 0);
+        assert_eq!(m.rows()[1].label, "Rename ⚠");
+        assert!(m.rows()[1].warn);
+        assert_eq!(m.rows()[1].preview.as_deref(), Some("(name ≠ folder)"));
+        m.options.selected = 1;
+        m.activate();
+        // Unchanged text with a mismatch: Update backend is the only enabled rename.
+        assert_eq!(
+            popup_buttons(&m),
+            [
+                ("Update backend ⚠".to_owned(), true),
+                ("Rename only".to_owned(), false),
+                ("Cancel".to_owned(), true)
+            ]
+        );
+        let current = m.dialog.as_ref().unwrap().fields[0].input.value.clone();
+        let sent = m.submit(0, vec![current]);
+        assert_eq!(
+            api(&sent).1,
+            strings(&[
+                "account",
+                "rename-backend",
+                "codex:account1",
+                "--expected-generation",
+                "g7"
+            ])
+        );
+        // Changed text: both rename options, no warning.
+        m.dialog = None;
+        m.form = Form::None;
+        m.options.selected = 1;
+        m.activate();
+        m.dialog.as_mut().unwrap().paste("x");
+        m.sync_rename_dialog();
+        assert_eq!(
+            popup_buttons(&m)[..2],
+            [
+                ("Rename & update backend".to_owned(), true),
+                ("Rename only".to_owned(), true)
+            ]
+        );
+        let sent = m.submit(0, vec!["New".into()]);
+        assert_eq!(
+            api(&sent).1,
+            strings(&[
+                "account",
+                "rename-backend",
+                "codex:account1",
+                "New",
+                "--expected-generation",
+                "g7"
+            ])
+        );
+        m.dialog = None;
+        m.form = Form::None;
+        m.options.selected = 1;
+        m.activate();
+        m.dialog.as_mut().unwrap().paste("x");
+        m.sync_rename_dialog();
+        let sent = m.submit(1, vec!["New".into()]);
+        assert_eq!(
+            api(&sent).1,
+            strings(&[
+                "account",
+                "rename",
+                "codex:account1",
+                "--display-name",
+                "New",
+                "--expected-generation",
+                "g7"
+            ])
+        );
+    }
+    #[test]
+    fn backend_rename_is_disabled_with_a_reason_while_sessions_run_and_empty_text_disables_both() {
+        let mut m = backend_rename_manager(false, 2);
+        assert_eq!(m.rows()[1].label, "Rename", "no mismatch, no warning");
+        m.options.selected = 1;
+        m.activate();
+        assert_eq!(
+            popup_buttons(&m)[..2],
+            [
+                ("Rename & update backend".to_owned(), false),
+                ("Rename only".to_owned(), false)
+            ]
+        );
+        m.dialog.as_mut().unwrap().fields[0].input = crate::widgets::TextInput::new(String::new());
+        m.sync_rename_dialog();
+        assert!(!popup_buttons(&m)[1].1);
+        m.dialog.as_mut().unwrap().paste("fresh");
+        m.sync_rename_dialog();
+        let b = &m.dialog.as_ref().unwrap().buttons;
+        assert!(!b[0].enabled && b[0].preview.as_deref() == Some("(sessions running)"));
+        assert!(b[1].enabled, "rename only stays available");
+        // A mismatch with running sessions greys Update backend with its reason.
+        let mut m = backend_rename_manager(true, 1);
+        m.options.selected = 1;
+        m.activate();
+        let b = &m.dialog.as_ref().unwrap().buttons;
+        assert_eq!(
+            (b[0].label.as_str(), b[0].enabled),
+            ("Update backend ⚠", false)
+        );
+        assert_eq!(b[0].preview.as_deref(), Some("(sessions running)"));
+    }
+    #[test]
+    fn a_1_29_backend_keeps_the_old_rename_even_with_unknown_fields() {
+        let mut m = dual_providers();
+        m.capabilities["providers"][0]["account_rename"] = json!(true);
+        m.accounts[0]
+            .details
+            .insert("name_mismatch".into(), json!(true));
+        m.accounts[0]
+            .details
+            .insert("future_field".into(), json!({"x": 1}));
+        m.go(Page::Account("codex:account1".into()));
+        assert_eq!(m.rows()[1].label, "Rename");
+        m.options.selected = 1;
+        m.activate();
+        assert!(matches!(m.form, Form::AccountRename(_)));
+    }
+    #[test]
+    fn a_backend_rename_follows_the_new_account_id() {
+        let mut m = backend_rename_manager(true, 0);
+        m.options.selected = 1;
+        m.activate();
+        let (token, _) = api(&m.submit(0, vec!["fresh".into()]));
+        m.dialog.as_mut().unwrap();
+        let out = m.response(token, Ok(json!({"account_id":"codex:fresh","previous_account_id":"codex:account1","generation":"g8"})));
+        assert_eq!(m.page, Page::Account("codex:fresh".into()));
+        assert!(!out.is_empty(), "{out:?}");
+    }
+    #[test]
+    fn same_name_under_two_providers_stays_distinct_by_id() {
+        let mut m = dual_providers();
+        m.accounts.push(
+            serde_json::from_value(json!({"id":"claude:account1","selectable":true})).unwrap(),
+        );
+        assert_eq!(m.account("claude:account1").unwrap().provider(), "claude");
+        assert_eq!(m.account("codex:account1").unwrap().provider(), "codex");
+        assert_eq!(m.provider_of("claude:account1"), "claude");
     }
     #[test]
     fn display_names_replace_short_names_everywhere_with_fallback() {

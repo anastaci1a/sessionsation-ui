@@ -307,6 +307,13 @@ Account actions begin with Details/Limits/Rename for every account, then group
 Login/Enable/Disable and Deregister/Restore/Delete with dot separators. Rename sets a
 backend display name (empty clears it) and is enabled only when the provider reports
 `account_rename`; display names replace short names in lists and session tags.
+Against a contract 1.30+ backend (`capabilities.account_names.rename_backend`), Rename opens a popup with
+"Rename & update backend", "Rename only" and "Cancel"; options 1 and 2 are struck through while the text is
+empty or unchanged, and option 1 also while the account has running sessions (hover reason). When the
+folder name differs from the display name, Rename shows a yellow ⚠ ("name ≠ folder") and, with unchanged
+text, option 1 reads "Update backend ⚠" (rename-backend without a new name). Accounts are keyed by
+`provider:name` everywhere; a backend rename follows the new id and re-reads state. Older backends keep the
+display-name-only rename.
 Claude accounts on a revision-16 backend add a `Live steering` selector (On/Off)
 that reads `api account live-steering` and changes it with `--enable`/`--disable`
 through the usual operation dialog; the value is always the backend's reply. An
