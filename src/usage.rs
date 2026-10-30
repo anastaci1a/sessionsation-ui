@@ -388,7 +388,7 @@ impl Usage {
         self.paint_status(canvas, x, y, bar, true);
     }
     /// The stub bar standing in for an unavailable usage bar: the bar's unfilled
-    /// grey, never hue-shifted or bold, with no marker.
+    /// grey, never hue-shifted, always bold, with no marker.
     fn paint_stub(canvas: &mut Canvas, x: usize, y: usize, bar: usize) {
         canvas.text(
             x,
@@ -396,7 +396,7 @@ impl Usage {
             &crate::stub_bar::stub_bar(bar),
             Cell {
                 fg: UNFILLED,
-                bold: false,
+                bold: true,
                 ..Cell::default()
             },
             false,
@@ -2134,7 +2134,7 @@ mod picker_tests {
         // A stub bar keeps the column; its value is unknown, never 0%.
         assert!(row(1).starts_with("╶╶─╼━━━━╾─╴╴  ?% wk"), "{}", row(1));
         assert_eq!(canvas.cells[40].fg, UNFILLED);
-        assert!(!canvas.cells[40].bold);
+        assert!(canvas.cells[40].bold);
         assert_eq!(canvas.cells[40 + 14].fg, crate::widgets::MUTED);
     }
     fn with_details(mut a: Account, details: serde_json::Value) -> Account {
@@ -2261,9 +2261,9 @@ mod picker_tests {
             }
         }
     }
-    /// The stub's colour is the bars' unfilled grey: no hue, no marker, never bold.
+    /// The stub's colour is the bars' unfilled grey: no hue, no marker, always bold.
     #[test]
-    fn stub_is_unfilled_grey_never_bold_in_every_paint_mode() {
+    fn stub_is_unfilled_grey_always_bold_in_every_paint_mode() {
         let a = claude_account(json!({}));
         let u = Usage::account(&a);
         let base = crate::render::Field::new(60, 4, 1967).paint(4200);
@@ -2287,7 +2287,7 @@ mod picker_tests {
             assert_eq!(row, "╶╶╴──━━━━━━━──╶╴╴");
             for x in 4..21 {
                 assert_eq!(c.cells[60 + x].fg, grey, "x={x}");
-                assert!(!c.cells[60 + x].bold, "x={x}");
+                assert!(c.cells[60 + x].bold, "x={x}");
             }
         }
         // The grey is the one the normal bars use for their unfilled part.
@@ -2473,7 +2473,7 @@ mod picker_tests {
                 for x in l.bars + 1..l.bars + l.bar_width - 1 {
                     let (cell, bar) = (&c.cells[width + x], &bar.cells[width + x]);
                     assert_eq!(bar.glyph, "─", "unfilled at x={x}");
-                    assert!(!cell.bold, "x={x}");
+                    assert!(cell.bold, "x={x}");
                     if cell.glyph != " " {
                         assert_eq!(cell.fg, bar.fg, "{selected:?} {back} {focus} x={x}");
                         seen.insert(cell.fg);
