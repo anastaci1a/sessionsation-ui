@@ -471,7 +471,7 @@ pub fn spinner(now_ms: u64) -> &'static str {
 }
 /// Gemini CLI's ink-spinner `dots`: one Braille frame every 80 ms, never bold.
 pub fn gemini_spinner(now_ms: u64) -> &'static str {
-    spinner_at(GEMINI_CLASSIC_MS, now_ms)
+    spinner_at(GEMINI_NATIVE_MS, now_ms)
 }
 /// Claude Code 2.1.312 busy spinner: six single-cell frames on a cosine ease over a
 /// 2000 ms cycle (dwelling on the first and last), elapsed time quantized down to
@@ -502,8 +502,8 @@ pub const CODEX_BENZENE_MS: u64 = THEMED_FRAME_MS;
 /// Codex "build-up".
 pub const CODEX_BUILD_UP_FRAMES: [&str; 6] = ["·", "⬡", "⏣", "⬢", "⏣", "⬡"];
 pub const CODEX_BUILD_UP_MS: u64 = THEMED_FRAME_MS;
-/// Codex "classic": the Braille spinner at 100 ms.
-pub const CODEX_CLASSIC_MS: u64 = 100;
+/// Codex "native/classic": the Braille spinner at 100 ms.
+pub const CODEX_NATIVE_MS: u64 = 100;
 /// Gemini "twinkle" (default).
 pub const GEMINI_TWINKLE_FRAMES: [&str; 6] = ["⋅", "✧", "⟡", "✦", "⟡", "✧"];
 pub const GEMINI_TWINKLE_MS: u64 = THEMED_FRAME_MS;
@@ -516,8 +516,8 @@ pub const GEMINI_MORPH_MS: u64 = THEMED_FRAME_MS;
 /// Gemini "concave blink".
 pub const GEMINI_CONCAVE_BLINK_FRAMES: [&str; 4] = ["✦", "⟡", "✧", "⟡"];
 pub const GEMINI_CONCAVE_BLINK_MS: u64 = THEMED_FRAME_MS;
-/// Gemini "classic": Gemini CLI's own Braille spinner at 80 ms.
-pub const GEMINI_CLASSIC_MS: u64 = 80;
+/// Gemini "native": Gemini CLI's own Braille spinner at 80 ms.
+pub const GEMINI_NATIVE_MS: u64 = 80;
 /// Antigravity "native": the agy TUI's own eight-frame Braille cycle.
 pub const ANTIGRAVITY_NATIVE_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 pub const ANTIGRAVITY_NATIVE_MS: u64 = 80;
@@ -527,7 +527,8 @@ pub const ANTIGRAVITY_PULSE_MS: u64 = THEMED_FRAME_MS;
 /// Antigravity "tilt": the dotted triangle fills its left and right halves in turn.
 pub const ANTIGRAVITY_TILT_FRAMES: [&str; 4] = ["◬", "◭", "◬", "◮"];
 pub const ANTIGRAVITY_TILT_MS: u64 = THEMED_FRAME_MS;
-/// "Glow": a static glyph whose colour pulses like the picker arrow.
+/// "Glow": a static glyph whose colour oscillates between two hueshift levels at
+/// the picker arrow's rate. "Static" is the plain provider symbol, no animation.
 pub const CODEX_GLOW_GLYPH: &str = "⏣";
 pub const GEMINI_GLOW_GLYPH: &str = "✦";
 pub const ANTIGRAVITY_GLOW_GLYPH: &str = "◬";
@@ -536,18 +537,19 @@ pub const CLAUDE_GLOW_GLYPH: &str = "✻";
 fn cycle(frames: &'static [&'static str], ms: u64, now_ms: u64) -> &'static str {
     frames[(now_ms / ms % frames.len() as u64) as usize]
 }
-/// The busy frame of the chosen Codex spinner (Glow is its static glyph).
+/// The busy frame of the chosen Codex spinner (Glow and Static are static glyphs).
 pub fn codex_frame(kind: CodexSpinner, now_ms: u64) -> &'static str {
     match kind {
         CodexSpinner::FillPulse => cycle(&CODEX_FILL_PULSE_FRAMES, CODEX_FILL_PULSE_MS, now_ms),
         CodexSpinner::Rotate => cycle(&CODEX_ROTATE_FRAMES, CODEX_ROTATE_MS, now_ms),
         CodexSpinner::Benzene => cycle(&CODEX_BENZENE_FRAMES, CODEX_BENZENE_MS, now_ms),
         CodexSpinner::BuildUp => cycle(&CODEX_BUILD_UP_FRAMES, CODEX_BUILD_UP_MS, now_ms),
-        CodexSpinner::Classic => spinner_at(CODEX_CLASSIC_MS, now_ms),
+        CodexSpinner::Native => spinner_at(CODEX_NATIVE_MS, now_ms),
         CodexSpinner::Glow => CODEX_GLOW_GLYPH,
+        CodexSpinner::Static => crate::usage::provider_symbol("codex"),
     }
 }
-/// The busy frame of the chosen Gemini spinner (Glow is its static glyph).
+/// The busy frame of the chosen Gemini spinner (Glow and Static are static glyphs).
 pub fn gemini_frame(kind: GeminiSpinner, now_ms: u64) -> &'static str {
     match kind {
         GeminiSpinner::Twinkle => cycle(&GEMINI_TWINKLE_FRAMES, GEMINI_TWINKLE_MS, now_ms),
@@ -558,11 +560,13 @@ pub fn gemini_frame(kind: GeminiSpinner, now_ms: u64) -> &'static str {
             GEMINI_CONCAVE_BLINK_MS,
             now_ms,
         ),
-        GeminiSpinner::Classic => spinner_at(GEMINI_CLASSIC_MS, now_ms),
+        GeminiSpinner::Native => spinner_at(GEMINI_NATIVE_MS, now_ms),
+        GeminiSpinner::Classic => spinner(now_ms),
         GeminiSpinner::Glow => GEMINI_GLOW_GLYPH,
+        GeminiSpinner::Static => crate::usage::provider_symbol("gemini"),
     }
 }
-/// The busy frame of the chosen Antigravity spinner (Glow is its static glyph).
+/// The busy frame of the chosen Antigravity spinner (Glow and Static are static glyphs).
 pub fn antigravity_frame(kind: AntigravitySpinner, now_ms: u64) -> &'static str {
     match kind {
         AntigravitySpinner::Native => {
@@ -570,18 +574,21 @@ pub fn antigravity_frame(kind: AntigravitySpinner, now_ms: u64) -> &'static str 
         }
         AntigravitySpinner::Pulse => cycle(&ANTIGRAVITY_PULSE_FRAMES, ANTIGRAVITY_PULSE_MS, now_ms),
         AntigravitySpinner::Tilt => cycle(&ANTIGRAVITY_TILT_FRAMES, ANTIGRAVITY_TILT_MS, now_ms),
+        AntigravitySpinner::Classic => spinner(now_ms),
         AntigravitySpinner::Glow => ANTIGRAVITY_GLOW_GLYPH,
+        AntigravitySpinner::Static => crate::usage::provider_symbol("antigravity"),
     }
 }
-/// The busy frame of the chosen Claude spinner (Glow is its static glyph).
+/// The busy frame of the chosen Claude spinner (Glow and Static are static glyphs).
 pub fn claude_frame(kind: ClaudeSpinner, now_ms: u64) -> &'static str {
     match kind {
-        ClaudeSpinner::Claude => claude_spinner(now_ms),
+        ClaudeSpinner::Native => claude_spinner(now_ms),
         ClaudeSpinner::Classic => spinner(now_ms),
         ClaudeSpinner::Glow => CLAUDE_GLOW_GLYPH,
+        ClaudeSpinner::Static => crate::usage::provider_symbol("claude"),
     }
 }
-/// Whether the busy row's chosen spinner is a static glyph with a colour pulse.
+/// Whether the busy row's chosen spinner is the static glyph with a colour oscillation.
 pub fn row_glows(session: &Value, spinners: Spinners) -> bool {
     busy(session)
         && if is_antigravity(session) {
@@ -907,13 +914,25 @@ pub fn paint_with(
             let strong = selected && !mode;
             let animated = busy(session);
             if glows {
-                let fg = canvas.theme.as_ref().map_or(MUTED, |t| t.arrow_pulse());
+                // A static glyph whose hueshift oscillates, at the glyph's own cell,
+                // from this row's icon level down to the next darker one: selected
+                // normal to dim, otherwise dim to the even darker floor. Not bold,
+                // like every animated spinner.
+                let low = if icon_level == 1000 {
+                    crate::render::DIM_LEVEL
+                } else {
+                    crate::render::GLOW_FLOOR_LEVEL
+                };
+                let fg = canvas
+                    .theme
+                    .as_ref()
+                    .map_or(MUTED, |t| t.hue_pulse(x + 1, y, icon_level, low));
                 canvas.widget_text(
                     x + 1,
                     y,
                     icon,
                     Cell {
-                        fg: dim(fg, options.back || mode),
+                        fg,
                         ..Cell::default()
                     },
                     false,
@@ -1781,25 +1800,54 @@ mod tests {
         // Every option selects its own frames.
         let frames = |kind, n| -> Vec<&str> {
             (0..n)
-                .map(|i| row_icon(&busy("codex"), i * 120, with(C::Claude, kind, G::Twinkle)))
+                .map(|i| row_icon(&busy("codex"), i * 120, with(C::Native, kind, G::Twinkle)))
                 .collect()
         };
         assert_eq!(frames(X::Rotate, 5), ["⬢", "⬣", "⬢", "⬣", "⬢"]);
         assert_eq!(frames(X::Benzene, 5), ["⌬", "⏣", "⬡", "⏣", "⌬"]);
         assert_eq!(frames(X::BuildUp, 6), ["·", "⬡", "⏣", "⬢", "⏣", "⬡"]);
         assert_eq!(frames(X::Glow, 3), ["⏣", "⏣", "⏣"]);
-        let classic = with(C::Claude, X::Classic, G::Classic);
-        assert_eq!(row_icon(&busy("codex"), 100, classic), "⠙");
-        assert_eq!(row_icon(&busy("codex"), 99, classic), "⠋");
-        assert_eq!(row_icon(&busy("gemini"), 80, classic), "⠙");
-        assert_eq!(row_icon(&busy("gemini"), 79, classic), "⠋");
+        // Codex's Native is the Braille spinner (labelled Native/Classic).
+        let braille = with(C::Classic, X::Native, G::Native);
+        assert_eq!(row_icon(&busy("codex"), 100, braille), "⠙");
+        assert_eq!(row_icon(&busy("codex"), 99, braille), "⠋");
+        // Gemini's Native is its own 80 ms Braille; Classic is the shared 100 ms one.
+        assert_eq!(row_icon(&busy("gemini"), 80, braille), "⠙");
+        assert_eq!(row_icon(&busy("gemini"), 79, braille), "⠋");
+        let classic = with(C::Classic, X::Native, G::Classic);
+        assert_eq!(row_icon(&busy("gemini"), 100, classic), "⠙");
+        assert_eq!(row_icon(&busy("gemini"), 99, classic), "⠋");
+        let agy_classic = Spinners {
+            antigravity: A::Classic,
+            ..d
+        };
+        assert_eq!(row_icon(&busy("antigravity"), 100, agy_classic), "⠙");
+        assert_eq!(row_icon(&busy("antigravity"), 99, agy_classic), "⠋");
+        // Static is the plain provider symbol while busy, whatever the time.
+        let stat = Spinners {
+            claude: C::Static,
+            codex: X::Static,
+            gemini: G::Static,
+            antigravity: A::Static,
+        };
+        for (p, glyph) in [
+            ("claude", "✻"),
+            ("codex", "⏣"),
+            ("gemini", "✦"),
+            ("antigravity", "◬"),
+        ] {
+            for now in [0, 80, 333, 1000] {
+                assert_eq!(row_icon(&busy(p), now, stat), glyph, "{p} {now}");
+            }
+            assert!(!row_glows(&busy(p), stat));
+        }
         let gem = |kind, n| -> Vec<&str> {
             (0..n)
                 .map(|i| {
                     row_icon(
                         &busy("gemini"),
                         i * 120,
-                        with(C::Claude, X::FillPulse, kind),
+                        with(C::Native, X::FillPulse, kind),
                     )
                 })
                 .collect()
@@ -1820,6 +1868,93 @@ mod tests {
         for p in ["claude", "codex", "gemini", "antigravity"] {
             assert!(row_glows(&busy(p), glow) && !row_glows(&idle(p), glow));
             assert!(!row_glows(&busy(p), d));
+        }
+    }
+    /// A busy Codex row with the given spinner: x of its icon, the icon cell and
+    /// the theme. `selected` picks whether that row or the idle one below has focus.
+    fn busy_icon_cell(
+        kind: CodexSpinner,
+        selected: bool,
+        now: u64,
+    ) -> (usize, Cell, crate::render::Theme) {
+        let sessions = vec![
+            json!({"id":"a","name":"liq-glass-lead","account_id":"codex:gate1","availability":"running","activity":"busy"}),
+            json!({"id":"b","name":"docs","account_id":"codex:main","availability":"running","activity":"idle"}),
+        ];
+        let mut field = crate::render::Field::new(100, 20, 1967);
+        let mut c = field.paint(now);
+        let mut o = Options {
+            selected: if selected { 0 } else { 1 },
+            ..Options::default()
+        };
+        let extras = Extras {
+            spinners: Spinners {
+                codex: kind,
+                ..Spinners::default()
+            },
+            ..Extras::default()
+        };
+        paint_with(&mut c, &mut o, &sessions, true, 18, 62, 19, extras);
+        let x = text(&c, 3).chars().position(|g| g == '⏣').unwrap();
+        (
+            x,
+            c.cells[3 * c.width + x].clone(),
+            c.theme.clone().unwrap(),
+        )
+    }
+    fn hue(theme: &crate::render::Theme, x: usize, level: i64) -> [u8; 3] {
+        theme
+            .accent(
+                x,
+                3,
+                &Accent {
+                    brightness: level,
+                    flash: false,
+                    ..Accent::default()
+                },
+            )
+            .fg
+    }
+    #[test]
+    fn static_spinner_wears_the_normal_hue_selected_and_the_darker_hue_otherwise() {
+        use crate::render::DIM_LEVEL;
+        for now in [4000, 5000, 6123, 9999] {
+            for (selected, level) in [(true, 1000), (false, DIM_LEVEL)] {
+                let (x, cell, theme) = busy_icon_cell(CodexSpinner::Static, selected, now);
+                assert_eq!(cell.fg, hue(&theme, x, level), "now={now} sel={selected}");
+                assert!(!cell.bold, "animated rows are never bold");
+            }
+        }
+    }
+    #[test]
+    fn glow_hue_stays_between_its_two_levels_at_the_arrow_pulse_period() {
+        use crate::render::{ARROW_PULSE_MS, DIM_LEVEL, GLOW_FLOOR_LEVEL};
+        let (floor, dim) = (std::hint::black_box(GLOW_FLOOR_LEVEL), DIM_LEVEL);
+        assert!(floor < dim && floor > 0);
+        for (selected, high, low) in [
+            (true, 1000, DIM_LEVEL),
+            (false, DIM_LEVEL, GLOW_FLOOR_LEVEL),
+        ] {
+            let mut seen = std::collections::BTreeSet::new();
+            for base in [8000, 8000 + ARROW_PULSE_MS * 3] {
+                for phase in (0..ARROW_PULSE_MS).step_by(125) {
+                    let now = base + phase;
+                    let (x, cell, theme) = busy_icon_cell(CodexSpinner::Glow, selected, now);
+                    let (hi, lo) = (hue(&theme, x, high), hue(&theme, x, low));
+                    for ch in 0..3 {
+                        let (a, b) = (hi[ch].min(lo[ch]), hi[ch].max(lo[ch]));
+                        assert!((a..=b).contains(&cell.fg[ch]), "now={now} sel={selected}");
+                    }
+                    assert!(!cell.bold, "animated rows are never bold");
+                    match phase {
+                        0 => assert_eq!(cell.fg, hi, "start of the period"),
+                        500 => assert_eq!(cell.fg, lo, "mid-period"),
+                        _ => {}
+                    }
+                    seen.insert(cell.fg);
+                }
+            }
+            assert!(seen.len() >= 4, "Glow must change colour, sel={selected}");
         }
     }
     #[test]

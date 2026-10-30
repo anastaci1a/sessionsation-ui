@@ -75,6 +75,11 @@ impl Account {
             .unwrap_or("codex")
     }
 }
+/// Every provider in the order menus and lists show them (Add account). Antigravity
+/// comes before Gemini everywhere providers are enumerated.
+pub const PROVIDERS: [&str; 4] = ["codex", "claude", "antigravity", "gemini"];
+/// The providers of Settings > Spinners, one row each, in row order.
+pub const SPINNER_PROVIDERS: [&str; 4] = ["claude", "codex", "antigravity", "gemini"];
 /// Human label for a provider ID; unknown providers are shown verbatim.
 pub fn provider_label(provider: &str) -> &str {
     match provider {
@@ -729,6 +734,22 @@ print(json.dumps({'result':result}))
             .save(&preferences)
             .unwrap();
         assert!(!runtime.join("preferences.json").exists());
+    }
+    #[test]
+    fn providers_are_enumerated_with_antigravity_before_gemini() {
+        assert_eq!(PROVIDERS, ["codex", "claude", "antigravity", "gemini"]);
+        assert_eq!(
+            SPINNER_PROVIDERS,
+            ["claude", "codex", "antigravity", "gemini"]
+        );
+        for order in [PROVIDERS, SPINNER_PROVIDERS] {
+            let at = |p| order.iter().position(|x| *x == p).unwrap();
+            assert!(at("antigravity") < at("gemini"), "{order:?}");
+            assert_eq!(order.len(), 4);
+        }
+        // Settings > Spinners rows follow SPINNER_PROVIDERS.
+        let names: Vec<_> = SPINNER_PROVIDERS.iter().map(|p| provider_name(p)).collect();
+        assert_eq!(names, ["Claude", "Codex", "Antigravity", "Gemini"]);
     }
     #[test]
     fn provider_comes_from_field_then_id_and_resume_accepts_stopped_claude() {

@@ -1074,7 +1074,7 @@ impl Manager {
     }
     /// Providers the backend reports as implemented and that this UI has a flow for.
     fn add_providers(&self) -> Vec<&'static str> {
-        ["codex", "claude", "gemini", "antigravity"]
+        crate::client::PROVIDERS
             .into_iter()
             .filter(|id| {
                 self.capabilities["providers"].as_array().is_some_and(|ps| {
@@ -8574,13 +8574,13 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             [
                 "Codex",
                 "Claude Code",
-                "Gemini CLI",
                 "Antigravity CLI",
+                "Gemini CLI",
                 "",
                 "Cancel"
             ]
         );
-        m.submit(3, vec![]);
+        m.submit(2, vec![]);
         let d = m.dialog.as_ref().unwrap();
         assert!(d.body[0].starts_with("Antigravity CLI account name"));
         assert!(d.body[1].contains("Antigravity CLI's own interactive sign-in"));

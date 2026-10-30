@@ -79,60 +79,77 @@ impl Brightness {
         }
     }
 }
-/// Busy spinner choices (Settings > Spinners). Each list runs top (default) to
-/// bottom; `Classic` is the plain Braille spinner and `Glow` the least motion.
+/// Busy spinner choices (Settings > Spinners). Every list runs `Native` (the
+/// provider's own spinner) first, then the themed choices, then `Classic` (the
+/// plain Braille spinner), `Glow` (a static glyph whose colour oscillates) and
+/// `Static` (the plain provider icon, no animation) last. Codex has no spinner
+/// of its own: its first choice is the Braille cycle, labelled `Native/Classic`,
+/// with no separate `Classic`. Old stored names are accepted as aliases and
+/// written back under the new names.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaudeSpinner {
+    /// Claude Code's own busy spinner (stored as `claude` by older builds).
     #[default]
-    Claude,
+    #[serde(alias = "claude")]
+    Native,
     Classic,
     Glow,
+    Static,
 }
 impl ClaudeSpinner {
-    pub const ALL: [Self; 3] = [Self::Claude, Self::Classic, Self::Glow];
+    pub const ALL: [Self; 4] = [Self::Native, Self::Classic, Self::Glow, Self::Static];
     pub fn label(self) -> &'static str {
         match self {
-            Self::Claude => "Claude",
+            Self::Native => "Native",
             Self::Classic => "Classic",
             Self::Glow => "Glow",
+            Self::Static => "Static",
         }
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CodexSpinner {
+    /// Codex has no glyph spinner of its own: the Braille cycle (stored as
+    /// `classic` by older builds).
+    #[serde(alias = "classic")]
+    Native,
     #[default]
     FillPulse,
     Rotate,
     Benzene,
     BuildUp,
-    Classic,
     Glow,
+    Static,
 }
 impl CodexSpinner {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
+        Self::Native,
         Self::FillPulse,
         Self::Rotate,
         Self::Benzene,
         Self::BuildUp,
-        Self::Classic,
         Self::Glow,
+        Self::Static,
     ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::Native => "Native/Classic",
             Self::FillPulse => "Fill pulse",
             Self::Rotate => "Rotate",
             Self::Benzene => "Benzene",
             Self::BuildUp => "Build-up",
-            Self::Classic => "Classic",
             Self::Glow => "Glow",
+            Self::Static => "Static",
         }
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GeminiSpinner {
+    /// Gemini CLI's own Braille spinner.
+    Native,
     #[default]
     Twinkle,
     SpinFill,
@@ -140,24 +157,29 @@ pub enum GeminiSpinner {
     ConcaveBlink,
     Classic,
     Glow,
+    Static,
 }
 impl GeminiSpinner {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
+        Self::Native,
         Self::Twinkle,
         Self::SpinFill,
         Self::Morph,
         Self::ConcaveBlink,
         Self::Classic,
         Self::Glow,
+        Self::Static,
     ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::Native => "Native",
             Self::Twinkle => "Twinkle",
             Self::SpinFill => "Spin fill",
             Self::Morph => "Morph",
             Self::ConcaveBlink => "Concave blink",
             Self::Classic => "Classic",
             Self::Glow => "Glow",
+            Self::Static => "Static",
         }
     }
 }
@@ -169,16 +191,27 @@ pub enum AntigravitySpinner {
     Native,
     Pulse,
     Tilt,
+    Classic,
     Glow,
+    Static,
 }
 impl AntigravitySpinner {
-    pub const ALL: [Self; 4] = [Self::Native, Self::Pulse, Self::Tilt, Self::Glow];
+    pub const ALL: [Self; 6] = [
+        Self::Native,
+        Self::Pulse,
+        Self::Tilt,
+        Self::Classic,
+        Self::Glow,
+        Self::Static,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             Self::Native => "Native",
             Self::Pulse => "Pulse",
             Self::Tilt => "Tilt",
+            Self::Classic => "Classic",
             Self::Glow => "Glow",
+            Self::Static => "Static",
         }
     }
 }
@@ -469,8 +502,107 @@ mod spinner_tests {
         assert_eq!(old.codex_spinner, CodexSpinner::FillPulse);
         assert_eq!(old.gemini_spinner, GeminiSpinner::Twinkle);
         assert_eq!(old.antigravity_spinner, AntigravitySpinner::Native);
-        assert_eq!(old.claude_spinner, ClaudeSpinner::Claude);
+        assert_eq!(old.claude_spinner, ClaudeSpinner::Native);
         assert_eq!(old.new_session_permissions, NewSessionPermissions::Yolo);
+    }
+    #[test]
+    fn every_platform_lists_native_first_then_themed_then_classic_glow_static() {
+        let labels = |all: Vec<&str>| all.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            labels(ClaudeSpinner::ALL.iter().map(|s| s.label()).collect()),
+            ["Native", "Classic", "Glow", "Static"]
+        );
+        // Codex's Native is the Braille spinner: no separate Classic.
+        assert_eq!(
+            labels(CodexSpinner::ALL.iter().map(|s| s.label()).collect()),
+            [
+                "Native/Classic",
+                "Fill pulse",
+                "Rotate",
+                "Benzene",
+                "Build-up",
+                "Glow",
+                "Static"
+            ]
+        );
+        assert_eq!(
+            labels(GeminiSpinner::ALL.iter().map(|s| s.label()).collect()),
+            [
+                "Native",
+                "Twinkle",
+                "Spin fill",
+                "Morph",
+                "Concave blink",
+                "Classic",
+                "Glow",
+                "Static"
+            ]
+        );
+        assert_eq!(
+            labels(AntigravitySpinner::ALL.iter().map(|s| s.label()).collect()),
+            ["Native", "Pulse", "Tilt", "Classic", "Glow", "Static"]
+        );
+    }
+    #[test]
+    fn old_spinner_values_migrate_to_their_new_names_and_unknown_ones_to_the_default() {
+        let load = |json: &str| -> Preferences {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("prefs.json");
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{"version":1,"mode":"global","global_root":null,"space_roots":{{}},"last_account":null,{json}}}"#
+                ),
+            )
+            .unwrap();
+            Preferences::load(&path).unwrap()
+        };
+        // Before: claude -> Native; codex classic -> Native/Classic; gemini
+        // classic stays Classic; everything else keeps its name.
+        let p = load(
+            r#""claude_spinner":"claude","codex_spinner":"classic","gemini_spinner":"classic","antigravity_spinner":"tilt""#,
+        );
+        assert_eq!(p.claude_spinner, ClaudeSpinner::Native);
+        assert_eq!(p.codex_spinner, CodexSpinner::Native);
+        assert_eq!(p.codex_spinner.label(), "Native/Classic");
+        assert_eq!(p.gemini_spinner, GeminiSpinner::Classic);
+        assert_eq!(p.antigravity_spinner, AntigravitySpinner::Tilt);
+        let p =
+            load(r#""claude_spinner":"classic","codex_spinner":"glow","gemini_spinner":"native""#);
+        assert_eq!(p.claude_spinner, ClaudeSpinner::Classic);
+        assert_eq!(p.codex_spinner, CodexSpinner::Glow);
+        assert_eq!(p.gemini_spinner, GeminiSpinner::Native);
+        let p = load(
+            r#""claude_spinner":"static","codex_spinner":"static","gemini_spinner":"static","antigravity_spinner":"static""#,
+        );
+        assert_eq!(
+            (
+                p.claude_spinner,
+                p.codex_spinner,
+                p.gemini_spinner,
+                p.antigravity_spinner
+            ),
+            (
+                ClaudeSpinner::Static,
+                CodexSpinner::Static,
+                GeminiSpinner::Static,
+                AntigravitySpinner::Static
+            )
+        );
+        // Unknown values read as each platform's default.
+        let p = load(
+            r#""claude_spinner":"bogus","codex_spinner":7,"gemini_spinner":"nope","antigravity_spinner":null"#,
+        );
+        assert_eq!(p.spinners(), Spinners::default());
+        // Saved under the new names; unknown fields survive.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("prefs.json");
+        let p = load(r#""claude_spinner":"claude","codex_spinner":"classic","future":{"k":1}"#);
+        p.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"claude_spinner\": \"native\""), "{text}");
+        assert!(text.contains("\"codex_spinner\": \"native\""), "{text}");
+        assert!(text.contains("\"future\""), "{text}");
     }
     #[test]
     fn new_session_permissions_default_to_yolo_and_persist() {
@@ -517,7 +649,7 @@ mod spinner_tests {
         assert_eq!(p.codex_spinner, CodexSpinner::Benzene);
         assert_eq!(
             p.claude_spinner,
-            ClaudeSpinner::Claude,
+            ClaudeSpinner::Native,
             "unknown reads as default"
         );
         assert_eq!(p.extra["future_toggle"], serde_json::json!(true));

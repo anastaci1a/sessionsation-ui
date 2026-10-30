@@ -445,10 +445,20 @@ It still checks membership in the intended HERDR pane/socket and rechecks the
 generation before focusing. Older backends retain the discovery-based check;
 neither path launches or submits input to an agent.
 
-Settings > Spinners has one row per provider (Claude, Codex, Gemini, Antigravity). The
-**Antigravity spinner** row offers Native (default: agy's own 8-frame Braille cycle
-`⣾ ⣽ ⣻ ⢿ ⡿ ⣟ ⣯ ⣷`, 80 ms), Pulse (`· ▵ ▴ ◬ ▴ ▵`), Tilt (`◬ ◭ ◬ ◮`) and Glow (the static
-`◬` with a colour pulse); every glyph is one cell wide.
+Settings > Spinners has one row per provider (Claude, Codex, Antigravity, Gemini; wherever
+the UI lists providers, Antigravity comes before Gemini). Every row lists, top to bottom:
+**Native** (the provider's own spinner; Codex has none, so its first option, **Native/Classic**, is the
+Braille cycle and it has no separate Classic), the themed options, **Classic** (the plain Braille
+spinner, 100 ms), **Glow** and **Static**. Glow is a static glyph whose hueshift oscillates, once per
+second like the active picker arrow and sampled at the glyph's cell: between the normal and the
+darker hueshift on a selected or hovered row, and between the darker and an even darker one
+otherwise (the Settings preview animates the same way). Static is the plain provider icon, with the
+same hueshift as animated spinners (normal when selected, darker otherwise) and no animation.
+Older stored values migrate: `claude` becomes Native and Codex `classic` becomes Native/Classic;
+Gemini `classic` stays Classic; unknown values read as the default. The **Antigravity spinner** row
+offers Native (default: agy's own 8-frame Braille cycle
+`⣾ ⣽ ⣻ ⢿ ⡿ ⣟ ⣯ ⣷`, 80 ms), Pulse (`· ▵ ▴ ◬ ▴ ▵`), Tilt (`◬ ◭ ◬ ◮`), Classic, Glow (the static
+`◬`) and Static; every glyph is one cell wide.
 
 Manage sessions sorts busy, idle, then inactive sessions, newest access first
 within each group, with a bullet separator between active and inactive groups.

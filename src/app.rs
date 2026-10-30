@@ -500,8 +500,8 @@ impl App {
                             "{} · {} · {} · {}",
                             self.prefs.claude_spinner.label(),
                             self.prefs.codex_spinner.label(),
-                            self.prefs.gemini_spinner.label(),
-                            self.prefs.antigravity_spinner.label()
+                            self.prefs.antigravity_spinner.label(),
+                            self.prefs.gemini_spinner.label()
                         ),
                     ),
                     (
@@ -576,17 +576,17 @@ impl App {
                     ),
                     item(
                         2,
-                        "Gemini spinner",
-                        s.gemini.label(),
-                        choice_arrow(&GeminiSpinner::ALL, s.gemini),
-                        crate::session_list::gemini_frame(s.gemini, ms),
-                    ),
-                    item(
-                        3,
                         "Antigravity spinner",
                         s.antigravity.label(),
                         choice_arrow(&AntigravitySpinner::ALL, s.antigravity),
                         crate::session_list::antigravity_frame(s.antigravity, ms),
+                    ),
+                    item(
+                        3,
+                        "Gemini spinner",
+                        s.gemini.label(),
+                        choice_arrow(&GeminiSpinner::ALL, s.gemini),
+                        crate::session_list::gemini_frame(s.gemini, ms),
                     ),
                 ];
                 align_pickers(&mut rows);
@@ -1260,11 +1260,11 @@ impl App {
                 self.prefs.codex_spinner = step(&CodexSpinner::ALL, self.prefs.codex_spinner, up)
             }
             (Page::Spinners, 2) => {
-                self.prefs.gemini_spinner = step(&GeminiSpinner::ALL, self.prefs.gemini_spinner, up)
-            }
-            (Page::Spinners, 3) => {
                 self.prefs.antigravity_spinner =
                     step(&AntigravitySpinner::ALL, self.prefs.antigravity_spinner, up)
+            }
+            (Page::Spinners, 3) => {
+                self.prefs.gemini_spinner = step(&GeminiSpinner::ALL, self.prefs.gemini_spinner, up)
             }
             (Page::Permissions, 0) => {
                 self.prefs.new_session_permissions = step(
@@ -2449,8 +2449,8 @@ New directories are created only when the session starts."
         let glyph = match index {
             0 => crate::session_list::claude_frame(s.claude, self.anim_ms),
             1 => crate::session_list::codex_frame(s.codex, self.anim_ms),
-            2 => crate::session_list::gemini_frame(s.gemini, self.anim_ms),
-            _ => crate::session_list::antigravity_frame(s.antigravity, self.anim_ms),
+            2 => crate::session_list::antigravity_frame(s.antigravity, self.anim_ms),
+            _ => crate::session_list::gemini_frame(s.gemini, self.anim_ms),
         };
         let y = top + index - self.options.scroll;
         if y >= canvas.height {
@@ -2461,6 +2461,12 @@ New directories are created only when the session starts."
             return;
         };
         let bold = row[x].bold;
+        let glows = match index {
+            0 => s.claude == ClaudeSpinner::Glow,
+            1 => s.codex == CodexSpinner::Glow,
+            2 => s.antigravity == AntigravitySpinner::Glow,
+            _ => s.gemini == GeminiSpinner::Glow,
+        };
         canvas.accent_text(
             x,
             y,
@@ -2471,6 +2477,12 @@ New directories are created only when the session starts."
                 ..Accent::default()
             },
         );
+        // Glow is a static glyph: its hueshift oscillates from the selected level
+        // to the dim one, sampled at this cell like the grabbed picker arrow.
+        if glows && let Some(theme) = canvas.theme.as_ref() {
+            let fg = theme.hue_pulse(x, y, SELECTED_BULLET_LEVEL, crate::render::DIM_LEVEL);
+            canvas.cells[y * canvas.width + x].fg = fg;
+        }
     }
     fn paint_choices(&mut self, canvas: &mut Canvas, top: usize, footer: usize, hints: &[String]) {
         let rows = self.rows();
@@ -3986,7 +3998,7 @@ mod tests {
         assert_eq!(a.rows()[2].label, "Spinners");
         assert_eq!(
             a.rows()[2].preview.as_deref(),
-            Some("Claude · Fill pulse · Twinkle · Native")
+            Some("Native · Fill pulse · Native · Twinkle")
         );
         a.options.selected = 2;
         a.activate();
@@ -3997,18 +4009,18 @@ mod tests {
             [
                 "Claude spinner",
                 "Codex spinner",
-                "Gemini spinner",
-                "Antigravity spinner"
+                "Antigravity spinner",
+                "Gemini spinner"
             ]
         );
         // Only the focused row animates; the others show just the name.
         a.options.selected = 1;
         let mut field = Field::new(80, 24, 1);
         a.paint(&mut field, 0, 80, 24);
-        assert_eq!(a.rows()[1].preview.as_deref(), Some("↓ Fill pulse ⬡"));
-        assert_eq!(a.rows()[0].preview.as_deref(), Some("↓ Claude"));
+        assert_eq!(a.rows()[1].preview.as_deref(), Some("↕ Fill pulse ⬡"));
+        assert_eq!(a.rows()[0].preview.as_deref(), Some("↓ Native"));
         a.paint(&mut field, 240, 80, 24);
-        assert_eq!(a.rows()[1].preview.as_deref(), Some("↓ Fill pulse ⏣"));
+        assert_eq!(a.rows()[1].preview.as_deref(), Some("↕ Fill pulse ⏣"));
         // Grab, move down to Rotate: the preview follows the grabbed option.
         key(&mut a, KeyCode::Right);
         key(&mut a, KeyCode::Down);
@@ -4018,8 +4030,8 @@ mod tests {
         for _ in 0..10 {
             key(&mut a, KeyCode::Down);
         }
-        assert_eq!(a.prefs.codex_spinner, CodexSpinner::Glow, "no wrap");
-        assert_eq!(a.rows()[1].preview.as_deref(), Some("↑ Glow ⏣"));
+        assert_eq!(a.prefs.codex_spinner, CodexSpinner::Static, "no wrap");
+        assert_eq!(a.rows()[1].preview.as_deref(), Some("↑ Static ⏣"));
         key(&mut a, KeyCode::Esc);
         assert_eq!(
             a.prefs.codex_spinner,
@@ -4125,7 +4137,7 @@ mod tests {
         let wide = a.paint(&mut Field::new(120, 24, 1), 0, 120, 24);
         for (label, text) in [
             ("Stars", "Normal · Normal"),
-            ("Spinners", "Claude · Fill pulse · Twinkle · Native"),
+            ("Spinners", "Native · Fill pulse · Native · Twinkle"),
         ] {
             assert!(
                 col_of(&wide, row_y(&wide, label), text).is_some(),
@@ -4133,7 +4145,7 @@ mod tests {
             );
         }
         // Fit is decided with the three-space gap after the longest name.
-        let widest = "Claude · Fill pulse · Twinkle · Native";
+        let widest = "Native · Fill pulse · Native · Twinkle";
         let longest = "Default directories".len();
         let (mut inline, mut below) = (false, false);
         for width in 50..=150 {
@@ -4151,11 +4163,11 @@ mod tests {
             (
                 0usize,
                 "Normal · Normal",
-                "Claude · Fill pulse · Twinkle · Native",
+                "Native · Fill pulse · Native · Twinkle",
             ),
             (
                 2,
-                "Claude · Fill pulse · Twinkle · Native",
+                "Native · Fill pulse · Native · Twinkle",
                 "Normal · Normal",
             ),
         ] {
@@ -4267,14 +4279,14 @@ mod tests {
             let glyph = match selected {
                 0 => crate::session_list::claude_frame(s.claude, 5000),
                 1 => crate::session_list::codex_frame(s.codex, 5000),
-                2 => crate::session_list::gemini_frame(s.gemini, 5000),
-                _ => crate::session_list::antigravity_frame(s.antigravity, 5000),
+                2 => crate::session_list::antigravity_frame(s.antigravity, 5000),
+                _ => crate::session_list::gemini_frame(s.gemini, 5000),
             };
             let label = [
                 "Claude spinner",
                 "Codex spinner",
-                "Gemini spinner",
                 "Antigravity spinner",
+                "Gemini spinner",
             ][selected];
             let y = (0..24).find(|&y| col_of(&c, y, label).is_some()).unwrap();
             let row = &c.cells[y * 80..(y + 1) * 80];
@@ -4294,6 +4306,51 @@ mod tests {
                 .fg;
             assert_eq!(row[x].fg, want, "{label}");
         }
+    }
+    #[test]
+    fn glow_preview_in_settings_oscillates_between_the_selected_and_dim_hue() {
+        use crate::preferences::CodexSpinner;
+        use crate::render::{ARROW_PULSE_MS, Accent, DIM_LEVEL};
+        let mut a = app();
+        a.page = Page::Spinners;
+        a.prefs.codex_spinner = CodexSpinner::Glow;
+        a.options.selected = 1;
+        let mut seen = std::collections::BTreeSet::new();
+        for now in (8000..8000 + ARROW_PULSE_MS).step_by(125) {
+            let c = a.paint(&mut Field::new(80, 24, 1), now, 80, 24);
+            let (_, x, cell) = glyph_cell(&c, "Codex spinner");
+            let y = row_y(&c, "Codex spinner");
+            // The preview glyph is the last one on the row.
+            let row = &c.cells[y * 80..(y + 1) * 80];
+            let gx = row.iter().rposition(|k| k.glyph == "⏣").unwrap();
+            assert!(gx > x);
+            let theme = c.theme.as_ref().unwrap();
+            let at = |level| {
+                theme
+                    .accent(
+                        gx,
+                        y,
+                        &Accent {
+                            brightness: level,
+                            ..Accent::default()
+                        },
+                    )
+                    .fg
+            };
+            let (hi, lo) = (at(1000), at(DIM_LEVEL));
+            for ch in 0..3 {
+                let (m, n) = (hi[ch].min(lo[ch]), hi[ch].max(lo[ch]));
+                assert!((m..=n).contains(&row[gx].fg[ch]), "now={now}");
+            }
+            match now % ARROW_PULSE_MS {
+                0 => assert_eq!(row[gx].fg, hi),
+                500 => assert_eq!(row[gx].fg, lo),
+                _ => {}
+            }
+            seen.insert(row[gx].fg);
+            let _ = cell;
+        }
+        assert!(seen.len() >= 4, "the preview must animate");
     }
     #[test]
     fn grabbed_selector_steps_every_other_element_back_and_restores_on_leaving() {
@@ -4335,8 +4392,8 @@ mod tests {
         for (label, active) in [
             ("Claude spinner", false),
             ("Codex spinner", true),
-            ("Gemini spinner", false),
             ("Antigravity spinner", false),
+            ("Gemini spinner", false),
         ] {
             let y = row_y(&c, label);
             let lx = col_of(&c, y, label).unwrap();
@@ -4432,8 +4489,8 @@ mod tests {
         let labels = [
             "Claude spinner",
             "Codex spinner",
-            "Gemini spinner",
             "Antigravity spinner",
+            "Gemini spinner",
         ];
         let c = a.paint(&mut Field::new(80, 24, 1), 0, 80, 24);
         for label in labels {
@@ -4608,8 +4665,8 @@ mod tests {
                 vec![
                     "Claude spinner",
                     "Codex spinner",
-                    "Gemini spinner",
                     "Antigravity spinner",
+                    "Gemini spinner",
                 ],
             ),
             (Page::Directories, vec!["Default directory"]),

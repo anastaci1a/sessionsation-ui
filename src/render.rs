@@ -51,6 +51,11 @@ pub struct Canvas {
 pub const UNFOCUSED_FADE: i64 = 300;
 /// Period of the selected picker arrow's pulse, in milliseconds.
 pub const ARROW_PULSE_MS: u64 = 1000;
+/// The darker hueshift level of unselected elements (permille of the normal hue).
+pub const DIM_LEVEL: i64 = 600;
+/// The even darker level an unselected Glow spinner dips to: the dim level scaled
+/// down by itself.
+pub const GLOW_FLOOR_LEVEL: i64 = DIM_LEVEL * DIM_LEVEL / 1000;
 /// Star-field cell updates written per frame. The periodic sweep changes most
 /// stars at once (about 30 kB per frame at 180x30); a slow terminal link (SSH)
 /// then backs up behind HERDR's client, which stops reading keys until the burst
@@ -348,14 +353,14 @@ impl Theme {
             ..Cell::default()
         }
     }
-    /// Glowing spinner icon: a sinusoidal pulse between the light grey and
-    /// white, once per [`ARROW_PULSE_MS`], interpolated in RGB.
-    pub fn arrow_pulse(&self) -> [u8; 3] {
-        mix(crate::widgets::SECONDARY, [255; 3], self.pulse())
-    }
     /// Grabbed picker arrow: a sinusoidal pulse between the selected-bullet
     /// accent and its dim level at (x, y), once per [`ARROW_PULSE_MS`].
     pub fn accent_pulse(&self, x: usize, y: usize) -> [u8; 3] {
+        self.hue_pulse(x, y, 1000, DIM_LEVEL)
+    }
+    /// A sinusoidal pulse, once per [`ARROW_PULSE_MS`], from the hueshift at
+    /// `high` (phase 0) to the one at `low` (mid-period), both sampled at (x, y).
+    pub fn hue_pulse(&self, x: usize, y: usize, high: i64, low: i64) -> [u8; 3] {
         let level = |brightness| {
             self.accent(
                 x,
@@ -367,7 +372,7 @@ impl Theme {
             )
             .fg
         };
-        mix(level(1000), level(600), self.pulse())
+        mix(level(high), level(low), self.pulse())
     }
     fn pulse(&self) -> i64 {
         let phase = (self.now % ARROW_PULSE_MS) as f64 / ARROW_PULSE_MS as f64;
