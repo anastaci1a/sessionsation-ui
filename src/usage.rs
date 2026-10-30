@@ -346,24 +346,20 @@ impl Usage {
         bar: usize,
         digits: usize,
     ) {
-        if self.status_only() {
-            self.paint_selected(canvas, x, y, bar, digits, false);
+        self.paint_selected(canvas, x, y, bar, digits, false);
+        // Statuses dim like the bars' hue part, stubs like their gray part.
+        if self.action_required() {
+            let sx = self.status_x(x, bar);
+            dim(
+                canvas,
+                sx,
+                sx + UnicodeWidthStr::width(self.status_label().as_str()),
+                y,
+            );
             return;
         }
-        self.paint_selected(canvas, x, y, bar, digits, false);
-        for (row, _) in self
-            .windows
-            .iter()
-            .enumerate()
-            .filter(|(_, w)| w.remaining.is_some())
-        {
-            for col in x..(x + bar).min(canvas.width) {
-                if y + row >= canvas.height {
-                    break;
-                }
-                let cell = &mut canvas.cells[(y + row) * canvas.width + col];
-                cell.fg = cell.fg.map(|v| (u16::from(v) * 65 / 100) as u8);
-            }
+        for row in 0..self.height() {
+            dim(canvas, x, x + bar, y + row);
         }
     }
     pub fn paint_preview(
@@ -859,7 +855,7 @@ impl AccountsLayout {
             );
             if active && usage_focus {
                 usage.paint_focused(canvas, self.bars, y, self.bar_width, self.digits);
-            } else if depressed || usage_focus || usage.status_only() {
+            } else if depressed || usage_focus {
                 usage.paint_deemphasized(canvas, self.bars, y, self.bar_width, self.digits);
             } else {
                 usage.paint_selected(
@@ -939,6 +935,16 @@ impl ListWindow {
 const ELLIPSIS_ROWS: usize = 2;
 /// From this many visible rows, the cursor keeps an account between itself and a `…` row.
 const MARGIN_ROWS: usize = 5;
+/// Darken cells `from..to` of row `y` the way de-emphasized bars darken.
+fn dim(canvas: &mut Canvas, from: usize, to: usize, y: usize) {
+    if y >= canvas.height {
+        return;
+    }
+    for col in from..to.min(canvas.width) {
+        let cell = &mut canvas.cells[y * canvas.width + col];
+        cell.fg = cell.fg.map(|v| (u16::from(v) * 65 / 100) as u8);
+    }
+}
 /// `text` padded with spaces to `width` cells.
 fn pad(text: &str, width: usize) -> String {
     let used = unicode_width::UnicodeWidthStr::width(text);
@@ -1136,8 +1142,14 @@ mod tests {
                             active && usage_focus,
                         );
                         let sx = usage.status_x(layout.bars, layout.bar_width);
+                        // Statuses dim exactly when (and as) the bars dim.
+                        let dim = back || selected.is_none() || usage_focus && !active;
                         for x in sx..sx + UnicodeWidthStr::width(usage.status_label().as_str()) {
-                            assert_eq!(c.cells[y * 100 + x], expected.cells[y * 100 + x]);
+                            let mut want = expected.cells[y * 100 + x].clone();
+                            if dim {
+                                want.fg = want.fg.map(|v| (u16::from(v) * 65 / 100) as u8);
+                            }
+                            assert_eq!(c.cells[y * 100 + x], want);
                         }
                     }
                     if (back || selected.is_none()) && !usage.status_only() {
@@ -1179,12 +1191,6 @@ mod tests {
         let base = crate::render::Field::new(100, 10, 1967).paint(4200);
         let sx = usage.status_x(layout.bars, layout.bar_width);
         let len = UnicodeWidthStr::width(usage.status_label().as_str());
-        // The usage bars' own colour, sampled at each cell.
-        let bar = |x: usize, y: usize| {
-            let mut c = base.clone();
-            Usage::account(&bars).paint(&mut c, x, y, layout.bar_width, layout.digits);
-            c.cells[y * 100 + x].fg
-        };
         // (selected, back, usage_focus, cursor on the parenthetical)
         for (selected, back, focus, on) in [
             (Some(0), false, false, false),
@@ -1206,10 +1212,31 @@ mod tests {
                 focus,
                 None,
             );
+            // The usage bars' own colour: a real bar in the same row and state.
+            let mut expected = base.clone();
+            layout.paint(
+                &mut expected,
+                &[bars.clone(), bars.clone()],
+                3,
+                10,
+                0,
+                selected,
+                back,
+                focus,
+                None,
+            );
             for x in sx..sx + len {
                 let cell = &c.cells[3 * 100 + x];
+                assert!(
+                    ["━", "┿"].contains(&expected.cells[3 * 100 + x].glyph.as_str()),
+                    "filled at x={x}"
+                );
                 assert_eq!(cell.bold, on, "{selected:?} {back} {focus}");
-                assert_eq!(cell.fg, bar(x, 3), "{selected:?} {back} {focus} x={x}");
+                assert_eq!(
+                    cell.fg,
+                    expected.cells[3 * 100 + x].fg,
+                    "{selected:?} {back} {focus} x={x}"
+                );
             }
         }
         // `(moving)` keeps the bold rule and pulses with the rest of its row.
@@ -2241,18 +2268,25 @@ mod picker_tests {
         let u = Usage::account(&a);
         let base = crate::render::Field::new(60, 4, 1967).paint(4200);
         type Paint = fn(&Usage, &mut Canvas, usize, usize, usize, usize);
-        let modes: [Paint; 3] = [
-            |u, c, x, y, b, d| u.paint(c, x, y, b, d),
-            |u, c, x, y, b, d| u.paint_selected(c, x, y, b, d, true),
-            |u, c, x, y, b, d| u.paint_deemphasized(c, x, y, b, d),
+        // De-emphasized, the stub dims like a de-emphasized bar's gray part.
+        let modes: [(Paint, [u8; 3]); 3] = [
+            (|u, c, x, y, b, d| u.paint(c, x, y, b, d), UNFILLED),
+            (
+                |u, c, x, y, b, d| u.paint_selected(c, x, y, b, d, true),
+                UNFILLED,
+            ),
+            (
+                |u, c, x, y, b, d| u.paint_deemphasized(c, x, y, b, d),
+                [93; 3],
+            ),
         ];
-        for paint in modes {
+        for (paint, grey) in modes {
             let mut c = base.clone();
             paint(&u, &mut c, 4, 1, 17, 2);
             let row: String = (4..21).map(|x| c.cells[60 + x].glyph.as_str()).collect();
             assert_eq!(row, "╶╶╴──━━━━━━━──╶╴╴");
             for x in 4..21 {
-                assert_eq!(c.cells[60 + x].fg, UNFILLED, "x={x}");
+                assert_eq!(c.cells[60 + x].fg, grey, "x={x}");
                 assert!(!c.cells[60 + x].bold, "x={x}");
             }
         }
@@ -2330,12 +2364,25 @@ mod picker_tests {
             );
         }
     }
-    /// Action-required parentheticals take exactly the filled bar's colour, cell
-    /// by cell (same hueshift and level); bold only with the cursor on them.
+    /// Home states as (selected, back, usage focus): cursor off, on a top option
+    /// (back), on each name, and on each account's usage.
+    const STATES: [(Option<usize>, bool, bool); 7] = [
+        (None, false, false),
+        (Some(0), true, false),
+        (Some(0), false, false),
+        (Some(1), false, false),
+        (Some(0), false, true),
+        (Some(1), false, true),
+        (Some(1), true, true),
+    ];
+    /// Action-required parentheticals behave exactly like the filled (hue-shifted)
+    /// part of a real bar in the same row and state, cell by cell: same hue and
+    /// level, dimmed whenever the bars dim. Bold only with the cursor on them.
     #[test]
-    fn action_required_parenthetical_matches_the_filled_bar_colour() {
+    fn action_required_parenthetical_tracks_the_filled_bar_colour_in_every_state() {
         let full = claude_account(json!({"state":"fresh","observed_at":100,
             "short":{"duration_minutes":300,"used_percent":0},"weekly":null}));
+        let other = claude_account(fresh_usage());
         for details in [
             json!({"auth_required":true}),
             json!({"auth_detail":"AUTH_REQUIRED"}),
@@ -2343,7 +2390,7 @@ mod picker_tests {
             json!({"membership":"removed"}),
         ] {
             let a = with_details(claude_account(fresh_usage()), details.clone());
-            let accounts = vec![a.clone(), full.clone()];
+            let accounts = vec![a.clone(), other.clone()];
             let width = 90;
             let l = AccountsLayout::fit(&accounts, width);
             let base = crate::render::Field::new(width, 12, 1967).paint(4200);
@@ -2351,27 +2398,89 @@ mod picker_tests {
             assert!(u.action_required(), "{details}");
             let label = u.status_label();
             let sx = l.bars + 1;
-            // A full bar's filled part painted at the same cells.
-            let mut filled = base.clone();
-            Usage::account(&full).paint(&mut filled, sx - 1, 1, label.len() + 2, l.digits);
-            for (selected, focus, bold) in [
-                (None, false, false),
-                (Some(0), false, false),
-                (Some(1), true, false),
-                (Some(0), true, true),
-            ] {
+            let mut dimmed = false;
+            for (selected, back, focus) in STATES {
+                let on = selected == Some(0) && !back && focus;
                 let mut c = base.clone();
-                l.paint(&mut c, &accounts, 1, 12, 0, selected, false, focus, None);
+                l.paint(&mut c, &accounts, 1, 12, 0, selected, back, focus, None);
+                // The same layout and state with a full bar in that row.
+                let mut bar = base.clone();
+                l.paint(
+                    &mut bar,
+                    &[full.clone(), other.clone()],
+                    1,
+                    12,
+                    0,
+                    selected,
+                    back,
+                    focus,
+                    None,
+                );
                 let row = home_row(&c, 1);
                 assert_eq!(row.find(&label).map(|b| row[..b].chars().count()), Some(sx));
                 for x in sx..sx + label.len() {
-                    let cell = &c.cells[width + x];
-                    let bar = &filled.cells[width + x];
+                    let (cell, bar) = (&c.cells[width + x], &bar.cells[width + x]);
                     assert_eq!(bar.glyph, "━", "filled at x={x}");
-                    assert_eq!(cell.fg, bar.fg, "{details} {selected:?} {focus} x={x}");
-                    assert_eq!(cell.bold, bold, "{details} {selected:?} {focus} x={x}");
+                    assert_eq!(
+                        cell.fg, bar.fg,
+                        "{details} {selected:?} {back} {focus} x={x}"
+                    );
+                    assert_eq!(cell.bold, on, "{details} {selected:?} {back} {focus} x={x}");
+                }
+                let mut bright = base.clone();
+                Usage::account(&full).paint(&mut bright, l.bars, 1, l.bar_width, l.digits);
+                dimmed |= c.cells[width + sx].fg != bright.cells[width + sx].fg;
+            }
+            assert!(dimmed, "some states dim the status like the bars");
+        }
+    }
+    /// The stub behaves exactly like the gray (unfilled) part of a real bar in the
+    /// same row and state, dimming with it; it is never bold.
+    #[test]
+    fn stub_tracks_the_unfilled_bar_colour_in_every_state() {
+        let empty = claude_account(json!({"state":"fresh","observed_at":100,
+            "short":{"duration_minutes":300,"used_percent":100},"weekly":null}));
+        let other = claude_account(fresh_usage());
+        for stub in [
+            claude_account(json!({})),
+            claude_account(
+                json!({"state":"missing","observed_at":null,"short":null,"weekly":null}),
+            ),
+        ] {
+            let accounts = vec![stub.clone(), other.clone()];
+            let width = 90;
+            let l = AccountsLayout::fit(&accounts, width);
+            let base = crate::render::Field::new(width, 12, 1967).paint(4200);
+            let mut seen = std::collections::BTreeSet::new();
+            for (selected, back, focus) in STATES {
+                if selected == Some(0) && !back && focus {
+                    continue; // hovered: revealed, see the hover test
+                }
+                let mut c = base.clone();
+                l.paint(&mut c, &accounts, 1, 12, 0, selected, back, focus, None);
+                let mut bar = base.clone();
+                l.paint(
+                    &mut bar,
+                    &[empty.clone(), other.clone()],
+                    1,
+                    12,
+                    0,
+                    selected,
+                    back,
+                    focus,
+                    None,
+                );
+                for x in l.bars + 1..l.bars + l.bar_width - 1 {
+                    let (cell, bar) = (&c.cells[width + x], &bar.cells[width + x]);
+                    assert_eq!(bar.glyph, "─", "unfilled at x={x}");
+                    assert!(!cell.bold, "x={x}");
+                    if cell.glyph != " " {
+                        assert_eq!(cell.fg, bar.fg, "{selected:?} {back} {focus} x={x}");
+                        seen.insert(cell.fg);
+                    }
                 }
             }
+            assert_eq!(seen.len(), 2, "bright and dimmed gray: {seen:?}");
         }
     }
 }

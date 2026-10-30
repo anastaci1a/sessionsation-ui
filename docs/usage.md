@@ -230,12 +230,12 @@ focus still changes their colors without changing label or percentage styling.
 Unavailable usage (unsupported, unknown or not yet reported) draws a stub bar
 at the bar's position and width instead: a symmetric heavy core with light dashes
 thinning to half-cell ends (`stub_bar`, approved shapes for odd widths 7–33, even
-and wider widths derived by the same rules), in the bars' unfilled gray, never
-hue-shifted or bold. With the cursor on that account's usage, each stub is
+and wider widths derived by the same rules), in the bars' unfilled gray, dimming
+whenever the bars dim, never hue-shifted or bold. With the cursor on that account's usage, each stub is
 hidden and `(usage unavailable)` appears from one column right of the bar start;
 moving away restores the stub.
 Status-only accounts also accept Right. Parenthetical statuses (`(disabled)`,
-`(usage unavailable)`, `(moving)`) use the usage bars' filled hue at every position and are
+`(usage unavailable)`, `(moving)`) use the usage bars' filled hue at every position, dim whenever the bars dim, and are
 bold only while the cursor is on them; the focused `◀` stays regular weight. Enter/Space opens Enable for Disabled, Login for Login
 required, Restore for Deregistered, or usage details otherwise. These dialogs retain
 the account and right-side focus when closed; mutations require confirmation.
