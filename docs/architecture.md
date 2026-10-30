@@ -13,7 +13,7 @@ Authoritative backend references:
 - [Acceptance, ownership and adapter coordination](https://github.com/anastaci1a/sessionsation/blob/main/docs/operations.md)
 - [Verification scope](https://github.com/anastaci1a/sessionsation/blob/main/docs/operations.md)
 
-The UI checks API version and consumes capability hints. The backend contract is
+The UI checks API version at each popup start (contract MAJOR 1, minimum MINOR 17; a MAJOR mismatch is refused with a message) and consumes capability hints. The backend contract is
 semantically versioned (`contract_version` MAJOR.MINOR.PATCH, MINOR additive; `api_version`
 is the MAJOR). The UI requests `--api-version 1`, requires the envelope `api_version` 1,
 and gates features on `api capabilities` fields rather than revision numbers; unknown

@@ -41,3 +41,16 @@ test('popup installer refuses occupied keys and only updates its own binding',()
   const once=updatePopup('','prefix+shift+l');assert.match(once,/description = "Sessionsation"/);const twice=updatePopup(once,'prefix+alt+n');
   assert.equal((twice.match(/\[\[keys.command\]\]/g)||[]).length,1);assert.match(twice,/prefix\+alt\+n/);assert.doesNotMatch(twice,/prefix\+shift\+l/);
 });
+test('the default backend binary is the stable current/ path, mirrored in the Rust client',async()=>{
+  const {STABLE_BINARY}=await import('../src/client.mjs');
+  assert.equal(STABLE_BINARY,'/mnt/user/live/packages/sessionsation/current/sessionsation');
+  assert.match(await readFile(new URL('../src/client.rs',import.meta.url),'utf8'),new RegExp(`STABLE_BINARY: &str = "${STABLE_BINARY}"`));
+  const {fileURLToPath}=await import('node:url');
+  assert.match(await readFile(fileURLToPath(new URL('../scripts/configure.mjs',import.meta.url)),'utf8'),/binary:STABLE_BINARY/);
+});
+test('a symlinked backend path is written to the UI config unchanged',async t=>{
+  const {dir,opts}=await fixture(t);const real=join(dir,'releases-abc'),link=join(dir,'current');
+  await writeFile(opts.config,'onboarding = false\n');await writeFile(real,'#!/bin/sh\n');await symlink(real,link);
+  await apply({...opts,binary:link});
+  assert.equal(JSON.parse(await readFile(opts.clientConfig)).binary,link);
+});

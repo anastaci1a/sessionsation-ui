@@ -18,7 +18,7 @@ credentials. Use a private backup directory outside the checkout.
 node scripts/configure.mjs popup \
   --config /path/to/herdr/config.toml \
   --client-config "$PWD/.runtime/config.json" \
-  --binary /path/to/sessionsation \
+  --binary /mnt/user/live/packages/sessionsation/current/sessionsation \
   --data-dir /path/to/data-root \
   --backup-dir /path/to/private/backups \
   --key prefix+shift+l
@@ -35,7 +35,19 @@ sets the shell of future tabs when replacing a previous menu wrapper.
 The Rust wrapper uses `.runtime/sessionsation-ui` and `.runtime/config.json`;
 override them with `SESSIONSATION_UI_BIN` and `SESSIONSATION_UI_CONFIG`.
 Config contains `binary` and `dataDir`. `SESSIONSATION_BIN` and
-`SESSIONSATION_DATA_DIR` override stored backend settings. Preferences are
+`SESSIONSATION_DATA_DIR` override stored backend settings.
+
+Use the backend's stable symlinked path,
+`/mnt/user/live/packages/sessionsation/current/sessionsation`, as `binary`; it is the default
+when `binary` is unset (and the installer's default `--binary`). The UI never canonicalises it:
+the operating system follows the link on every backend call, so each popup start (and every
+later call) uses the release the backend's cutover selected, and a backend-only cutover needs no
+UI config change. A stored `binary` that pins one release of that package
+(`.../sessionsation/releases/<id>/sessionsation`) is replaced by the stable path while it exists;
+`SESSIONSATION_BIN` is always used as given. At each popup start the UI runs `api version` and
+requires contract MAJOR 1 and MINOR 17 or newer (features beyond that are gated on
+`api capabilities`). A different MAJOR, or an older MINOR, is refused with a message naming the
+backend path and its contract version, shown in the popup until Enter. Preferences are
 `preferences.json` beside the resolved client-config target. If using a config
 symlink, its writable sidecar stays beside the real target. No account credentials
 are stored in UI preferences. Defaults used by direct invocation are

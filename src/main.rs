@@ -632,6 +632,12 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
         "A terminal is required; use sessionsation api for machine access"
     );
     let client = Client::load()?;
+    if let Err(error) = client.require_contract().await {
+        // The popup pane closes on exit: say why and wait for a key first.
+        eprintln!("\nSessionsation cannot start.\n\n{error:#}\n\nPress Enter to close.");
+        let _ = std::io::stdin().read_line(&mut String::new());
+        return Err(error);
+    }
     let prefixes = sessionsation_ui::host_keys::Prefixes::load();
     let pref =
         preferences.unwrap_or_else(|| sessionsation_ui::client::preferences_path(&config_path()));

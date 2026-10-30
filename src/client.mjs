@@ -5,6 +5,8 @@ import {isAbsolute} from 'node:path';
 import {promisify} from 'node:util';
 const execute = promisify(execFile);
 export const defaultClientConfig = () => existsSync('/mnt/user/appdata') ? '/mnt/user/appdata/sessionsation-ui/config.json' : homedir()+'/.config/sessionsation-ui/config.json';
+/** The backend's stable symlinked path (mirrors STABLE_BINARY in client.rs): the default `binary`. */
+export const STABLE_BINARY='/mnt/user/live/packages/sessionsation/current/sessionsation';
 export class BackendError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }

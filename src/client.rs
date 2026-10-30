@@ -39,6 +39,62 @@ async fn spawn_child(mut command: tokio::process::Command) -> Result<tokio::proc
     })
     .await??)
 }
+/// Stable path of the installed backend: a symlink the backend's own cutovers
+/// repoint, so the UI never pins an exact release. It is resolved by the OS at
+/// every exec (never canonicalised), so each popup start sees the current release.
+pub const STABLE_BINARY: &str = "/mnt/user/live/packages/sessionsation/current/sessionsation";
+/// The backend contract MAJOR this UI speaks; any other MAJOR is refused.
+pub const CONTRACT_MAJOR: u64 = 1;
+/// The lowest contract MINOR the UI needs. MINOR is additive and features beyond
+/// it are gated on `api capabilities`, so newer MINORs are accepted.
+pub const MIN_CONTRACT_MINOR: u64 = 17;
+/// The backend executable to use: `SESSIONSATION_BIN` as given, else the stored
+/// one, else the stable path. A stored path that pins one release of the same
+/// package as `stable` (`<package>/releases/<id>/<name>`) is replaced by `stable`
+/// while that exists, so a backend-only cutover cannot leave the UI on an old CLI.
+pub fn resolve_binary(
+    env: Option<PathBuf>,
+    stored: Option<PathBuf>,
+    stable: &Path,
+) -> Option<PathBuf> {
+    if env.is_some() {
+        return env;
+    }
+    let pins_a_release = |path: &Path| {
+        let releases = path.parent().and_then(Path::parent);
+        let package = stable.parent().and_then(Path::parent);
+        releases.is_some_and(|r| r.file_name().is_some_and(|n| n == "releases"))
+            && releases.and_then(Path::parent) == package
+            && path.file_name() == stable.file_name()
+    };
+    match stored {
+        Some(path) if pins_a_release(&path) && stable.exists() => Some(stable.into()),
+        Some(path) => Some(path),
+        None => stable.exists().then(|| stable.into()),
+    }
+}
+/// Accepts only the supported contract MAJOR and at least the minimum MINOR.
+pub fn check_contract(version: &Value, binary: &Path) -> Result<()> {
+    let text = version["contract_version"].as_str().unwrap_or("");
+    let mut parts = text.split('.').map(|p| p.parse::<u64>().ok());
+    let (Some(Some(major)), Some(Some(minor))) = (parts.next(), parts.next()) else {
+        anyhow::bail!(
+            "Backend {} reported no usable contract version; this UI needs contract {CONTRACT_MAJOR}.{MIN_CONTRACT_MINOR} or newer within MAJOR {CONTRACT_MAJOR}.",
+            binary.display()
+        );
+    };
+    ensure!(
+        major == CONTRACT_MAJOR,
+        "Backend {} speaks contract {text} (MAJOR {major}); this UI needs MAJOR {CONTRACT_MAJOR}. Update the UI or point it at a compatible backend.",
+        binary.display()
+    );
+    ensure!(
+        minor >= MIN_CONTRACT_MINOR,
+        "Backend {} speaks contract {text}; this UI needs {CONTRACT_MAJOR}.{MIN_CONTRACT_MINOR} or newer. Update the backend.",
+        binary.display()
+    );
+    Ok(())
+}
 #[derive(Clone, Debug)]
 pub struct Client {
     pub binary: PathBuf,
@@ -295,10 +351,12 @@ impl Client {
             .ok()
             .map(|b| serde_json::from_slice::<Config>(&b))
             .transpose()?;
-        let binary = std::env::var_os("SESSIONSATION_BIN")
-            .map(PathBuf::from)
-            .or_else(|| stored.as_ref().map(|c| c.binary.clone()))
-            .context("Set SESSIONSATION_BIN")?;
+        let binary = resolve_binary(
+            std::env::var_os("SESSIONSATION_BIN").map(PathBuf::from),
+            stored.as_ref().map(|c| c.binary.clone()),
+            Path::new(STABLE_BINARY),
+        )
+        .context("Set SESSIONSATION_BIN")?;
         let root = std::env::var_os("SESSIONSATION_DATA_DIR")
             .map(PathBuf::from)
             .or_else(|| stored.as_ref().map(|c| c.data_dir.clone()))
@@ -339,6 +397,17 @@ impl Client {
             socket,
             session,
         })
+    }
+    /// Refuses a backend whose contract MAJOR is not ours or whose MINOR is below the
+    /// UI's minimum. Run at each popup start, against the freshly resolved binary.
+    pub async fn require_contract(&self) -> Result<()> {
+        let version = self.api(&["version"], None).await.with_context(|| {
+            format!(
+                "Backend {} did not answer `api version` for API v1",
+                self.binary.display()
+            )
+        })?;
+        check_contract(&version, &self.binary)
     }
     pub async fn api(&self, args: &[&str], input: Option<Value>) -> Result<Value> {
         let mut command = tokio::process::Command::new(&self.binary);
@@ -750,6 +819,120 @@ print(json.dumps({'result':result}))
         // Settings > Spinners rows follow SPINNER_PROVIDERS.
         let names: Vec<_> = SPINNER_PROVIDERS.iter().map(|p| provider_name(p)).collect();
         assert_eq!(names, ["Claude", "Codex", "Antigravity", "Gemini"]);
+    }
+    fn package(root: &Path, release: &str, version: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = root.join("releases").join(release);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("sessionsation");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' '{{\"api_version\":1,\"ok\":true,\"result\":{{\"api_version\":1,\"contract_version\":\"{version}\"}}}}'\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fn point_current(root: &Path, release: &str) {
+        let link = root.join("current");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(format!("releases/{release}/"), &link).unwrap();
+    }
+    #[test]
+    fn binary_prefers_the_stable_path_over_a_pinned_release_of_the_same_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("sessionsation");
+        package(&root, "aaa", "1.27.0");
+        point_current(&root, "aaa");
+        let stable = root.join("current/sessionsation");
+        let pinned = root.join("releases/aaa/sessionsation");
+        let other = tmp.path().join("elsewhere/sessionsation");
+        let env = PathBuf::from("/explicit/sessionsation");
+        // The environment is explicit and kept; a stored pin follows the stable path.
+        assert_eq!(
+            resolve_binary(Some(env.clone()), Some(pinned.clone()), &stable),
+            Some(env)
+        );
+        assert_eq!(
+            resolve_binary(None, Some(pinned.clone()), &stable),
+            Some(stable.clone())
+        );
+        // Any other stored path is respected, and nothing stored defaults to stable.
+        assert_eq!(
+            resolve_binary(None, Some(other.clone()), &stable),
+            Some(other)
+        );
+        assert_eq!(resolve_binary(None, None, &stable), Some(stable.clone()));
+        assert_eq!(
+            resolve_binary(None, Some(stable.clone()), &stable),
+            Some(stable.clone())
+        );
+        // Without a stable path the pin is kept and there is no default.
+        let missing = tmp.path().join("none/current/sessionsation");
+        assert_eq!(resolve_binary(None, None, &missing), None);
+        assert_eq!(
+            resolve_binary(None, Some(pinned.clone()), &missing),
+            Some(pinned)
+        );
+        assert_eq!(
+            STABLE_BINARY,
+            "/mnt/user/live/packages/sessionsation/current/sessionsation"
+        );
+    }
+    #[test]
+    fn contract_gate_needs_the_major_and_the_minimum_minor() {
+        let bin = Path::new("/b/sessionsation");
+        let v = |s: &str| json!({"contract_version": s, "api_version": 1});
+        for ok in [
+            format!("1.{MIN_CONTRACT_MINOR}.0"),
+            "1.27.0".to_string(),
+            "1.999.3".to_string(),
+        ] {
+            check_contract(&v(&ok), bin).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        let major = check_contract(&v("2.0.0"), bin).unwrap_err().to_string();
+        assert!(
+            major.contains("MAJOR 2") && major.contains("needs MAJOR 1"),
+            "{major}"
+        );
+        assert!(major.contains("/b/sessionsation"), "{major}");
+        let major = check_contract(&v("0.40.0"), bin).unwrap_err().to_string();
+        assert!(major.contains("MAJOR 0"), "{major}");
+        let old = format!("1.{}.9", MIN_CONTRACT_MINOR - 1);
+        let minor = check_contract(&v(&old), bin).unwrap_err().to_string();
+        assert!(
+            minor.contains(&old) && minor.contains("Update the backend"),
+            "{minor}"
+        );
+        for bad in [json!({}), v(""), v("one.two"), v("1")] {
+            assert!(check_contract(&bad, bin).is_err(), "{bad}");
+        }
+    }
+    #[tokio::test]
+    async fn the_stable_symlink_is_resolved_fresh_on_every_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("sessionsation");
+        package(&root, "old", &format!("1.{}.0", MIN_CONTRACT_MINOR - 1));
+        package(&root, "new", "1.27.0");
+        package(&root, "next", "2.0.0");
+        let client = Client {
+            binary: root.join("current/sessionsation"),
+            root: tmp.path().into(),
+            herdr: "unused".into(),
+            socket: "unused".into(),
+            session: "fixture".into(),
+        };
+        // The symlinked path is used as given (never canonicalised) and followed
+        // anew each time the symlink moves.
+        point_current(&root, "old");
+        assert!(client.require_contract().await.is_err());
+        point_current(&root, "new");
+        client.require_contract().await.unwrap();
+        assert_eq!(client.binary, root.join("current/sessionsation"));
+        point_current(&root, "next");
+        let error = client.require_contract().await.unwrap_err().to_string();
+        assert!(error.contains("MAJOR 2"), "{error}");
     }
     #[test]
     fn provider_comes_from_field_then_id_and_resume_accepts_stopped_claude() {
