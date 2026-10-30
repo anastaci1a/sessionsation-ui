@@ -106,6 +106,8 @@ fn management_geometry_usage_markers_and_picker_columns() {
         ("operations-compact", 50, 20),
         ("operations-tiny", 40, 10),
         ("sessions-badges", 100, 20),
+        ("operation-failed-dialog", 100, 24),
+        ("operations-filter-grabbed", 120, 24),
         ("operations-queue", 100, 24),
         ("session-details", 90, 26),
         ("account-details", 90, 30),
@@ -241,13 +243,32 @@ fn management_geometry_usage_markers_and_picker_columns() {
                     &["Cancel"],
                 ))
             }
-            "operations-wide" | "operations-compact" | "operations-tiny" => {
+            "operations-wide" | "operations-compact" | "operations-tiny" | "operations-filter-grabbed" => {
                 m.page = Page::Operations;
                 m.operations = vec![
                     serde_json::json!({"id":"11111111-1111-4111-8111-111111111111","kind":"account_delete","account_id":"codex:fixture1","phase":"preserving_history","created_at":40}),
                     serde_json::json!({"id":"22222222-2222-4222-8222-222222222222","kind":"account","source_account_id":"codex:fixture0","phase":"complete","created_at":90}),
                     serde_json::json!({"id":"33333333-3333-4333-8333-333333333333","kind":"move_space","phase":"failed","detail":"The destination Space no longer exists.","created_at":-90000}),
                 ];
+                if name == "operations-filter-grabbed" {
+                    m.options.selected = 0;
+                    m.key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Right, crossterm::event::KeyModifiers::NONE));
+                }
+            }
+            "operation-failed-dialog" => {
+                m.page = Page::Sessions;
+                m.sessions_known = true;
+                m.sessions = vec![
+                    serde_json::json!({"name":"docs","id":"c","provider":"claude","account_id":"claude:main","availability":"running","native_status":"idle","activity":"idle"}),
+                    serde_json::json!({"name":"an-unusually-long-saved-session-name","id":"b","account_id":"codex:work","availability":"saved"}),
+                ];
+                m.operations = vec![
+                    serde_json::json!({"id":"op2","kind":"restart","session_id":"b","phase":"failed","can_recover":true,"detail":"The restart did not finish.","created_at":95}),
+                ];
+                m.options.selected = sessionsation_ui::session_list::session_row(&m.sessions, 1);
+                for code in [crossterm::event::KeyCode::Right, crossterm::event::KeyCode::Enter] {
+                    m.key(crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE));
+                }
             }
             "sessions-badges" => {
                 m.page = Page::Sessions;

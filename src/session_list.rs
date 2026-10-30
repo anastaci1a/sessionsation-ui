@@ -908,7 +908,13 @@ pub fn paint_with(
             let tint = dim(if selected { SECONDARY } else { MUTED }, options.back);
             // The selected-bullet level only on the selected row; others (and the
             // back arrow or badge focus) use the dim bullet level.
-            let icon_level = if mode { 600 } else { level(!selected) };
+            // In badge mode an active session's indicator keeps its hue: the selected
+            // one at full level (unbolded), the others one level darker, never grey.
+            let icon_level = if mode && !(selected && running(session)) {
+                600
+            } else {
+                level(!selected)
+            };
             // The selected row's account name and static icon are bold until focus
             // moves onto its badge; an animated icon keeps its own styling.
             let strong = selected && !mode;
@@ -962,7 +968,7 @@ pub fn paint_with(
                     false,
                 );
             }
-            if mode && !selected {
+            if mode && !selected && !running(session) {
                 canvas.widget_text(
                     x + 3,
                     y,
@@ -980,7 +986,7 @@ pub fn paint_with(
                     y,
                     rest,
                     Accent {
-                        brightness: if mode { 600 } else { level(!selected) },
+                        brightness: icon_level,
                         bold: strong,
                         flash: false,
                         ..Accent::default()
@@ -1628,12 +1634,12 @@ mod tests {
             assert!(cell.bold, "x={x}");
             assert_eq!(cell.fg, level(&c, x, 4, 1000));
         }
-        // Badge focus: unbold and the dark level.
+        // Badge focus: an active selected session keeps its colour, unbolded.
         let c = draw(1, true);
         for x in [icon, name] {
             let cell = &c.cells[4 * 100 + x];
             assert!(!cell.bold, "x={x}");
-            assert_eq!(cell.fg, level(&c, x, 4, 600));
+            assert_eq!(cell.fg, level(&c, x, 4, 1000));
         }
         // Animated icon: never bolded here, in either state; the name follows the rule.
         for focus in [false, true] {
@@ -2220,7 +2226,32 @@ mod tests {
             )
             .fg;
         assert_eq!(focused.cells[4 * 100 + icon].fg, want);
-        assert_eq!(focused.cells[4 * 100 + icon + 2].fg, MUTED);
+        // The idle active row's account value keeps its hue, one level darker, not grey.
+        let accent = |c: &Canvas, x: usize, y: usize, brightness: i64| {
+            c.theme
+                .as_ref()
+                .unwrap()
+                .accent(
+                    x,
+                    y,
+                    &Accent {
+                        brightness,
+                        flash: false,
+                        ..Accent::default()
+                    },
+                )
+                .fg
+        };
+        assert_eq!(
+            focused.cells[4 * 100 + icon + 2].fg,
+            accent(&focused, icon + 2, 4, 600)
+        );
+        assert!(!focused.cells[4 * 100 + icon + 2].bold);
+        // The selected active row's account value keeps its colour, unbolded.
+        let selected = &focused.cells[3 * 100 + icon + 2];
+        assert_eq!(selected.fg, accent(&focused, icon + 2, 3, 1000));
+        assert!(!selected.bold);
+        assert_ne!(selected.fg, MUTED);
         // The back arrow is darker; the badge keeps its active styling.
         let back = find(&focused, 3, "◀").unwrap();
         assert_eq!(focused.cells[3 * 100 + back].fg, MUTED);

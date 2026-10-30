@@ -471,7 +471,7 @@ impl Dialog {
         }
         Event::None
     }
-    /// Back (Esc, Left, or Enter or Space on Back) returns to the dialog as it was
+    /// Back (Esc, or Enter or Space on Back) returns to the dialog as it was
     /// left; arrows and PgUp/PgDn scroll links taller than the terminal.
     fn link_key(&mut self, code: KeyCode) {
         let Some(view) = &mut self.link_view else {
@@ -479,7 +479,7 @@ impl Dialog {
         };
         let last = view.total.saturating_sub(view.room);
         match code {
-            KeyCode::Esc | KeyCode::Left | KeyCode::Enter | KeyCode::Char(' ') => {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char(' ') => {
                 self.link_view = None;
                 self.sync_link_option();
             }
@@ -1391,8 +1391,11 @@ mod tests {
             assert_eq!(c.cells[back * width].fg, palette.accent);
             assert_eq!(c.cells[back * width + 2].fg, palette.text);
             assert!(text[23].contains("Esc: Back"));
-            // Back, Esc and Left all return to the dialog, cursor where it was.
-            for code in [KeyCode::Enter, KeyCode::Esc, KeyCode::Left] {
+            // Left never closes the link view.
+            assert!(matches!(d.key(key(KeyCode::Left)), Event::None));
+            assert!(d.link_open());
+            // Back and Esc return to the dialog, cursor where it was.
+            for code in [KeyCode::Enter, KeyCode::Esc] {
                 assert!(matches!(d.key(key(code)), Event::None));
                 assert!(!d.link_open());
                 assert_eq!(d.buttons[d.selected].label, VIEW_LINK);

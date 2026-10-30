@@ -731,8 +731,11 @@ fn launch_status(record: &Value) -> &str {
     }
 }
 /// A finished operation's dialog: Dismiss (Undismiss once dismissed), then Close,
-/// which keeps the focus. Repeated polls leave a finished dialog and its focus alone.
-fn finish_operation(d: &mut Dialog, dismissed: bool) {
+/// which keeps the focus. A failed operation not yet dismissed (`retry` is its
+/// [`retry_state`]) offers Dismiss, Retry, Close with Dismiss focused; Retry is
+/// disabled where the backend says the operation cannot be recovered. Repeated
+/// polls leave a finished dialog and its focus alone.
+fn finish_operation(d: &mut Dialog, dismissed: bool, retry: Option<bool>) {
     let label = if dismissed { "Undismiss" } else { "Dismiss" };
     if let Some(b) = d
         .buttons
@@ -743,8 +746,34 @@ fn finish_operation(d: &mut Dialog, dismissed: bool) {
         return;
     }
     d.finish();
-    d.buttons.insert(0, Row::yes(label));
-    d.selected += 1;
+    let slots = d.selected;
+    match retry.filter(|_| !dismissed) {
+        Some(can) => {
+            d.buttons.insert(0, Row::yes(label));
+            d.buttons.insert(1, Row::gate("Retry", can));
+            d.selected = slots;
+        }
+        None => {
+            d.buttons.insert(0, Row::yes(label));
+            d.selected += 1;
+        }
+    }
+}
+/// For a failed operation: whether the backend allows recovering (retrying) it,
+/// from `can_recover`; the kind fallback applies only when the field is absent.
+fn retry_state(o: &Value) -> Option<bool> {
+    (o["phase"] == "failed").then(|| can_recover(o))
+}
+fn can_recover(o: &Value) -> bool {
+    o["can_recover"].as_bool().unwrap_or(
+        o["phase"] == "failed"
+            && matches!(
+                o["kind"].as_str(),
+                Some(
+                    "account_delete" | "account" | "restart" | "directory" | "pause" | "terminate"
+                )
+            ),
+    )
 }
 const SYMLINKED: &str = "settings.json is a symlink";
 /// Short row reason for a live-steering failure.
@@ -1947,15 +1976,7 @@ impl Manager {
                 for row in rows.iter_mut().filter(|r| r.preview_arrows) {
                     row.preview_column = Some(2 + longest + 1);
                 }
-                if self.steering_pick.is_some() || self.bypass_pick.is_some() {
-                    for row in &mut rows {
-                        row.mode = if row.preview_grabbed {
-                            crate::widgets::RowMode::Active
-                        } else {
-                            crate::widgets::RowMode::Other
-                        };
-                    }
-                }
+                crate::widgets::apply_selector_mode(&mut rows);
                 rows
             }
             Page::Sessions => crate::session_list::rows_with_archives(
@@ -2040,23 +2061,7 @@ impl Manager {
                         "Cancel operation",
                         !terminal(phase) && o["can_cancel"] != false,
                     ),
-                    Row::gate(
-                        "Recover",
-                        o["can_recover"].as_bool().unwrap_or(
-                            phase == "failed"
-                                && matches!(
-                                    o["kind"].as_str(),
-                                    Some(
-                                        "account_delete"
-                                            | "account"
-                                            | "restart"
-                                            | "directory"
-                                            | "pause"
-                                            | "terminate"
-                                    )
-                                ),
-                        ),
-                    ),
+                    Row::gate("Recover", can_recover(&o)),
                 ]
             }
         }
@@ -2254,7 +2259,7 @@ impl Manager {
                 " ".repeat(w.saturating_sub(UnicodeWidthStr::width(text)))
             )
         };
-        slots
+        let mut rows: Vec<Row> = slots
             .iter()
             .zip(described)
             .map(|(slot, described)| match (slot, described) {
@@ -2292,7 +2297,9 @@ impl Manager {
                 }
                 (Slot::Entry(..), None) => Row::yes("Unknown operation"),
             })
-            .collect()
+            .collect();
+        crate::widgets::apply_selector_mode(&mut rows);
+        rows
     }
     fn launch_record(&self, kind: &str, key: &str) -> Option<&Value> {
         self.launches
@@ -3020,7 +3027,17 @@ impl Manager {
         }
         if self.page == Page::Queue {
             return match key.code {
-                KeyCode::Left | KeyCode::Esc | KeyCode::Char('o') => self.back(),
+                KeyCode::Esc | KeyCode::Char('o') => self.back(),
+                // Left only moves the cursor to Back; it never leaves the page.
+                KeyCode::Left => {
+                    self.options.back = true;
+                    vec![]
+                }
+                KeyCode::Right => {
+                    self.options.back = false;
+                    vec![]
+                }
+                KeyCode::Enter | KeyCode::Char(' ') if self.options.back => self.back(),
                 KeyCode::Enter | KeyCode::Char(' ') => self.activate_queue(),
                 KeyCode::Up | KeyCode::Down => {
                     self.options
@@ -3332,7 +3349,7 @@ impl Manager {
             d.dim_from = Some(d.body.len().saturating_sub(2));
             d.hanging = true;
             if finished {
-                finish_operation(d, dismissed);
+                finish_operation(d, dismissed, retry_state(&o));
             } else {
                 d.busy = true;
             }
@@ -3807,7 +3824,7 @@ impl Manager {
                             d.dim_from = Some(d.body.len().saturating_sub(2));
                             d.hanging = true;
                             if terminal(o["phase"].as_str().unwrap_or("")) {
-                                finish_operation(d, dismissed);
+                                finish_operation(d, dismissed, retry_state(&o));
                             }
                         }
                     }
@@ -4193,6 +4210,19 @@ impl Manager {
             {
                 Some("Dismiss") => self.dismiss_operation(&key),
                 Some("Undismiss") => self.undismiss_operation(&key),
+                // Retry is the backend's own recover, confirmed first; never automatic.
+                Some("Retry") => {
+                    self.dismiss();
+                    self.confirm(
+                        "Retry operation",
+                        vec![
+                            "The backend rechecks whether this operation can safely proceed."
+                                .into(),
+                        ],
+                        strings(&["recover", &key]),
+                    );
+                    return vec![];
+                }
                 _ => {}
             }
             self.dismiss();
@@ -4809,7 +4839,7 @@ impl Manager {
                     d.hanging = true;
                     d.title = kind_label(o["kind"].as_str().unwrap_or("operation"));
                     if terminal(o["phase"].as_str().unwrap_or("")) {
-                        finish_operation(d, self.dismissed.contains(key));
+                        finish_operation(d, self.dismissed.contains(key), retry_state(o));
                     }
                 }
                 if let Some(key) = &self.active_operation
@@ -5205,7 +5235,11 @@ impl Manager {
                         if terminal(value["phase"].as_str().unwrap_or(""))
                             && let Some(d) = &mut self.dialog
                         {
-                            finish_operation(d, self.dismissed.contains(id(&value)));
+                            finish_operation(
+                                d,
+                                self.dismissed.contains(id(&value)),
+                                retry_state(&value),
+                            );
                         }
                     }
                     return self.refresh();
@@ -7758,13 +7792,21 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
                 .collect::<Vec<_>>()
         };
         let mut m = fresh();
-        // Running: no Dismiss. Finished: Dismiss, then Close, with Close focused.
+        // Running: no Dismiss. Failed and not dismissed: Dismiss, Retry, Close with Dismiss focused;
+        // Retry is disabled because the backend does not offer recovery for this kind.
         assert_eq!(open(&mut m, 0), ["Continue in background"]);
-        assert_eq!(open(&mut m, 1), ["Dismiss", "Close"]);
-        assert_eq!(m.dialog.as_ref().unwrap().selected, 1);
+        assert_eq!(open(&mut m, 1), ["Dismiss", "Retry", "Close"]);
+        assert_eq!(m.dialog.as_ref().unwrap().selected, 0);
+        assert!(!m.dialog.as_ref().unwrap().buttons[1].enabled);
         m.paint_at(&mut Canvas::new(100, 30), 29, 100);
-        // Dismiss hides the badge and returns to the session row.
+        // Down skips the disabled Retry; Up returns to the default Dismiss, which hides
+        // the badge and returns to the session row.
+        press(&mut m, KeyCode::Down);
+        press(&mut m, KeyCode::Down);
+        assert_eq!(m.dialog.as_ref().unwrap().selected, 2);
         press(&mut m, KeyCode::Up);
+        press(&mut m, KeyCode::Up);
+        assert_eq!(m.dialog.as_ref().unwrap().selected, 0);
         press(&mut m, KeyCode::Enter);
         assert!(m.dialog.is_none());
         assert_eq!(m.page, Page::Sessions);
@@ -7834,9 +7876,9 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
                 .map(|b| b.label.clone())
                 .collect::<Vec<_>>()
         };
-        // Not dismissed: Dismiss, as before.
+        // Failed, not dismissed: Dismiss, Retry, Close.
         m.open_operation("op2".into());
-        assert_eq!(labels(&m), ["Dismiss", "Close"]);
+        assert_eq!(labels(&m), ["Dismiss", "Retry", "Close"]);
         m.dismiss();
         m.dismiss_operation("op2");
         m.dismissed_out = None;
@@ -7847,7 +7889,7 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         assert_eq!(m.dialog.as_ref().unwrap().selected, 1);
         // A poll of the finished operation keeps the label and the focus.
         if let Some(d) = &mut m.dialog {
-            finish_operation(d, true);
+            finish_operation(d, true, Some(true));
         }
         assert_eq!(labels(&m), ["Undismiss", "Close"]);
         assert_eq!(m.dialog.as_ref().unwrap().selected, 1);
@@ -7860,7 +7902,71 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         assert_eq!(m.dismissed_out.take().unwrap(), Vec::<String>::new());
         assert_eq!(m.badges()["s2"].id, "op2");
         m.open_operation("op2".into());
-        assert_eq!(labels(&m), ["Dismiss", "Close"]);
+        assert_eq!(labels(&m), ["Dismiss", "Retry", "Close"]);
+    }
+    #[test]
+    fn retry_is_offered_only_for_failed_undismissed_operations_and_follows_can_recover() {
+        let mut m = setup();
+        m.operations = vec![
+            json!({"id":"r1","kind":"restart","session_id":"s1","phase":"failed","can_recover":true,"created_at":50}),
+            json!({"id":"r2","kind":"restart","session_id":"s1","phase":"failed","can_recover":false,"created_at":51}),
+            json!({"id":"r3","kind":"restart","session_id":"s1","phase":"complete","created_at":52}),
+        ];
+        let labels = |m: &Manager| -> Vec<(String, bool)> {
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .buttons
+                .iter()
+                .map(|b| (b.label.clone(), b.enabled))
+                .collect()
+        };
+        m.open_operation("r1".into());
+        assert_eq!(
+            labels(&m),
+            [
+                ("Dismiss".into(), true),
+                ("Retry".into(), true),
+                ("Close".into(), true)
+            ]
+        );
+        assert_eq!(
+            m.dialog.as_ref().unwrap().selected,
+            0,
+            "Dismiss is the default"
+        );
+        m.paint_at(&mut Canvas::new(100, 30), 29, 100);
+        // Retry asks the backend to recover after an explicit confirmation; nothing is sent yet.
+        m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(
+            m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .is_empty()
+        );
+        assert_eq!(m.dialog.as_ref().unwrap().title, "Retry operation");
+        assert!(matches!(&m.form, Form::Confirm(args) if args == &["recover", "r1"]));
+        m.dismiss();
+        m.open_operation("r2".into());
+        m.paint_at(&mut Canvas::new(100, 30), 29, 100);
+        assert_eq!(labels(&m)[1], ("Retry".into(), false));
+        m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(m.form, Form::Operation(_)),
+            "a disabled Retry does nothing"
+        );
+        m.dismiss();
+        m.open_operation("r3".into());
+        assert_eq!(
+            labels(&m).iter().map(|l| l.0.as_str()).collect::<Vec<_>>(),
+            ["Dismiss", "Close"]
+        );
+        m.dismiss();
+        m.dismissed.insert("r1".into());
+        m.open_operation("r1".into());
+        assert_eq!(
+            labels(&m).iter().map(|l| l.0.as_str()).collect::<Vec<_>>(),
+            ["Undismiss", "Close"]
+        );
     }
     #[test]
     fn operation_ids_stay_out_of_the_list_and_details_are_titled_by_kind() {
@@ -9418,13 +9524,16 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         );
         assert_eq!(d.buttons[d.selected].label, "Continue in background");
         m.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        for code in [KeyCode::Esc, KeyCode::Left, KeyCode::Enter] {
+        for code in [KeyCode::Esc, KeyCode::Enter] {
             assert!(
                 m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
                     .is_empty()
             );
             let d = m.dialog.as_mut().unwrap();
             assert!(d.link_open());
+            // Left never leaves the link view.
+            m.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+            assert!(m.dialog.as_ref().unwrap().link_open());
             let mut c = Canvas::new(80, 24);
             m.paint(&mut c, 22);
             let text: String = c.cells[2 * 80..3 * 80]

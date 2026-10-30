@@ -258,6 +258,20 @@ pub struct Row {
     /// A trailing "⚠" in the label is drawn in the warning colour.
     pub warn: bool,
 }
+/// While a row's Up/Down selector is grabbed, the standard styling of every other row:
+/// the grabbing row is [`RowMode::Active`], the rest [`RowMode::Other`] (darker names
+/// and values). Without a grabbed row nothing changes.
+pub fn apply_selector_mode(rows: &mut [Row]) {
+    if rows.iter().any(|r| r.preview_grabbed) {
+        for row in rows {
+            row.mode = if row.preview_grabbed {
+                RowMode::Active
+            } else {
+                RowMode::Other
+            };
+        }
+    }
+}
 /// A row's part in a right-side selection mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RowMode {
@@ -944,28 +958,41 @@ pub const HOVER_NOTES: u8 = 255;
 /// Shared bottom hints: token wrapping never changes the star-field geometry.
 pub fn paint_hint(canvas: &mut Canvas, x: usize, y: usize, text: &str) {
     if let Some(palette) = canvas.popup_palette.clone() {
-        if let Some((keys, action)) = text.split_once(": ") {
-            let key_width = UnicodeWidthStr::width(keys);
-            canvas.text(
-                x,
-                y,
-                keys,
-                Cell {
-                    fg: palette.text,
-                    ..Default::default()
-                },
-                false,
-            );
-            canvas.text(
-                x + key_width,
-                y,
-                &format!(": {action}"),
-                Cell {
-                    fg: palette.muted,
-                    ..Default::default()
-                },
-                false,
-            );
+        if text.contains(": ") {
+            // Every token of a joined hint line (`Enter: Select   Esc: Cancel`) draws
+            // its keys in the bright text colour, as the first token's arrows do.
+            let mut at = x;
+            for (i, token) in text.split("   ").enumerate() {
+                if i > 0 {
+                    at += 3;
+                }
+                let (keys, rest) = match token.split_once(": ") {
+                    Some((keys, action)) => (keys, format!(": {action}")),
+                    None => ("", token.to_owned()),
+                };
+                let key_width = UnicodeWidthStr::width(keys);
+                canvas.text(
+                    at,
+                    y,
+                    keys,
+                    Cell {
+                        fg: palette.text,
+                        ..Default::default()
+                    },
+                    false,
+                );
+                canvas.text(
+                    at + key_width,
+                    y,
+                    &rest,
+                    Cell {
+                        fg: palette.muted,
+                        ..Default::default()
+                    },
+                    false,
+                );
+                at += key_width + UnicodeWidthStr::width(rest.as_str());
+            }
         } else {
             canvas.text(
                 x,
@@ -2182,6 +2209,38 @@ mod tests {
                 .collect::<String>()
                 .contains("request-id")
         );
+    }
+    #[test]
+    fn every_popup_hint_token_draws_its_keys_in_the_bright_text_colour() {
+        let palette = crate::dialog::Palette::default();
+        let mut c = Canvas::new(60, 3);
+        c.popup_palette = Some(palette.clone());
+        let line = "▲/▼: Choose   Enter: Select   Esc: Cancel";
+        paint_hint(&mut c, 0, 0, line);
+        let at = |word: &str| line[..line.find(word).unwrap()].chars().count();
+        for (word, fg) in [
+            ("▲", palette.text),
+            ("Enter", palette.text),
+            ("Esc", palette.text),
+            ("Select", palette.muted),
+            ("Cancel", palette.muted),
+        ] {
+            assert_eq!(c.cells[at(word)].fg, fg, "{word}");
+        }
+    }
+    #[test]
+    fn a_grabbed_selector_row_is_active_and_every_other_row_other() {
+        let mut rows = vec![
+            Row::yes("A"),
+            Row::yes("B").with_picker("x", "↕").grabbed(true),
+            Row::yes("C"),
+        ];
+        apply_selector_mode(&mut rows);
+        let modes: Vec<_> = rows.iter().map(|r| r.mode).collect();
+        assert_eq!(modes, [RowMode::Other, RowMode::Active, RowMode::Other]);
+        let mut rows = vec![Row::yes("A"), Row::yes("B").with_picker("x", "↕")];
+        apply_selector_mode(&mut rows);
+        assert!(rows.iter().all(|r| r.mode == RowMode::Normal));
     }
     #[test]
     fn footer_hints_share_readable_soft_accent_and_centering_at_every_frame() {

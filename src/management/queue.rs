@@ -900,8 +900,12 @@ mod tests {
             Some(&Command::Cancel(second.id.clone()))
         );
         assert_eq!(m.page, Page::Queue);
-        // Back returns to the opener at its remembered row.
+        // Left never leaves the popup; it only moves to Back, which returns to the
+        // opener at its remembered row.
         key(&mut m, KeyCode::Left);
+        assert_eq!(m.page, Page::Queue);
+        assert!(m.options.back);
+        key(&mut m, KeyCode::Enter);
         assert_eq!(m.page, Page::Sessions);
         assert_eq!(m.options.selected, m.rows().len() - 1);
         // `o` opens it from the list too, and Esc closes it.
