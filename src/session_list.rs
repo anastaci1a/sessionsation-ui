@@ -91,7 +91,7 @@ fn session_gate(s: &Value, label: &str, capability: &str) -> Row {
     let reason = if pending(s) {
         "operation running"
     } else if let Some(reason) = backend_reason(s, capability) {
-        return row.with_reason(reason);
+        return row.with_hover_reason(reason);
     } else if capability == "archive" && s["availability"] == "archived" {
         "already archived"
     } else if s["availability"] == "running" {
@@ -101,7 +101,7 @@ fn session_gate(s: &Value, label: &str, capability: &str) -> Row {
     } else {
         "unavailable"
     };
-    row.with_reason(reason)
+    row.with_hover_reason(reason)
 }
 /// A per-session refusal from `capability_reasons` ("CODE: text"), as a short
 /// row reason. Provider-wide explanations (no code) are not per-session reasons.
@@ -145,7 +145,7 @@ fn native_gate(s: &Value, label: &str, capability: &str, action: Action) -> (Row
     }
     let reason = backend_reason(s, capability)
         .unwrap_or_else(|| format!("not supported for {}", provider_label_of(s)));
-    (row.with_reason(reason), Action::Unavailable)
+    (row.with_hover_reason(reason), Action::Unavailable)
 }
 /// Lifecycle capabilities whose actions queue behind a running operation.
 const QUEUEABLE: [&str; 8] = [
@@ -160,7 +160,7 @@ const QUEUEABLE: [&str; 8] = [
 ];
 /// While another operation runs on the session, the action is accepted and queued.
 fn queue_gate(label: &str) -> Row {
-    Row::gate(label, true).with_reason("queues after current")
+    Row::gate(label, true).with_hover_reason("queues after current")
 }
 /// A disabled lifecycle row: the shared reason, or a pending operation.
 fn live_gate(s: &Value, label: &str, capability: &str) -> Row {
@@ -170,9 +170,9 @@ fn live_gate(s: &Value, label: &str, capability: &str) -> Row {
     } else if pending(s) && QUEUEABLE.contains(&capability) {
         queue_gate(label)
     } else if pending(s) {
-        row.with_reason("operation running")
+        row.with_hover_reason("operation running")
     } else {
-        row.with_reason("not available now")
+        row.with_hover_reason("not available now")
     }
 }
 /// A running session outside a HERDR pane whose backend advertises the
@@ -189,7 +189,7 @@ fn add_to_herdr_row(s: &Value) -> Option<Row> {
     if row.enabled {
         return Some(row);
     }
-    Some(row.with_reason(add_reason(s)))
+    Some(row.with_hover_reason(add_reason(s)))
 }
 /// Reasons arrive as "CODE: text"; show the text and never the bare code.
 fn add_reason(s: &Value) -> String {
@@ -268,7 +268,7 @@ fn claude_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
             c["focus"] == true && s["attachment"]["host"] == "herdr",
         );
         let row = match reason.filter(|_| !row.enabled) {
-            Some(reason) => row.with_reason(reason),
+            Some(reason) => row.with_hover_reason(reason),
             None => row,
         };
         (row, Action::Focus)
@@ -285,7 +285,7 @@ fn claude_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
                 _ if !resume => "unsupported",
                 _ => "unavailable",
             };
-            row.with_reason(reason)
+            row.with_hover_reason(reason)
         };
         (row, Action::Resume)
     };
@@ -346,15 +346,15 @@ fn codex_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     let focus = if focus.enabled {
         focus
     } else if s["attachment"]["host"] == "tmux" {
-        focus.with_reason("in tmux")
+        focus.with_hover_reason("in tmux")
     } else {
-        focus.with_reason("not in HERDR")
+        focus.with_hover_reason("not in HERDR")
     };
     let start = Row::gate("Start session", resume && c["resume"] == true);
     let start = if start.enabled {
         start
     } else {
-        start.with_reason(resume_reason(s, resume))
+        start.with_hover_reason(resume_reason(s, resume))
     };
     let mut rows = vec![
         if inactive {
@@ -402,7 +402,7 @@ fn codex_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
         ),
         (Row::separator(), Action::Unavailable),
         (
-            Row::gate("Pause work", false).with_reason("not available yet"),
+            Row::gate("Pause work", false).with_hover_reason("not available yet"),
             Action::Unavailable,
         ),
         (live_gate(s, "Restart Codex", "restart"), Action::Restart),
@@ -416,11 +416,11 @@ fn codex_actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
         (Row::separator(), Action::Unavailable),
         (
             Row::gate("Experimental auto-start after reset", false)
-                .with_reason("not available yet"),
+                .with_hover_reason("not available yet"),
             Action::Unavailable,
         ),
         (
-            Row::gate("Experimental auto-switch", false).with_reason("not available yet"),
+            Row::gate("Experimental auto-switch", false).with_hover_reason("not available yet"),
             Action::Unavailable,
         ),
     ]);
@@ -1174,8 +1174,8 @@ mod tests {
         for (row, action) in &rows {
             if matches!(action, Action::Resume | Action::Archive | Action::Delete) {
                 assert!(!row.enabled);
-                assert_eq!(row.preview.as_deref(), Some("· host unavailable"));
-                assert!(!row.preview_selected_only, "reasons are always visible");
+                assert_eq!(row.preview.as_deref(), Some("(host unavailable)"));
+                assert!(row.preview_selected_only, "reasons show only on hover");
                 assert_eq!(row.preview_fg, MUTED);
             }
         }
@@ -1190,12 +1190,12 @@ mod tests {
             json!({"availability":"saved","resume_block_reason":"moving","capabilities":{}});
         assert_eq!(
             actions(&moving, true)[0].0.preview.as_deref(),
-            Some("· operation running")
+            Some("(operation running)")
         );
         let tmux = json!({"availability":"running","attachment":{"host":"tmux"}});
         assert_eq!(
             actions(&tmux, true)[0].0.preview.as_deref(),
-            Some("· in tmux")
+            Some("(in tmux)")
         );
         let rows: Vec<Row> = actions(&tmux, true).into_iter().map(|(r, _)| r).collect();
         let mut c = Canvas::new(130, 30);
@@ -1204,7 +1204,14 @@ mod tests {
             ..Options::default()
         }
         .paint_menu(&mut c, &rows, 3, 26, 29);
-        assert!(text(&c, 3).contains("· in tmux"), "visible without hover");
+        assert!(!text(&c, 3).contains("in tmux"), "hidden when not hovered");
+        let mut c = Canvas::new(130, 30);
+        Options {
+            selected: 0,
+            ..Options::default()
+        }
+        .paint_menu(&mut c, &rows, 3, 26, 29);
+        assert!(text(&c, 3).contains("(in tmux)"), "beside the hovered row");
         // Too narrow beside the centred labels: none is drawn inline and the
         // selected row's reason moves below the list.
         let mut c = Canvas::new(80, 30);
@@ -1214,7 +1221,7 @@ mod tests {
         }
         .paint_menu(&mut c, &rows, 3, 26, 29);
         assert!(!text(&c, 3).contains("in tmux"));
-        assert!((4..30).any(|y| text(&c, y).contains("· in tmux")));
+        assert!((4..30).any(|y| text(&c, y).contains("(in tmux)")));
     }
     #[test]
     fn sentence_case_menus_and_archive_before_delete() {
@@ -1283,20 +1290,20 @@ mod tests {
         assert_eq!(stop.1, Action::Unavailable);
         assert_eq!(
             stop.0.preview.as_deref(),
-            Some("· not supported for Claude Code")
+            Some("(not supported for Claude Code)")
         );
         // Archive and delete follow the session's own backend reason.
         let archive = all
             .iter()
             .find(|(r, _)| r.label == "Archive session")
             .unwrap();
-        assert_eq!(archive.0.preview.as_deref(), Some("· exit the agent first"));
+        assert_eq!(archive.0.preview.as_deref(), Some("(exit the agent first)"));
         let gemini =
             json!({"provider":"gemini","availability":"stopped","capabilities":{"resume":true}});
         assert!(
             actions(&gemini, true)
                 .iter()
-                .any(|(r, _)| r.preview.as_deref() == Some("· not supported for Gemini CLI"))
+                .any(|(r, _)| r.preview.as_deref() == Some("(not supported for Gemini CLI)"))
         );
         assert_eq!(
             labels(&claude("stopped", false), true)[0],
@@ -1321,15 +1328,15 @@ mod tests {
         for (code, reason) in [
             (
                 "SESSION_HOSTED: a Sessionsation-hosted worker runs this conversation; stop it first",
-                "· hosted worker running",
+                "(hosted worker running)",
             ),
             (
                 "ACCOUNT_DELETED: the account home is gone; its history is not managed here",
-                "· account deleted",
+                "(account deleted)",
             ),
             (
                 "HISTORY_BUSY: Another operation holds this history.",
-                "· another operation holds this history",
+                "(another operation holds this history)",
             ),
         ] {
             let mut s = claude("stopped", false);
@@ -1346,7 +1353,7 @@ mod tests {
         let row = find(&actions(&old, true), "Archive session");
         assert_eq!(
             row.0.preview.as_deref(),
-            Some("· not supported for Gemini CLI")
+            Some("(not supported for Gemini CLI)")
         );
         let agy = json!({"provider":"antigravity","availability":"stopped","capabilities":{"resume":true}});
         let rows = actions(&agy, true);
@@ -1360,7 +1367,7 @@ mod tests {
             assert!(!r.0.enabled && r.1 == Action::Unavailable, "{l}");
             assert_eq!(
                 r.0.preview.as_deref(),
-                Some("· not supported for Antigravity CLI")
+                Some("(not supported for Antigravity CLI)")
             );
         }
         // Archived native sessions offer Restore and Delete like Codex.
@@ -1380,8 +1387,8 @@ mod tests {
     fn claude_focus_and_start_are_disabled_with_reasons_for_detached_stale_unknown() {
         let detached = actions(&claude("running", false), true);
         assert!(!detached[0].0.enabled);
-        assert_eq!(detached[0].0.preview.as_deref(), Some("· not in HERDR"));
-        for (state, reason) in [("stale", "· stale"), ("unknown", "· state unknown")] {
+        assert_eq!(detached[0].0.preview.as_deref(), Some("(not in HERDR)"));
+        for (state, reason) in [("stale", "(stale)"), ("unknown", "(state unknown)")] {
             let rows = actions(&claude(state, false), true);
             assert_eq!(rows[0].0.label, "Start session");
             assert!(!rows[0].0.enabled);

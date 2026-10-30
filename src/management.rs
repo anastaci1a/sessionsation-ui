@@ -8941,7 +8941,7 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         let rows = crate::session_list::actions(&d, true);
         assert_eq!(rows[0].0.label, "Add to HERDR");
         assert!(!rows[0].0.enabled);
-        assert_eq!(rows[0].0.preview.as_deref(), Some("· no native attach"));
+        assert_eq!(rows[0].0.preview.as_deref(), Some("(no native attach)"));
         let mut st = gemini_session(json!(null));
         st["availability"] = json!("stopped");
         st["capabilities"]["resume"] = json!(true);
@@ -9520,7 +9520,14 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         let mut m = placed(vec![s.clone()]);
         m.paint(&mut canvas, 23);
         let text: String = canvas.cells.iter().map(|c| c.glyph.as_str()).collect();
-        assert!(text.contains("· open in another terminal"));
+        assert_eq!(
+            rows[0].0.preview.as_deref(),
+            Some("(open in another terminal)")
+        );
+        assert!(
+            text.contains("(open in another terminal)"),
+            "hovered note shows"
+        );
         assert!(!text.contains("INTERACTIVE_ELSEWHERE"));
         assert!(m.activate().is_empty(), "disabled row sends nothing");
         // Codex shares the row; a HERDR pane or an older backend keeps Focus Session.
