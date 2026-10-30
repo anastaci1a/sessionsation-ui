@@ -15,6 +15,7 @@ pub mod management;
 pub mod popup;
 pub mod state_cache;
 pub mod status;
+pub mod stub_bar;
 pub mod usage;
 pub mod widgets;
 

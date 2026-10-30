@@ -192,7 +192,8 @@ ahead of it; shorter lists may put the cursor next to one. Lists too short for a
 row on each side of an account (such as one row) scroll plainly without them.
 Wrapping past either end jumps the list to that end at once. Columns are fixed per list: selection lane, provider symbol, names
 padded to one width, then identical-length bars and a shared percentage column.
-A status shown instead of bars is lowercase, in parentheses and starts one column right of the bar start (never centred;
+Only action-required account states (Login required, Disabled, Deregistered,
+Deletion failed) replace the bars with a status; it is lowercase, in parentheses and starts one column right of the bar start (never centred;
 longer text grows right). Enter opens the account's own action page. With the backend capability
 `account_reorder`, `m` picks up the focused account (marked `⇅`, `(moving)`),
 Up/Down move it, Enter saves with `account reorder <provider:name> --position <i>`
@@ -226,8 +227,15 @@ another selector. A white `◀`, separated by one space, follows the first usage
 value when it has focus.
 Bar glyphs are always bold, including their gray remainder and threshold marker;
 focus still changes their colors without changing label or percentage styling.
+Unavailable usage (unsupported, unknown or not yet reported) draws a stub bar
+at the bar's position and width instead: a symmetric heavy core with light dashes
+thinning to half-cell ends (`stub_bar`, approved shapes for odd widths 7–33, even
+and wider widths derived by the same rules), in the bars' unfilled gray, never
+hue-shifted or bold. With the cursor on that account's usage, each stub is
+hidden and `(usage unavailable)` appears from one column right of the bar start;
+moving away restores the stub.
 Status-only accounts also accept Right. Parenthetical statuses (`(disabled)`,
-`(usage unavailable)`, `(moving)`) use the usage bars' hue at every position and are
+`(usage unavailable)`, `(moving)`) use the usage bars' filled hue at every position and are
 bold only while the cursor is on them; the focused `◀` stays regular weight. Enter/Space opens Enable for Disabled, Login for Login
 required, Restore for Deregistered, or usage details otherwise. These dialogs retain
 the account and right-side focus when closed; mutations require confirmation.
@@ -235,7 +243,7 @@ the account and right-side focus when closed; mutations require confirmation.
 Bars show remaining allowance (`61% 5h`) for the periods the backend reports: 5h/weekly or
 weekly only. Bold lines with half-cell endcaps deplete into visible gray; custom limits appear
 inside the bar as `┿`, explained by a dim legend in account Details. A missing
-window keeps its row as a dashed track with `?% 5h`. The observation age
+window keeps its row as a stub bar with `?% 5h`. The observation age
 (`(42m ago)`) hangs right of the centred block, once per account; if any cannot
 fit inline, every account shows it under its name. It stays dark grey unless the
 usage itself is focused. Account Details show both meanings (`61% left · 39% used`)
@@ -340,7 +348,7 @@ but has no sign-in modes: its `capabilities.providers` entry has no `auth_modes`
 `account_logout` is false (log out with `/logout` inside agy). Add and Log in run the
 backend's interactive login plan in a visible pane exactly as for Gemini; agy then shows
 its Google OAuth URL and waits for the pasted code. Usage is unsupported and shown as a
-status, never as 0%, and no Limits row or usage windows are listed.
+stub bar, never as 0%, and no Limits row or usage windows are listed.
 
 Delete opens an intent preview without scanning account files. The CLI checks
 activity, preserves history and deletes data only after confirmation. Active

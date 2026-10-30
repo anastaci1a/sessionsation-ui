@@ -178,11 +178,22 @@ impl Usage {
             age_inline: true,
         }
     }
-    pub fn status_only(&self) -> bool {
+    /// Account-level states that replace the bars with their parenthetical: the
+    /// account needs an action first (login, enable, restore, deletion recovery).
+    pub fn action_required(&self) -> bool {
         matches!(
             self.status.as_str(),
-            "Disabled" | "Login required" | "Deregistered" | "Deleting" | "Deletion failed"
-        ) || self.windows.iter().all(|w| w.remaining.is_none())
+            "Disabled" | "Login required" | "Deregistered" | "Deletion failed"
+        )
+    }
+    /// Usage itself is unavailable (unsupported, unknown or not yet reported) for
+    /// an account that needs no action: one stub bar stands in for the bars.
+    pub fn stub(&self) -> bool {
+        !self.action_required() && self.windows.iter().all(|w| w.remaining.is_none())
+    }
+    /// One row without values or age: an action-required parenthetical or a stub bar.
+    pub fn status_only(&self) -> bool {
+        self.action_required() || self.stub()
     }
     pub fn height(&self) -> usize {
         if self.status_only() {
@@ -202,9 +213,14 @@ impl Usage {
             2
         }
     }
-    /// Text shown in place of the bars: lowercase, in parentheses.
+    /// Parenthetical shown in place of the bars: the lowercase action-required
+    /// status, otherwise [`UNAVAILABLE`] (revealed while a stub is hovered).
     pub fn status_label(&self) -> String {
-        format!("({})", self.status.to_lowercase())
+        if self.action_required() {
+            format!("({})", self.status.to_lowercase())
+        } else {
+            UNAVAILABLE.into()
+        }
     }
     /// Left edge of the status text: one column right of the bar's first cell (a
     /// half-cell cap), never centred; longer text keeps this start and grows right.
@@ -251,11 +267,19 @@ impl Usage {
         x + 1
     }
     pub fn width(&self, bar: usize, digits: usize) -> usize {
+        let label = UnicodeWidthStr::width(self.status_label().as_str()) + 1;
         if self.status_only() {
-            (UnicodeWidthStr::width(self.status_label().as_str()) + 1).max(bar)
+            label.max(bar)
+        } else if self.windows.iter().any(|w| w.remaining.is_none()) {
+            // A missing window's stub reveals the parenthetical while hovered.
+            self.values_width(bar, digits).max(label)
         } else {
-            bar + digits + 5
+            self.values_width(bar, digits)
         }
+    }
+    /// Bars and their percentage column, without anything a hover may reveal.
+    pub fn values_width(&self, bar: usize, digits: usize) -> usize {
+        bar + digits + 5
     }
     pub fn paint(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, digits: usize) {
         self.paint_selected(canvas, x, y, bar, digits, false);
@@ -269,10 +293,20 @@ impl Usage {
         digits: usize,
     ) {
         self.paint_selected(canvas, x, y, bar, digits, true);
+        // Hover reveal: each stub gives way to the parenthetical, from bar_x + 1.
+        for (row, window) in self.windows.iter().enumerate() {
+            if window.remaining.is_none() && !self.status_only() {
+                self.reveal(canvas, x, y + row, bar, digits);
+            }
+        }
         if self.status_only() {
             let sx = self.status_x(x, bar);
             let label = self.status_label();
-            self.paint_status(canvas, x, y, bar, true);
+            if self.stub() {
+                self.reveal(canvas, x, y, bar, digits);
+            } else {
+                self.paint_status(canvas, x, y, bar, true);
+            }
             canvas.accent_text(
                 sx + UnicodeWidthStr::width(label.as_str()),
                 y,
@@ -292,7 +326,7 @@ impl Usage {
                 .filter(|_| row == 0 && self.age_inline)
                 .map_or(0, |a| a.len() + 3);
             canvas.text(
-                x + self.width(bar, digits) + age,
+                x + self.values_width(bar, digits) + age,
                 y + row,
                 " ◀",
                 Cell {
@@ -313,7 +347,7 @@ impl Usage {
         digits: usize,
     ) {
         if self.status_only() {
-            self.paint_status(canvas, x, y, bar, false);
+            self.paint_selected(canvas, x, y, bar, digits, false);
             return;
         }
         self.paint_selected(canvas, x, y, bar, digits, false);
@@ -350,6 +384,28 @@ impl Usage {
     }
     /// A parenthetical status takes the usage bars' hue level; bold only while
     /// the cursor is on it.
+    /// Hide the stub (and a missing window's unknown value) on row `y` and show
+    /// [`Usage::status_label`] in its place, bold with the cursor on it.
+    fn reveal(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, digits: usize) {
+        let span = self.width(bar, digits).max(bar);
+        canvas.text(x, y, &" ".repeat(span), Cell::default(), false);
+        self.paint_status(canvas, x, y, bar, true);
+    }
+    /// The stub bar standing in for an unavailable usage bar: the bar's unfilled
+    /// grey, never hue-shifted or bold, with no marker.
+    fn paint_stub(canvas: &mut Canvas, x: usize, y: usize, bar: usize) {
+        canvas.text(
+            x,
+            y,
+            &crate::stub_bar::stub_bar(bar),
+            Cell {
+                fg: UNFILLED,
+                bold: false,
+                ..Cell::default()
+            },
+            false,
+        );
+    }
     fn paint_status(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, bold: bool) {
         canvas.accent_text(
             self.status_x(x, bar),
@@ -372,8 +428,12 @@ impl Usage {
         digits: usize,
         selected: bool,
     ) {
-        if self.status_only() {
+        if self.action_required() {
             self.paint_status(canvas, x, y, bar, false);
+            return;
+        }
+        if self.stub() {
+            Self::paint_stub(canvas, x, y, bar);
             return;
         }
         for (row, window) in self.windows.iter().enumerate() {
@@ -381,13 +441,13 @@ impl Usage {
             let length = bar.saturating_sub(1) as f64;
             let filled = window.remaining.map(|p| length * p.clamp(0., 100.) / 100.);
             let Some(filled) = filled else {
-                // A missing window keeps its row and column: a dashed track and `?`,
+                // A missing window keeps its row and column: a stub bar and `?`,
                 // never drawn as 0%.
                 let muted = Cell {
                     fg: crate::widgets::MUTED,
                     ..Cell::default()
                 };
-                canvas.text(x, y + row, &"╌".repeat(bar), muted.clone(), false);
+                Self::paint_stub(canvas, x, y + row, bar);
                 canvas.text(
                     x + bar + 1,
                     y + row,
@@ -409,7 +469,7 @@ impl Usage {
                         y + row,
                         glyph,
                         Cell {
-                            fg: [144; 3],
+                            fg: UNFILLED,
                             bold: true,
                             ..Cell::default()
                         },
@@ -514,6 +574,10 @@ pub fn provider_symbol(provider: &str) -> &'static str {
 }
 /// Hue level of the usage bars, shared by parenthetical statuses.
 const BAR_LEVEL: i64 = 1000;
+/// Grey of a bar's unfilled part, also the whole stub bar.
+pub const UNFILLED: [u8; 3] = [144; 3];
+/// Parenthetical a hovered stub bar reveals.
+pub const UNAVAILABLE: &str = "(usage unavailable)";
 /// Smallest bar the home list shrinks to on narrow screens.
 const MIN_BAR: usize = 6;
 const MAX_BAR: usize = 24;
@@ -561,9 +625,9 @@ impl AccountsLayout {
         let bars = left + fixed(names);
         let age_below = uses.iter().any(|u| {
             !u.status_only()
-                && u.age
-                    .as_ref()
-                    .is_some_and(|age| bars + u.width(bar, digits) + 3 + age.len() + 1 > width)
+                && u.age.as_ref().is_some_and(|age| {
+                    bars + u.values_width(bar, digits) + 3 + age.len() + 1 > width
+                })
         });
         let mut layout = Self {
             left,
@@ -1403,8 +1467,13 @@ mod tests {
         let mut c = Canvas::new(40, 4);
         Usage::account(&a).paint(&mut c, 1, 1, 20, 2);
         let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
-        assert!(text.contains("(usage unavailable)"));
+        assert!(text.contains(&crate::stub_bar::stub_bar(20)));
         assert!(!text.contains("Ready"));
+        // The cursor on it reveals the parenthetical instead.
+        let mut c = Canvas::new(40, 4);
+        Usage::account(&a).paint_focused(&mut c, 1, 1, 20, 2);
+        let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
+        assert!(text.contains("(usage unavailable)"));
     }
     #[test]
     fn half_endcaps_share_threshold_color_and_align_percentage_labels() {
@@ -1552,6 +1621,10 @@ mod tests {
                         assert_eq!(cell(l.bars + l.bar_width, row), " ");
                         assert_eq!(cell(l.bars + l.bar_width + 1 + l.digits, row), "%");
                     }
+                } else if u.stub() {
+                    // Unavailable usage: the stub bar at the bar's position and width.
+                    let row: String = (l.bars..l.bars + l.bar_width).map(|x| cell(x, y)).collect();
+                    assert_eq!(row, crate::stub_bar::stub_bar(l.bar_width), "{width}");
                 } else {
                     // Status text starts one column right of the bar's first cell.
                     let sx = u.status_x(l.bars, l.bar_width);
@@ -2016,7 +2089,7 @@ mod picker_tests {
         assert_eq!(a.provider(), "claude");
     }
     #[test]
-    fn missing_window_row_keeps_its_columns_with_a_dashed_track_and_unknown_value() {
+    fn missing_window_row_keeps_its_columns_with_a_stub_bar_and_unknown_value() {
         let a = claude_account(json!({"state":"partial","observed_at":100,"short":null,
             "weekly":{"duration_minutes":10080,"used_percent":50}}));
         // Short absent: only the weekly row exists and it is a real bar.
@@ -2031,8 +2104,274 @@ mod picker_tests {
                 .collect()
         };
         assert!(row(0).contains("5h"));
-        // A dashed track keeps the column; its value is unknown, never 0%.
-        assert!(row(1).starts_with("╌╌╌╌╌╌╌╌╌╌╌╌  ?% wk"), "{}", row(1));
-        assert_eq!(canvas.cells[40].fg, crate::widgets::MUTED);
+        // A stub bar keeps the column; its value is unknown, never 0%.
+        assert!(row(1).starts_with("╶╶─╼━━━━╾─╴╴  ?% wk"), "{}", row(1));
+        assert_eq!(canvas.cells[40].fg, UNFILLED);
+        assert!(!canvas.cells[40].bold);
+        assert_eq!(canvas.cells[40 + 14].fg, crate::widgets::MUTED);
+    }
+    fn with_details(mut a: Account, details: serde_json::Value) -> Account {
+        for (k, v) in details.as_object().unwrap() {
+            a.details.insert(k.clone(), v.clone());
+        }
+        a
+    }
+    fn fresh_usage() -> serde_json::Value {
+        json!({"state":"fresh","observed_at":100,
+            "short":{"duration_minutes":300,"used_percent":20},
+            "weekly":{"duration_minutes":10080,"used_percent":0}})
+    }
+    /// Stub where usage is unavailable, a parenthetical only for action-required
+    /// (and disabled) accounts, real bars otherwise.
+    #[test]
+    fn state_selects_stub_parenthetical_or_real_bar() {
+        #[derive(Debug, PartialEq)]
+        enum Shown {
+            Bars,
+            Stub,
+            Status(&'static str),
+        }
+        let unsupported: Account = serde_json::from_value(json!({"id":"gemini:g","provider":"gemini","selectable":true,"enabled":true,"usage_fresh":false,"usage_state":"unsupported","usage":{"state":"unsupported","observed_at":null,"short":null,"weekly":null}})).unwrap();
+        let cases: Vec<(&str, Account, Shown)> = vec![
+            ("fresh", claude_account(fresh_usage()), Shown::Bars),
+            (
+                "stale",
+                claude_account(json!({"state":"stale","observed_at":100,
+                    "short":{"duration_minutes":300,"used_percent":20},"weekly":null})),
+                Shown::Bars,
+            ),
+            ("unsupported", unsupported, Shown::Stub),
+            (
+                "missing",
+                claude_account(
+                    json!({"state":"missing","observed_at":null,"short":null,"weekly":null}),
+                ),
+                Shown::Stub,
+            ),
+            (
+                "error",
+                claude_account(json!({"state":"error","observed_at":100,
+                    "short":{"duration_minutes":300,"used_percent":0},"weekly":null})),
+                Shown::Stub,
+            ),
+            ("not yet reported", claude_account(json!({})), Shown::Stub),
+            (
+                "deleting",
+                with_details(
+                    claude_account(fresh_usage()),
+                    json!({"deletion":{"id":"d1","phase":"running"}}),
+                ),
+                Shown::Bars,
+            ),
+            (
+                "deleting without usage",
+                with_details(
+                    claude_account(json!({})),
+                    json!({"deletion":{"id":"d1","phase":"running"}}),
+                ),
+                Shown::Stub,
+            ),
+            (
+                "login",
+                with_details(claude_account(fresh_usage()), json!({"auth_required":true})),
+                Shown::Status("(login required)"),
+            ),
+            (
+                "auth detail",
+                with_details(
+                    claude_account(json!({})),
+                    json!({"auth_detail":"AUTH_REQUIRED"}),
+                ),
+                Shown::Status("(login required)"),
+            ),
+            (
+                "disabled",
+                with_details(claude_account(fresh_usage()), json!({"enabled":false})),
+                Shown::Status("(disabled)"),
+            ),
+            (
+                "deregistered",
+                with_details(claude_account(json!({})), json!({"membership":"removed"})),
+                Shown::Status("(deregistered)"),
+            ),
+            (
+                "deletion failed",
+                with_details(
+                    claude_account(fresh_usage()),
+                    json!({"deletion":{"id":"d1","phase":"failed"}}),
+                ),
+                Shown::Status("(deletion failed)"),
+            ),
+        ];
+        for (name, a, expected) in cases {
+            let u = Usage::account(&a);
+            let mut c = Canvas::new(60, 3);
+            u.paint(&mut c, 2, 0, 20, 2);
+            let row: String = (0..60).map(|x| c.cells[x].glyph.as_str()).collect();
+            let bar: String = (2..22).map(|x| c.cells[x].glyph.as_str()).collect();
+            let shown = if u.action_required() {
+                assert!(u.status_only() && !u.stub(), "{name}");
+                assert_eq!(row.find('('), Some(3), "{name}: at bar_x + 1");
+                Shown::Status(match u.status_label().as_str() {
+                    "(login required)" => "(login required)",
+                    "(disabled)" => "(disabled)",
+                    "(deregistered)" => "(deregistered)",
+                    "(deletion failed)" => "(deletion failed)",
+                    other => panic!("{name}: {other}"),
+                })
+            } else if bar == crate::stub_bar::stub_bar(20) {
+                assert!(u.stub() && u.status_only(), "{name}");
+                assert!(!row.contains('('), "{name}: no parenthetical until hovered");
+                Shown::Stub
+            } else {
+                assert!(!u.status_only(), "{name}");
+                assert!(row.contains("% 5h"), "{name}: {row}");
+                Shown::Bars
+            };
+            assert_eq!(shown, expected, "{name}: {row:?}");
+            if let Shown::Status(label) = expected {
+                assert!(row.contains(label), "{name}: {row}");
+            }
+        }
+    }
+    /// The stub's colour is the bars' unfilled grey: no hue, no marker, never bold.
+    #[test]
+    fn stub_is_unfilled_grey_never_bold_in_every_paint_mode() {
+        let a = claude_account(json!({}));
+        let u = Usage::account(&a);
+        let base = crate::render::Field::new(60, 4, 1967).paint(4200);
+        type Paint = fn(&Usage, &mut Canvas, usize, usize, usize, usize);
+        let modes: [Paint; 3] = [
+            |u, c, x, y, b, d| u.paint(c, x, y, b, d),
+            |u, c, x, y, b, d| u.paint_selected(c, x, y, b, d, true),
+            |u, c, x, y, b, d| u.paint_deemphasized(c, x, y, b, d),
+        ];
+        for paint in modes {
+            let mut c = base.clone();
+            paint(&u, &mut c, 4, 1, 17, 2);
+            let row: String = (4..21).map(|x| c.cells[60 + x].glyph.as_str()).collect();
+            assert_eq!(row, "╶╶╴──━━━━━━━──╶╴╴");
+            for x in 4..21 {
+                assert_eq!(c.cells[60 + x].fg, UNFILLED, "x={x}");
+                assert!(!c.cells[60 + x].bold, "x={x}");
+            }
+        }
+        // The grey is the one the normal bars use for their unfilled part.
+        let mut c = base.clone();
+        let empty = claude_account(json!({"state":"fresh","observed_at":100,
+            "short":{"duration_minutes":300,"used_percent":100},"weekly":null}));
+        Usage::account(&empty).paint(&mut c, 4, 1, 17, 2);
+        assert_eq!(c.cells[60 + 10].glyph, "─");
+        assert_eq!(c.cells[60 + 10].fg, UNFILLED);
+    }
+    fn home_row(c: &Canvas, y: usize) -> String {
+        (0..c.width)
+            .map(|x| c.cells[y * c.width + x].glyph.as_str())
+            .collect()
+    }
+    /// Only the cursor on that account's usage hides its stub and shows
+    /// `(usage unavailable)` at bar_x + 1; moving away shows the stub again.
+    #[test]
+    fn hovering_a_stub_reveals_usage_unavailable_in_its_place() {
+        let accounts = vec![
+            claude_account(fresh_usage()),
+            claude_account(
+                json!({"state":"missing","observed_at":null,"short":null,"weekly":null}),
+            ),
+            claude_account(json!({"state":"partial","observed_at":100,
+                "short":{"duration_minutes":300,"used_percent":20},"weekly":null})),
+        ];
+        let width = 90;
+        let l = AccountsLayout::fit(&accounts, width);
+        let stub = crate::stub_bar::stub_bar(l.bar_width);
+        // Rows from 1: fresh 1-2, blank, stub 4, blank, partial 6-7 (weekly missing).
+        let (stub_y, partial_y) = (4, 7);
+        let base = crate::render::Field::new(width, 12, 1967).paint(4200);
+        // (selected, usage focus, stub hovered, partial hovered)
+        for (selected, focus, on_stub, on_partial) in [
+            (None, false, false, false),
+            (Some(1), false, false, false),
+            (Some(1), true, true, false),
+            (Some(0), true, false, false),
+            (Some(2), false, false, false),
+            (Some(2), true, false, true),
+        ] {
+            let mut c = base.clone();
+            l.paint(&mut c, &accounts, 1, 12, 0, selected, false, focus, None);
+            let bar = |y: usize| -> String {
+                (l.bars..l.bars + l.bar_width)
+                    .map(|x| c.cells[y * width + x].glyph.as_str())
+                    .collect()
+            };
+            for (y, hovered) in [(stub_y, on_stub), (partial_y, on_partial)] {
+                let row = home_row(&c, y);
+                let at = row.find(UNAVAILABLE).map(|b| row[..b].chars().count());
+                if hovered {
+                    assert_eq!(at, Some(l.bars + 1), "{selected:?} {focus} y={y}: {row}");
+                    assert_eq!(c.cells[y * width + l.bars].glyph, " ");
+                    assert!(!row.contains('━'), "stub hidden: {row}");
+                    assert!(!row.contains("?%"), "unknown value hidden: {row}");
+                    for x in l.bars + 1..l.bars + 1 + UNAVAILABLE.len() {
+                        assert!(c.cells[y * width + x].bold, "cursor on it: x={x}");
+                    }
+                } else {
+                    assert_eq!(at, None, "{selected:?} {focus} y={y}: {row}");
+                    assert_eq!(bar(y), stub, "{selected:?} {focus} y={y}");
+                }
+            }
+            // The stub-only account keeps the selector right of the revealed text.
+            if on_stub {
+                assert!(home_row(&c, stub_y).contains("(usage unavailable) ◀"));
+            }
+            // The partial account's known window keeps its bar and selector.
+            assert!(
+                home_row(&c, partial_y - 1).contains("80% 5h"),
+                "{selected:?}"
+            );
+        }
+    }
+    /// Action-required parentheticals take exactly the filled bar's colour, cell
+    /// by cell (same hueshift and level); bold only with the cursor on them.
+    #[test]
+    fn action_required_parenthetical_matches_the_filled_bar_colour() {
+        let full = claude_account(json!({"state":"fresh","observed_at":100,
+            "short":{"duration_minutes":300,"used_percent":0},"weekly":null}));
+        for details in [
+            json!({"auth_required":true}),
+            json!({"auth_detail":"AUTH_REQUIRED"}),
+            json!({"enabled":false}),
+            json!({"membership":"removed"}),
+        ] {
+            let a = with_details(claude_account(fresh_usage()), details.clone());
+            let accounts = vec![a.clone(), full.clone()];
+            let width = 90;
+            let l = AccountsLayout::fit(&accounts, width);
+            let base = crate::render::Field::new(width, 12, 1967).paint(4200);
+            let u = Usage::account(&a);
+            assert!(u.action_required(), "{details}");
+            let label = u.status_label();
+            let sx = l.bars + 1;
+            // A full bar's filled part painted at the same cells.
+            let mut filled = base.clone();
+            Usage::account(&full).paint(&mut filled, sx - 1, 1, label.len() + 2, l.digits);
+            for (selected, focus, bold) in [
+                (None, false, false),
+                (Some(0), false, false),
+                (Some(1), true, false),
+                (Some(0), true, true),
+            ] {
+                let mut c = base.clone();
+                l.paint(&mut c, &accounts, 1, 12, 0, selected, false, focus, None);
+                let row = home_row(&c, 1);
+                assert_eq!(row.find(&label).map(|b| row[..b].chars().count()), Some(sx));
+                for x in sx..sx + label.len() {
+                    let cell = &c.cells[width + x];
+                    let bar = &filled.cells[width + x];
+                    assert_eq!(bar.glyph, "━", "filled at x={x}");
+                    assert_eq!(cell.fg, bar.fg, "{details} {selected:?} {focus} x={x}");
+                    assert_eq!(cell.bold, bold, "{details} {selected:?} {focus} x={x}");
+                }
+            }
+        }
     }
 }
