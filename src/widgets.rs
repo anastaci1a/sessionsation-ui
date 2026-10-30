@@ -240,6 +240,9 @@ pub struct Row {
     /// Grey info text after a picker value: inline when it fits, otherwise shown
     /// below the list while its row is selected. Never counts toward centering.
     pub info: Option<String>,
+    /// The info text is a hover note: shown only while the row is selected, in
+    /// the same all-or-nothing right-or-below decision as [`HOVER_NOTES`].
+    pub hover_info: bool,
     /// Right-side selection mode (grabbed selector or focused badge): how this row
     /// is styled while the mode is active.
     pub mode: RowMode,
@@ -313,6 +316,7 @@ impl Row {
             highlight: 0,
             settings_value: false,
             info: None,
+            hover_info: false,
             mode: RowMode::Normal,
             overflow: None,
             preview_full: None,
@@ -436,6 +440,29 @@ impl Row {
         self.preview_gap = 2;
         self
     }
+    /// Grey explanation for an unavailable row, shown in parentheses (no bullet)
+    /// only while the row is hovered. All hover notes of a menu share one fit
+    /// decision: beside their rows when every one fits, otherwise below the list.
+    pub fn with_hover_reason(mut self, reason: impl AsRef<str>) -> Self {
+        self.preview = Some(format!("({})", reason.as_ref()));
+        self.preview_selected_only = true;
+        self.preview_info = true;
+        self.preview_fg = MUTED;
+        self.preview_gap = 2;
+        self.preview_group = HOVER_NOTES;
+        self
+    }
+    /// Picker info shown in parentheses only while the row is hovered, in the same
+    /// all-or-nothing decision as [`Row::with_hover_reason`].
+    pub fn with_hover_info(mut self, info: impl AsRef<str>) -> Self {
+        self.info = Some(format!("({})", info.as_ref()));
+        self.hover_info = true;
+        self
+    }
+    /// A hover note (reason or picker info): never shortened, shown whole.
+    pub fn is_hover_note(&self) -> bool {
+        self.hover_info || self.preview_group == HOVER_NOTES && self.preview.is_some()
+    }
     /// A picker choice drawn `<arrow> value`; `arrow` is one of `↕ ↓ ↑`.
     pub fn with_picker(mut self, value: impl AsRef<str>, arrow: &str) -> Self {
         self.preview = Some(format!("{arrow} {}", value.as_ref()));
@@ -516,6 +543,7 @@ impl Row {
             highlight: 0,
             settings_value: false,
             info: None,
+            hover_info: false,
             mode: RowMode::Normal,
             overflow: None,
             preview_full: None,
@@ -744,6 +772,7 @@ impl Row {
         {
             self.paint_preview(canvas, start, y, preview, selected && !back, back, grabbed);
             if let Some(info) = self.info.as_deref()
+                && (!self.hover_info || selected && !back)
                 && let Some(at) = self.info_position(canvas.width, x)
             {
                 canvas.widget_text(
@@ -875,10 +904,15 @@ pub fn align_reasons(rows: &mut [Row]) {
         .map(|r| UnicodeWidthStr::width(r.label.as_str()))
         .max()
         .unwrap_or(0);
-    for row in rows.iter_mut().filter(|r| r.has_reason()) {
+    for row in rows
+        .iter_mut()
+        .filter(|r| r.has_reason() || !r.hover_info && r.is_hover_note())
+    {
         row.preview_column = Some(2 + longest + 2);
     }
 }
+/// Preview group of hover notes ([`Row::with_hover_reason`], [`Row::with_hover_info`]).
+pub const HOVER_NOTES: u8 = 255;
 
 /// Shared bottom hints: token wrapping never changes the star-field geometry.
 pub fn paint_hint(canvas: &mut Canvas, x: usize, y: usize, text: &str) {
@@ -1250,6 +1284,9 @@ impl Options {
             {
                 groups[row.preview_group as usize] = true;
             }
+            if row.hover_info && row.info_position(width, left).is_none() {
+                groups[HOVER_NOTES as usize] = true;
+            }
         }
         groups
     }
@@ -1348,7 +1385,8 @@ impl Options {
             && result.1 > 0
             && let Some(row) = rows.get(self.selected)
             && let Some(info) = row.info.as_deref()
-            && row.info_position(canvas.width, result.0).is_none()
+            && (row.info_position(canvas.width, result.0).is_none()
+                || row.hover_info && Self::preview_group_detached(canvas.width, rows, HOVER_NOTES))
         {
             let y = if rows.len() > result.1 {
                 bottom + 2
@@ -1400,6 +1438,16 @@ impl Options {
         let detached_groups = Self::preview_groups(canvas.width, rows);
         let reasons_detached = Self::reasons_detached(canvas.width, rows);
         for (i, row) in rows.iter().enumerate().skip(self.scroll).take(capacity) {
+            let inline;
+            let row = if row.hover_info && detached_groups[HOVER_NOTES as usize] {
+                inline = Row {
+                    info: None,
+                    ..row.clone()
+                };
+                &inline
+            } else {
+                row
+            };
             row.paint_with_preview(
                 canvas,
                 left,
@@ -2167,5 +2215,64 @@ mod tests {
         assert!(text.contains("◀— Close"));
         assert!(focused.cells[3 * 80 + 21].bold);
         assert_eq!(focused.cells[3 * 80 + 30].glyph, " ");
+    }
+    /// Hover notes (unavailable reasons and picker info): only on the hovered row,
+    /// in parentheses without a bullet, and all beside their rows or all below the
+    /// list — never some of each, never shortened.
+    #[test]
+    fn hover_notes_show_only_on_hover_and_share_one_beside_or_below_decision() {
+        let reason = "the provider handles deletion itself";
+        let info = "skip the startup warning";
+        let mut rows = vec![
+            Row::yes("Details"),
+            Row::yes("Bypass warning")
+                .with_picker("Skip", "↓")
+                .with_hover_info(info),
+            Row::gate("Delete account", false).with_hover_reason(reason),
+        ];
+        align_reasons(&mut rows);
+        let reason = format!("({reason})");
+        let info = format!("({info})");
+        let lines = |c: &Canvas| -> Vec<String> {
+            c.cells
+                .chunks(c.width)
+                .map(|r| r.iter().map(|c| c.glyph.as_str()).collect())
+                .collect()
+        };
+        // Every width: notes are beside their rows only when all of them fit there.
+        let mut mixed = false;
+        // From 42 the longest note fits whole below the list (narrower scrolls).
+        for width in 42..=110 {
+            let left = Options::left(width, &rows);
+            let info_fits = rows[1].info_position(width, left).is_some();
+            let reason_fits = rows[2].preview_position(width, left).is_some();
+            mixed |= info_fits != reason_fits;
+            let beside = info_fits && reason_fits;
+            for selected in 0..rows.len() {
+                let mut options = Options {
+                    selected,
+                    ..Options::default()
+                };
+                let mut c = Canvas::new(width, 20);
+                options.paint_menu(&mut c, &rows, 3, 15, 18);
+                let lines = lines(&c);
+                let all = lines.join("\n");
+                assert!(!all.contains('·'), "no bullet: {all}");
+                for (row, note) in [(1, &info), (2, &reason)] {
+                    let shown = all.matches(note.as_str()).count();
+                    if row != selected {
+                        assert_eq!(shown, 0, "{width} sel={selected}: only on hover\n{all}");
+                        continue;
+                    }
+                    assert_eq!(shown, 1, "{width} sel={selected}: whole, once\n{all}");
+                    assert_eq!(
+                        lines[3 + row].contains(note.as_str()),
+                        beside,
+                        "{width} sel={selected}: beside or below\n{all}"
+                    );
+                }
+            }
+        }
+        assert!(mixed, "some width fits one note but not the other");
     }
 }

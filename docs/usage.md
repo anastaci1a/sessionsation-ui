@@ -303,7 +303,11 @@ unavailable with its reason.
 On a revision-22 backend they also get a `Bypass warning` selector (Skip on top, Show below)
 that reads `api account bypass-warning` and changes it with `--skip`/`--show`; it follows the
 same picker rules, shows the backend's reply afterwards and explains itself with the grey
-text "skip Claude's YOLO-mode startup warning".
+text "(skip Claude's YOLO-mode startup warning)".
+On the account page, picker info and the reasons of unavailable rows are hover notes:
+dark grey, in parentheses without a bullet, shown only for the hovered row. They share
+one decision: beside their rows when every note fits there whole, otherwise all of them
+appear below the list while their row is hovered; they are never shortened.
 Deregister/Restore and Delete are enabled only when the provider reports
 `account_removal`/`account_deletion`; a disabled row shows the backend reason when
 published. Delete confirmations show backend semantics text when present (for Claude

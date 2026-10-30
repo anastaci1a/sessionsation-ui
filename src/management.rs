@@ -948,7 +948,7 @@ impl Manager {
             let reason = self
                 .provider_reason(&provider, "account_limits")
                 .unwrap_or_else(|| "unsupported".into());
-            row.with_reason(reason)
+            row.with_hover_reason(reason)
         }
     }
     /// Live steering is offered for Claude accounts by a revision-16 backend.
@@ -974,17 +974,15 @@ impl Manager {
         match self.steering_state(key) {
             Ok(on) => {
                 let on = self.steering_pick.unwrap_or(on);
-                let mut row = Row::yes("Live steering")
+                Row::yes("Live steering")
                     .with_picker(
                         if on { "On" } else { "Off" },
                         crate::preferences::choice_arrow(&[true, false], on),
                     )
-                    .grabbed(self.steering_pick.is_some());
-                row.info =
-                    Some("lets other sessions message this account's running sessions".into());
-                row
+                    .grabbed(self.steering_pick.is_some())
+                    .with_hover_info("lets other sessions message this account's running sessions")
             }
-            Err(reason) => Row::gate("Live steering", false).with_reason(reason),
+            Err(reason) => Row::gate("Live steering", false).with_hover_reason(reason),
         }
     }
     /// The bypass-warning setting is offered for Claude accounts by a revision-22 backend.
@@ -1009,16 +1007,15 @@ impl Manager {
         match self.bypass_state(key) {
             Ok(skip) => {
                 let skip = self.bypass_pick.unwrap_or(skip);
-                let mut row = Row::yes("Bypass warning")
+                Row::yes("Bypass warning")
                     .with_picker(
                         if skip { "Skip" } else { "Show" },
                         crate::preferences::choice_arrow(&[true, false], skip),
                     )
-                    .grabbed(self.bypass_pick.is_some());
-                row.info = Some("skip Claude's YOLO-mode startup warning".into());
-                row
+                    .grabbed(self.bypass_pick.is_some())
+                    .with_hover_info("skip Claude's YOLO-mode startup warning")
             }
-            Err(reason) => Row::gate("Bypass warning", false).with_reason(reason),
+            Err(reason) => Row::gate("Bypass warning", false).with_hover_reason(reason),
         }
     }
     fn logout_account_row(&self, key: &str, removed: bool) -> Row {
@@ -1031,7 +1028,7 @@ impl Manager {
             let reason = self
                 .provider_reason(&provider, "account_logout")
                 .unwrap_or_else(|| "unsupported".into());
-            row.with_reason(reason)
+            row.with_hover_reason(reason)
         }
     }
     fn rename_account_row(&self, key: &str) -> Row {
@@ -1043,7 +1040,7 @@ impl Manager {
             let reason = self
                 .provider_reason(&provider, "account_rename")
                 .unwrap_or_else(|| "unsupported".into());
-            row.with_reason(reason)
+            row.with_hover_reason(reason)
         }
     }
     fn remove_account_row(&self, key: &str, removed: bool) -> Row {
@@ -1061,7 +1058,7 @@ impl Manager {
             let reason = self
                 .provider_reason(&provider, "account_removal")
                 .unwrap_or_else(|| "unsupported".into());
-            row.with_reason(reason)
+            row.with_hover_reason(reason)
         }
     }
     /// Providers the backend reports as implemented and that this UI has a flow for.
@@ -1105,7 +1102,7 @@ impl Manager {
         };
         let row = Row::gate("Delete account", reason.is_none());
         if let Some(reason) = reason {
-            row.with_reason(reason)
+            row.with_hover_reason(reason)
         } else {
             row
         }
@@ -5242,8 +5239,10 @@ impl Manager {
                 // Inline statuses and reasons shorten to the space they have; when
                 // too narrow, the selected one moves below the list (standard wrap).
                 for row in rows.iter_mut() {
+                    // Hover notes are never shortened: all beside their rows or all below.
                     if let (Some(column), Some(_)) = (row.preview_column, &row.preview)
                         && !row.preview_choice
+                        && !row.is_hover_note()
                     {
                         let room = canvas.width.saturating_sub(column + 6);
                         if room >= 6 {
@@ -6196,17 +6195,17 @@ mod tests {
         m.page = Page::Account("codex:account1".into());
         assert_eq!(
             m.delete_account_row("codex:account1").preview.as_deref(),
-            Some("· unsupported")
+            Some("(unsupported)")
         );
         m.capabilities["providers"][0]["account_deletion"] = json!(true);
         for (preview, reason) in [
             (
                 json!({"can_delete":false,"owner_upgrade_required":true}),
-                Some("· owner update needed"),
+                Some("(owner update needed)"),
             ),
             (
                 json!({"can_delete":false,"affected_sessions":[{"running":true}]}),
-                Some("· active sessions"),
+                Some("(active sessions)"),
             ),
             (json!({"can_delete":true}), None),
         ] {
@@ -6872,6 +6871,41 @@ mod tests {
     fn account(n: usize) -> Account {
         serde_json::from_value(json!({"id":format!("codex:account{n}"),"selectable":true,"enabled":true,"usage_fresh":true,"usage":{"observed_at":100,"short":{"duration_minutes":300,"used_percent":25},"weekly":{"duration_minutes":10080,"used_percent":35}},"switch_thresholds":{"customized":true,"short_percent":80,"weekly_percent":90}})).unwrap()
     }
+    #[test]
+    fn account_menu_reasons_show_on_hover_in_parentheses_all_beside_or_all_below() {
+        let mut m = setup();
+        let long = "the provider console deletes this account";
+        m.capabilities["providers"][0]["operations"]["account_deletion"]["reason"] = json!(long);
+        m.go(Page::Account("codex:account1".into()));
+        let rows = m.rows();
+        let at = |label: &str| rows.iter().position(|r| r.label == label).unwrap();
+        let notes = [
+            (at("Rename"), "(unsupported)".to_owned()),
+            (at("Delete account"), format!("({long})")),
+        ];
+        for (width, beside) in [(140, true), (70, false)] {
+            for selected in [at("Details"), notes[0].0, notes[1].0] {
+                m.options.selected = selected;
+                let mut c = Canvas::new(width, 30);
+                m.paint(&mut c, 29);
+                let text = screen_text(&c);
+                for (row, note) in &notes {
+                    let label = &rows[*row].label;
+                    let line = text.lines().find(|l| l.contains(label.as_str())).unwrap();
+                    assert!(!line.contains('·'), "{width}: {line}");
+                    if *row != selected {
+                        assert!(
+                            !text.contains(note.as_str()),
+                            "{width} {selected}: hover only"
+                        );
+                        continue;
+                    }
+                    assert_eq!(text.matches(note.as_str()).count(), 1, "{width}:\n{text}");
+                    assert_eq!(line.contains(note.as_str()), beside, "{width}:\n{text}");
+                }
+            }
+        }
+    }
     fn setup() -> Manager {
         let mut m = Manager::default();
         m.inventory(vec![account(1), account(2)]);
@@ -7019,12 +7053,12 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
         assert!(m.note.starts_with("SETTINGS_IS_SYMLINK"), "{}", m.note);
         let r = row(&m).unwrap();
         assert!(!r.enabled);
-        assert_eq!(r.preview.as_deref(), Some("· settings.json is a symlink"));
+        assert_eq!(r.preview.as_deref(), Some("(settings.json is a symlink)"));
         let intents = m.refresh();
         drive(&mut m, &client, intents).await;
         assert_eq!(
             row(&m).unwrap().preview.as_deref(),
-            Some("· settings.json is a symlink")
+            Some("(settings.json is a symlink)")
         );
         // An operator's hold or refuse is shown honestly and cannot be changed here.
         for held in ["hold", "refuse"] {
@@ -7038,7 +7072,7 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
             drive(&mut m, &client, intents).await;
             let r = row(&m).unwrap();
             assert!(!r.enabled);
-            assert_eq!(r.preview, Some(format!("· settings.json sets {held}")));
+            assert_eq!(r.preview, Some(format!("(settings.json sets {held})")));
             m.options.selected = m
                 .rows()
                 .iter()
@@ -7053,7 +7087,12 @@ ok({'account_id':args[2],'provider':'claude','live_steering':value=='accept','se
         let intents = m.refresh();
         drive(&mut m, &client, intents).await;
         let r = row(&m).unwrap();
-        assert!(!r.enabled && r.preview.as_deref().is_some_and(|p| p.starts_with("· ")));
+        assert!(
+            !r.enabled
+                && r.preview
+                    .as_deref()
+                    .is_some_and(|p| p.starts_with('(') && p.ends_with(')'))
+        );
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn bypass_warning_reads_and_changes_through_the_backend() {
@@ -7119,7 +7158,7 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         assert_eq!(r.preview.as_deref(), Some("↓ Skip"));
         assert_eq!(
             r.info.as_deref(),
-            Some("skip Claude's YOLO-mode startup warning")
+            Some("(skip Claude's YOLO-mode startup warning)")
         );
         m.options.selected = m
             .rows()
