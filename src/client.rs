@@ -85,6 +85,20 @@ pub fn provider_label(provider: &str) -> &str {
         other => other,
     }
 }
+/// Short provider name used in titles and setting labels ("Claude spinner").
+pub fn provider_name(provider: &str) -> &str {
+    match provider {
+        "codex" => "Codex",
+        "claude" => "Claude",
+        "gemini" => "Gemini",
+        "antigravity" => "Antigravity",
+        other => other,
+    }
+}
+/// Title of every popup in a provider's login flow, for all providers alike.
+pub fn login_title(provider: &str) -> String {
+    format!("{} login", provider_name(provider))
+}
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Workspace {
     pub workspace_id: String,

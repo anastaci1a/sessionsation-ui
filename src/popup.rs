@@ -63,6 +63,33 @@ impl Panel {
         );
     }
 }
+/// Control-hint lines of a sub-popup whose content area is `inner` cells wide.
+pub fn hint_lines(tokens: &[&str], inner: usize) -> Vec<String> {
+    if tokens.is_empty() {
+        return vec![];
+    }
+    crate::widgets::hint_lines(tokens, inner + 4)
+}
+/// Rows a sub-popup reserves for `lines` hint lines: one blank row above them.
+pub fn hint_space(lines: usize) -> usize {
+    if lines == 0 { 0 } else { lines + 1 }
+}
+/// The one path every sub-popup (dialog or choice popup) draws its controls with:
+/// centered within `width` cells from `left`, ending on row `bottom`, the last row
+/// inside its own frame, in the popup's hint colours. The main popup's footer
+/// never repeats them.
+pub fn paint_frame_hints(
+    canvas: &mut Canvas,
+    left: usize,
+    bottom: usize,
+    width: usize,
+    lines: &[String],
+) {
+    let start = (bottom + 1).saturating_sub(lines.len());
+    for (i, line) in lines.iter().enumerate() {
+        crate::widgets::paint_centered_hint(canvas, left, start + i, width, line);
+    }
+}
 /// Opening geometry and detail budget. Visible selections may grow it;
 /// terminal resize measures it afresh. Polling alone never changes geometry.
 #[derive(Clone, Copy, Debug)]
@@ -150,7 +177,8 @@ pub struct Choices<'a> {
     pub note_accent: bool,
     pub large: bool,
     pub fit_description: bool,
-    pub browse_hint: bool,
+    /// Control hints drawn centered on the bottom row(s) inside the frame.
+    pub hints: &'a [&'a str],
     /// Mounted (head, tail) rows around a scrolling list, when the view has them.
     pub sections: Option<(usize, usize)>,
 }
@@ -184,6 +212,8 @@ impl Choices<'_> {
             .map(UnicodeWidthStr::width)
             .max()
             .unwrap_or(0);
+        // Room for the controls on one row inside the frame, where it fits.
+        let hints = UnicodeWidthStr::width(self.hints.join("   ").as_str());
         let width = if self.editor.is_some() || self.fit_description {
             description + 4
         } else {
@@ -191,6 +221,7 @@ impl Choices<'_> {
                 .max(UnicodeWidthStr::width(self.title) + 2)
                 .max(8)
         }
+        .max(hints + 4)
         .min(viewport.0.saturating_sub(4));
         self.fit_width(viewport, width)
     }
@@ -199,11 +230,12 @@ impl Choices<'_> {
         let description = crate::dialog::wrap(self.description, inner).len();
         let preview = usize::from(crate::widgets::Options::previews_detached(inner, self.rows)) * 2;
         let note = usize::from(!self.note.is_empty()) * 2;
+        let hints = hint_space(hint_lines(self.hints, inner).len());
         let height = if self.large {
             (viewport.1 * DIRECTORY_HEIGHT_PERCENT / 100)
-                .max(description + 1 + usize::from(self.editor.is_some()) * 4 + 4)
+                .max(description + 1 + usize::from(self.editor.is_some()) * 4 + 3 + hints)
         } else {
-            description + 1 + self.rows.len().max(1) + preview + note + 2
+            description + 1 + self.rows.len().max(1) + preview + note + 2 + hints
         };
         let mut size = Size::fit(viewport, width, height);
         // Match viewport parity so centering leaves identical top/bottom margins.
@@ -255,7 +287,9 @@ pub fn paint_choices(
             ..Cell::default()
         };
         let description = crate::dialog::wrap(view.description, local.width);
-        let minimum = description.len() + 1 + usize::from(view.editor.is_some()) * 4 + 1;
+        let hints = hint_lines(view.hints, local.width);
+        let space = hint_space(hints.len());
+        let minimum = description.len() + 1 + usize::from(view.editor.is_some()) * 4 + 1 + space;
         if local.height < minimum
             || view
                 .rows
@@ -288,14 +322,14 @@ pub fn paint_choices(
         }
         let note_height =
             (usize::from(!view.note.is_empty()) * 2).min(local.height.saturating_sub(
-                top + usize::from(view.large)
+                top + space
                     + 2
                     + usize::from(crate::widgets::Options::previews_detached(
                         local.width,
                         view.rows,
                     )) * 2,
             ));
-        let menu_bottom = local.height.saturating_sub(usize::from(view.large));
+        let menu_bottom = local.height.saturating_sub(space);
         let bottom = menu_bottom.saturating_sub(note_height);
         options.back = false;
         let footer = view
@@ -340,15 +374,13 @@ pub fn paint_choices(
                 false,
             );
         }
-        if view.browse_hint {
-            crate::widgets::paint_centered_hint(
-                local,
-                0,
-                local.height.saturating_sub(1),
-                local.width,
-                "◀/▶: Parent/Open",
-            );
-        }
+        paint_frame_hints(
+            local,
+            0,
+            local.height.saturating_sub(1),
+            local.width,
+            &hints,
+        );
     });
 }
 pub fn paint(
@@ -479,7 +511,7 @@ mod tests {
                 note_accent: false,
                 large: false,
                 fit_description: true,
-                browse_hint: false,
+                hints: &[],
                 sections: None,
             };
             let size = view.measure((120, 30));
@@ -517,7 +549,7 @@ mod tests {
             note_accent: false,
             large: false,
             fit_description: false,
-            browse_hint: false,
+            hints: &[],
             sections: None,
         };
         let size = view.measure((100, 30));
@@ -550,7 +582,7 @@ mod tests {
             note_accent: false,
             large: false,
             fit_description: false,
-            browse_hint: false,
+            hints: &[],
             sections: None,
         };
         let opened = view.measure((100, 30));
@@ -587,7 +619,7 @@ mod tests {
             note_accent: false,
             large: true,
             fit_description: false,
-            browse_hint: false,
+            hints: &[],
             sections: None,
         };
         for height in 16..45 {
@@ -621,7 +653,7 @@ mod tests {
                 note_accent: false,
                 large: false,
                 fit_description: false,
-                browse_hint: false,
+                hints: &[],
                 sections: None,
             };
             let size = view.measure(viewport);
@@ -683,7 +715,7 @@ mod tests {
             note_accent: false,
             large: true,
             fit_description: false,
-            browse_hint: true,
+            hints: &["◀/▶: Parent/Open"],
             sections: None,
         };
         for width in [60, 100] {
@@ -718,6 +750,68 @@ mod tests {
                 let cancel = c.cells.iter().position(|c| c.glyph == "●").unwrap();
                 assert_eq!(c.cells[cancel].fg, palette.accent);
             }
+        }
+    }
+    /// A choice popup reserves a blank row and its hint row(s) inside its frame and
+    /// centers its controls there, below Cancel, at every width.
+    #[test]
+    fn choice_popups_center_their_hints_on_their_own_bottom_row() {
+        use crate::widgets::{Options, Row};
+        let palette = Palette::default();
+        let rows = with_cancel((0..4).map(|i| Row::yes(format!("Space {i}")).popup_option()));
+        let hint = "▲/▼: Choose   Enter: Select   Esc: Cancel";
+        for width in [60, 80, 120] {
+            let mut view = Choices {
+                title: SPACE_TITLE,
+                description: SPACE_DESCRIPTION,
+                rows: &rows,
+                editor: None,
+                note: "",
+                note_accent: false,
+                large: false,
+                fit_description: true,
+                hints: &[],
+                sections: None,
+            };
+            let bare = view.measure((width, 30));
+            view.hints = &["▲/▼: Choose", "Enter: Select", "Esc: Cancel"];
+            let size = view.measure((width, 30));
+            assert_eq!(
+                size.height,
+                bare.height + 2,
+                "one blank row and one hint row"
+            );
+            let mut c = Canvas::new(width, 30);
+            let mut options = Options::default();
+            paint_choices(&mut c, &palette, &view, &mut options, size);
+            let row = |y: usize| -> String {
+                c.cells[y * width..(y + 1) * width]
+                    .iter()
+                    .map(|c| c.glyph.as_str())
+                    .collect()
+            };
+            let (x, y) = ((width - size.width) / 2, (30 - size.height) / 2);
+            let bottom = y + size.height - 1;
+            assert!(row(bottom).contains('└'));
+            let inside: String = row(bottom - 1)
+                .chars()
+                .skip(x + 2)
+                .take(size.width - 4)
+                .collect();
+            assert_eq!(inside.trim(), hint, "{width}");
+            let lead = inside.chars().take_while(|c| *c == ' ').count();
+            let trail = inside.chars().rev().take_while(|c| *c == ' ').count();
+            assert!(lead.abs_diff(trail) <= 1, "{width}: {inside:?}");
+            assert!(
+                row(bottom - 2)
+                    .chars()
+                    .skip(x + 1)
+                    .take(size.width - 2)
+                    .all(|c| c == ' ')
+            );
+            assert!(row(bottom - 3).contains("Cancel"), "{width}");
+            let key = &c.cells[(bottom - 1) * width + x + 2 + lead];
+            assert_eq!((key.fg, key.bg), (palette.text, Some(palette.panel)));
         }
     }
     #[test]

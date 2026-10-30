@@ -670,7 +670,7 @@ impl Manager {
             note_accent: false,
             large: false,
             fit_description: false,
-            browse_hint: false,
+            hints: &["▲/▼: Choose", "Enter: Select", "Esc: Close"],
             sections: None,
         };
         if self
@@ -701,18 +701,12 @@ impl Manager {
             &mut self.options,
             self.popup_size.unwrap(),
         );
-        // The footer follows the popup or its dialog, not the page beneath.
-        let tokens: &[&str] = match &self.dialog {
-            Some(d) if d.buttons.len() == 1 => &["Enter/Esc: Close"],
-            Some(_) => &["▲/▼: Choose", "Enter: Select", "Esc: Cancel"],
-            None => &["▲/▼: Choose", "Enter: Select", "Esc: Close"],
-        };
-        let hints = hint_lines(tokens, canvas.width);
-        let start = canvas.height.saturating_sub(hints.len().max(2));
+        // The popup and its dialogs draw their own controls; the main footer
+        // shows none of them, nor those of the page beneath.
+        let start = canvas.height.saturating_sub(2);
         for cell in &mut canvas.cells[start * canvas.width..] {
             *cell = crate::render::Cell::default();
         }
-        crate::widgets::paint_hints(canvas, &hints);
         if let Some(d) = &mut self.dialog {
             d.paint(canvas, &self.palette);
         }
@@ -934,7 +928,10 @@ mod tests {
         assert!(screen.contains("Operations"));
         assert!(screen.contains("Running") && screen.contains("Queued"));
         assert!(screen.contains("queued #1"));
-        assert!(lines[23].contains("Esc: Close"));
+        // The popup's controls sit inside its own frame; the main footer has none.
+        assert!(!lines[22].contains("Esc:") && !lines[23].contains("Esc:"));
+        let hint = lines.iter().position(|l| l.contains("Esc: Close")).unwrap();
+        assert!(lines[hint + 1].contains('└'), "{screen}");
     }
     #[test]
     fn row_badge_shows_only_the_most_recent_outcome_when_it_is_a_recent_failure() {

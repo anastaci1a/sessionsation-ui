@@ -9,6 +9,8 @@ use unicode_width::UnicodeWidthStr;
 const INVALID: [u8; 3] = [215, 0, 0];
 /// Option every dialog that shows a URL offers: its links alone, full screen.
 pub const VIEW_LINK: &str = "View link fullscreen";
+/// Scroll keys a dialog adds to its hints while its body scrolls.
+pub const SCROLL_HINT: &str = "PgUp/PgDn: Scroll";
 /// Shown under links the dialog no longer displays (replaced or withdrawn).
 pub const STALE_LINK: &str = "Out of date: the popup no longer shows this link.";
 /// The fullscreen link view, open over its dialog; the dialog keeps its selection.
@@ -205,6 +207,10 @@ pub struct Dialog {
     pub hanging: bool,
     navigation: crate::widgets::SelectionNavigation,
     link_view: Option<LinkView>,
+    /// Control hints shown inside the frame instead of the ones derived from its options.
+    pub hints: Option<&'static [&'static str]>,
+    /// Rows the frame reserved for fields and options when it was last sized.
+    sized_reserved: usize,
 }
 pub enum Event {
     None,
@@ -232,6 +238,8 @@ impl Dialog {
             hanging: false,
             navigation: crate::widgets::SelectionNavigation::default(),
             link_view: None,
+            sized_reserved: 0,
+            hints: None,
         }
         .with_link_option()
     }
@@ -260,6 +268,31 @@ impl Dialog {
     }
     pub fn has_link_option(&self) -> bool {
         self.buttons.iter().any(|b| b.label == VIEW_LINK)
+    }
+    /// The controls this dialog shows on its own bottom row(s); every dialog and
+    /// choice popup draws them through [`crate::popup::paint_frame_hints`].
+    pub fn control_tokens(&self) -> Vec<&'static str> {
+        if let Some(hints) = self.hints {
+            return hints.to_vec();
+        }
+        let only = |label: &str| {
+            self.fields.is_empty() && self.buttons.len() == 1 && self.buttons[0].label == label
+        };
+        let has = |label: &str| self.buttons.iter().any(|b| b.label == label);
+        if self.compact && !self.has_link_option()
+            || self.buttons.is_empty() && self.fields.is_empty()
+            || only("Close")
+        {
+            vec!["Enter/Esc: Close"]
+        } else if only("Cancel") {
+            vec!["Enter/Esc: Cancel"]
+        } else if only("Continue in background") {
+            vec!["Esc: Close"]
+        } else if !has("Cancel") && (has("Close") || has("Continue in background")) {
+            vec!["▲/▼: Choose", "Enter: Select", "Esc: Close"]
+        } else {
+            vec!["▲/▼: Choose", "Enter: Select", "Esc: Cancel"]
+        }
     }
     /// Offer [`VIEW_LINK`] exactly while the dialog shows a link (or its view is open),
     /// before the dismissing options; the cursor stays on the option it was on.
@@ -574,7 +607,11 @@ impl Dialog {
                 self.buttons
                     .iter()
                     .map(|b| UnicodeWidthStr::width(b.label.as_str()) + 2),
-            );
+            )
+            // Room for the controls on one row inside the frame, where it fits.
+            .chain(std::iter::once(UnicodeWidthStr::width(
+                self.control_tokens().join("   ").as_str(),
+            )));
         let desired_width = crate::popup::content_width(canvas.width, &self.title, natural)
             .max(self.minimum_width.min(canvas.width.saturating_sub(4)));
         let width = self
@@ -627,7 +664,7 @@ impl Dialog {
                 && b.preview.is_some()
                 && b.preview_position(left + width - 2, left + 2).is_none()
         })) * 2;
-        let base_reserved = if compact || self.buttons.is_empty() && self.fields.is_empty() {
+        let controls = if compact || self.buttons.is_empty() && self.fields.is_empty() {
             2
         } else {
             self.fields.len() * 3
@@ -635,26 +672,54 @@ impl Dialog {
                 + detached
                 + if self.fields.is_empty() { 3 } else { 4 }
         };
+        // Control hints sit on the frame's own bottom row(s); a scrolling body adds
+        // its scroll keys to them when the frame has room for the extra line.
+        let tokens = self.control_tokens();
+        let inner = width.saturating_sub(4);
+        let plain = crate::popup::hint_lines(&tokens, inner);
+        let scrolled = crate::popup::hint_lines(
+            &std::iter::once(SCROLL_HINT)
+                .chain(tokens.iter().copied())
+                .collect::<Vec<_>>(),
+            inner,
+        );
+        let base_reserved = controls + crate::popup::hint_space(plain.len());
+        let scroll_extra =
+            crate::popup::hint_space(scrolled.len()) - crate::popup::hint_space(plain.len());
         let viewport = (canvas.width, canvas.height);
-        if self.size.is_none_or(|s| s.viewport != viewport) {
+        // Live body text never resizes an open frame, but options or fields that
+        // appear later (a sign-in link's "View link fullscreen") grow it so they
+        // stay inside the border; the frame never shrinks while it is open.
+        let grow = self
+            .size
+            .is_some_and(|s| s.viewport == viewport && base_reserved > self.sized_reserved);
+        if grow || self.size.is_none_or(|s| s.viewport != viewport) {
             let scroll = lines.len() > max_height.saturating_sub(base_reserved);
-            self.size = Some(crate::popup::Size::fit(
+            let fit = crate::popup::Size::fit(
                 viewport,
                 width,
-                (lines.len().max(1) + base_reserved + usize::from(scroll) * 2)
+                (lines.len().max(1) + base_reserved + usize::from(scroll) * scroll_extra)
                     .max(self.minimum_height),
-            ));
+            );
+            self.size = Some(match self.size.filter(|_| grow) {
+                Some(open) => crate::popup::Size {
+                    height: fit.height.max(open.height),
+                    ..fit
+                },
+                None => fit,
+            });
+            self.sized_reserved = base_reserved;
         }
         let height = self.size.unwrap().height;
-        let scroll_hint = lines.len() > height.saturating_sub(base_reserved);
-        // The footer already owns one blank row; use it for a scroll hint after
-        // a live update instead of growing the frame or removing the sole body row.
-        let extra = if scroll_hint && !compact {
-            2.min(height.saturating_sub(base_reserved + 1))
+        // A live update that starts scrolling never grows the frame: the scroll keys
+        // join the hints only when the sole body row survives the extra line.
+        let scrolling = lines.len() > height.saturating_sub(base_reserved)
+            && height > base_reserved + scroll_extra;
+        let (hints, reserved) = if scrolling {
+            (scrolled, base_reserved + scroll_extra)
         } else {
-            0
+            (plain, base_reserved)
         };
-        let reserved = base_reserved + extra;
         if width < 20 || max_height < reserved + 1 {
             self.visible = 0;
             self.wrapped = 1;
@@ -746,7 +811,7 @@ impl Dialog {
                         crate::widgets::frame_time(canvas),
                     );
                     let at = row + self.buttons.len() + 1;
-                    if at < y + height - 1 {
+                    if at < (y + height - 1).saturating_sub(crate::popup::hint_space(hints.len())) {
                         button.paint_preview(
                             canvas,
                             x + width.saturating_sub(UnicodeWidthStr::width(text.as_str())) / 2,
@@ -760,24 +825,7 @@ impl Dialog {
                 }
             }
         }
-        let hint = if self.wrapped > self.visible {
-            "PgUp/PgDn: Scroll"
-        } else {
-            "Esc: Cancel"
-        };
-        if scroll_hint && !compact && (extra > 0 || !self.buttons.is_empty()) {
-            crate::widgets::paint_centered_hint(
-                canvas,
-                x + 2,
-                if extra > 0 {
-                    y + height - 2
-                } else {
-                    y + body_height + 1
-                },
-                width - 4,
-                hint,
-            );
-        }
+        crate::popup::paint_frame_hints(canvas, x + 2, y + height - 2, width - 4, &hints);
         for row in y..y + height {
             for col in x..x + width {
                 let cell = &mut canvas.cells[row * canvas.width + col];
@@ -917,7 +965,11 @@ mod tests {
         d.paint(&mut c, &Palette::default());
         assert!(d.size.unwrap().width < 76);
         let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
-        assert!(!text.contains("Close") && !text.contains("Esc:"));
+        assert!(!text.contains("○ Close") && !text.contains("● Close"));
+        assert!(
+            text.contains("Enter/Esc: Close"),
+            "its controls sit inside its frame"
+        );
         assert!(matches!(d.key(enter()), Event::Choose(0, _)));
         let mut d = Dialog::progress("Working");
         let mut c = Canvas::new(100, 30);
@@ -983,7 +1035,8 @@ mod tests {
     fn information_template_has_no_options_and_enter_or_escape_dismisses() {
         let mut d = Dialog::new("Information", vec!["Explanation".into()], &[]);
         d.paint(&mut Canvas::new(80, 24), &Palette::default());
-        assert_eq!(d.size.unwrap().height, 3);
+        // Border, body, blank, its own hint row, border.
+        assert_eq!(d.size.unwrap().height, 5);
         assert!(matches!(d.key(enter()), Event::Dismiss));
         assert!(matches!(
             d.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
@@ -1084,8 +1137,14 @@ mod tests {
             let index = c.cells.iter().position(|cell| cell.glyph == "P").unwrap();
             let cell = &c.cells[index];
             let size = d.size.unwrap();
-            let hint = "PgUp/PgDn: Scroll";
-            let x = (80 - size.width) / 2 + 2 + (size.width - 4 - hint.len()) / 2;
+            // The scroll keys lead the dialog's own hint row.
+            let lines = crate::popup::hint_lines(
+                &[SCROLL_HINT, "▲/▼: Choose", "Enter: Select", "Esc: Cancel"],
+                size.width - 4,
+            );
+            assert!(lines[0].starts_with(SCROLL_HINT));
+            let used = UnicodeWidthStr::width(lines[0].as_str());
+            let x = (80 - size.width) / 2 + 2 + (size.width - 4 - used) / 2;
             assert_eq!(index % 80, x);
             assert_eq!(cell.fg, Palette::default().text);
             assert_ne!(cell.fg, crate::widgets::SECONDARY);
@@ -1195,7 +1254,10 @@ mod tests {
         assert!(c.cells.iter().any(|c| c.fg == INVALID));
         let text = c.cells.iter().map(|c| c.glyph.as_str()).collect::<String>();
         assert!(!text.contains("PgUp"));
-        assert!(!text.contains("Esc:"));
+        assert!(
+            text.contains("Esc: Cancel"),
+            "its controls sit inside its frame"
+        );
         d.paste("codex-personal");
         assert!(d.fields[0].valid());
     }
@@ -1392,5 +1454,84 @@ mod tests {
         let mut c = Canvas::new(24, 12);
         d.paint(&mut c, &Palette::default());
         assert_eq!(rows(&c)[2], link[24 * 7..24 * 8]);
+    }
+    /// Every dialog kind draws its controls itself: centered on the last row(s)
+    /// inside its own frame, keys in the panel's text colour and actions muted,
+    /// with nothing below the frame.
+    #[test]
+    fn every_dialog_kind_centers_its_hints_on_its_own_bottom_rows() {
+        let palette = Palette::default();
+        let mut form = Dialog::new(
+            "Rename account",
+            vec!["Name it.".into()],
+            &["Save", "Cancel"],
+        );
+        form.fields.push(Field::new("Name", "work"));
+        let mut compact = Dialog::new("Saved", vec!["Done.".into()], &["Close"]);
+        compact.compact = true;
+        let mut custom = Dialog::new("New Space name", vec!["Name it.".into()], &["Continue"]);
+        custom.hints = Some(&["Enter: Accept", "Esc: Cancel", "Ctrl-U: Clear"]);
+        let link = Dialog::new(
+            "Codex login",
+            vec!["https://example.invalid/device".into()],
+            &["Continue in background"],
+        );
+        for (mut d, hint) in [
+            (
+                Dialog::new("Info", vec!["Nothing to choose.".into()], &[]),
+                "Enter/Esc: Close",
+            ),
+            (compact, "Enter/Esc: Close"),
+            (
+                Dialog::new("Done", vec!["All set.".into()], &["Close"]),
+                "Enter/Esc: Close",
+            ),
+            (
+                Dialog::new("Checking", vec!["Looking…".into()], &["Cancel"]),
+                "Enter/Esc: Cancel",
+            ),
+            (
+                Dialog::new("Deregister", vec!["Sure?".into()], &["Confirm", "Cancel"]),
+                "▲/▼: Choose   Enter: Select   Esc: Cancel",
+            ),
+            (Dialog::progress("Operation progress"), "Esc: Close"),
+            (link, "▲/▼: Choose   Enter: Select   Esc: Close"),
+            (form, "▲/▼: Choose   Enter: Select   Esc: Cancel"),
+            (custom, "Enter: Accept   Esc: Cancel   Ctrl-U: Clear"),
+        ] {
+            for (width, height) in [(60, 20), (80, 24), (120, 30)] {
+                let mut c = Canvas::new(width, height);
+                d.size = None;
+                d.paint(&mut c, &palette);
+                let rows = rows(&c);
+                let bottom = rows.iter().rposition(|r| r.contains('└')).unwrap();
+                let top = rows.iter().position(|r| r.contains('┌')).unwrap();
+                let left = rows[top].chars().position(|c| c == '┌').unwrap();
+                let right = rows[top].chars().position(|c| c == '┐').unwrap();
+                let row: Vec<char> = rows[bottom - 1].chars().collect();
+                let inside: String = row[left + 2..right - 1].iter().collect();
+                assert_eq!(inside.trim(), hint, "{} {width}: {rows:#?}", d.title);
+                let lead = inside.chars().take_while(|c| *c == ' ').count();
+                let trail = inside.chars().rev().take_while(|c| *c == ' ').count();
+                assert!(lead.abs_diff(trail) <= 1, "{} {width}: centered", d.title);
+                // One blank row separates the hints from the content above them.
+                assert!(
+                    rows[bottom - 2].chars().collect::<Vec<_>>()[left + 1..right]
+                        .iter()
+                        .all(|c| *c == ' '),
+                    "{} {width}: {rows:#?}",
+                    d.title
+                );
+                // Theme colours: keys in the panel's text colour, actions muted.
+                let x = left + 2 + lead;
+                let key = &c.cells[(bottom - 1) * width + x];
+                assert_eq!((key.fg, key.bg), (palette.text, Some(palette.panel)));
+                let colon = hint.find(": ").unwrap();
+                let action = &c.cells[(bottom - 1) * width + x + hint[..colon].chars().count() + 2];
+                assert_eq!(action.fg, palette.muted, "{}", d.title);
+                // Nothing of the dialog below its frame.
+                assert!(rows[bottom + 1..].iter().all(|r| r.trim().is_empty()));
+            }
+        }
     }
 }

@@ -911,6 +911,17 @@ impl Manager {
             |a| a.provider().to_owned(),
         )
     }
+    /// Title of every popup in this account's login flow ("Gemini login").
+    fn login_title(&self, key: &str) -> String {
+        crate::client::login_title(&self.provider_of(key))
+    }
+    /// Login title for the account the current mutation targets.
+    fn mutation_login_title(&self) -> String {
+        match &self.mutation[..] {
+            [a, _, key, ..] if a == "account" => self.login_title(key),
+            _ => "Provider login".into(),
+        }
+    }
     /// A provider-scoped capability flag; absent providers and flags are unsupported.
     fn provider_cap(&self, provider: &str, key: &str) -> bool {
         self.capabilities["providers"]
@@ -1255,7 +1266,7 @@ impl Manager {
         let mut buttons: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
         buttons.push("Cancel");
         self.show(
-            "Gemini login",
+            &self.login_title(key),
             vec![format!("Choose how {} signs in.", account_label(key))],
             &buttons,
             Form::GeminiAuth(key.to_owned(), choices.clone()),
@@ -1290,7 +1301,7 @@ impl Manager {
     /// Send the key through stdin only, then drop it from the dialog state.
     fn submit_gemini_key(&mut self, key: &str, secret: String) -> Vec<Intent> {
         let args = strings(&["account", "auth", key, "--mode", "api-key", "--key-stdin"]);
-        let mut progress = Dialog::progress("Verifying API key");
+        let mut progress = Dialog::progress("Gemini API key");
         progress.body = vec![
             format!(
                 "Saving and verifying the API key for {}…",
@@ -1324,14 +1335,14 @@ impl Manager {
             .filter(|r| !r.is_empty());
         let (title, body) = match validation["state"].as_str() {
             Some("valid") => (
-                "API key saved",
+                "Gemini API key",
                 vec![format!(
                     "The Gemini API key for {} was saved and verified.",
                     account_label(key)
                 )],
             ),
             Some("auth_failed") => (
-                "API key rejected",
+                "Gemini API key",
                 vec![
                     format!(
                         "Gemini did not accept the API key for {}.",
@@ -1343,7 +1354,7 @@ impl Manager {
                 ],
             ),
             _ => (
-                "API key saved",
+                "Gemini API key",
                 vec![
                     format!(
                         "The API key for {} is saved but could not be verified{}.",
@@ -1367,8 +1378,8 @@ impl Manager {
             return self.show_gemini_auth(key, choices);
         }
         self.show(
-            "Login",
-            vec![format!("Start provider login for {key}?")],
+            &self.login_title(key),
+            vec![format!("Start the login for {}?", account_label(key))],
             &["Login", "Cancel"],
             Form::Login(key.into()),
         );
@@ -1381,7 +1392,7 @@ impl Manager {
             return vec![];
         }
         self.show(
-            "Login",
+            &self.login_title(key),
             vec!["Checking for a login in progress…".into()],
             &["Cancel"],
             Form::LoginLink(key.into()),
@@ -1402,11 +1413,13 @@ impl Manager {
             None => vec!["The login pane has closed.".into()],
             Some(screen) => match crate::login_link::extract(screen) {
                 Some(link) => vec![
+                    "A login is already in progress.".into(),
                     format!("Sign-in link from the {label} login pane:"),
                     link,
                     "Finish signing in in the login pane.".into(),
                 ],
                 None => vec![
+                    "A login is already in progress.".into(),
                     format!("Waiting for {label} to print its sign-in link…"),
                     "Finish signing in in the login pane.".into(),
                 ],
@@ -1460,7 +1473,7 @@ impl Manager {
         let body = self.login_link_body(&key, Some(&screen));
         if first {
             self.show(
-                "Login in progress",
+                &self.login_title(&key),
                 body,
                 &["Start a new login", "Close"],
                 Form::LoginLink(key),
@@ -2434,8 +2447,9 @@ impl Manager {
             && matches!(&self.form, Form::LoginWait(k) if *k == wait.key)
         {
             self.dialog = None;
+            let title = self.login_title(&wait.key);
             self.show(
-                "Login pane could not open",
+                &title,
                 vec![
                     clean(&e),
                     "Run this command in a terminal:".into(),
@@ -2501,12 +2515,14 @@ impl Manager {
             return vec![];
         }
         if wait.started.elapsed() >= LOGIN_LIMIT {
+            let key = wait.key.clone();
+            let title = self.login_title(&key);
             self.login_wait = None;
             self.dialog = None;
             self.show(
-                "Login not completed",
+                &title,
                 vec![
-                    "Timed out waiting for sign-in. Choose Login on the account page to try again."
+                    "Login not completed: timed out waiting for sign-in. Choose Log in on the account page to try again."
                         .into(),
                 ],
                 &["Close"],
@@ -2555,7 +2571,7 @@ impl Manager {
             self.enter(Page::Account(key.clone()));
         }
         self.show(
-            "Login complete",
+            &self.login_title(&key),
             vec![format!("{label} is signed in for {}.", account_label(&key))],
             &["Close"],
             Form::None,
@@ -2706,13 +2722,19 @@ impl Manager {
         let mut dialog = Dialog::new(title, body, buttons);
         dialog.compact =
             buttons == ["Close"] && matches!(form, Form::None | Form::SessionDetails(_));
-        // An info-only dialog fits its own content instead of the frame it replaces.
-        dialog.size = (!dialog.compact)
+        // A replacing dialog keeps at least the frame it replaces, and grows when its
+        // own content needs more room (a small "Checking…" frame must not clip the
+        // options that follow it). An info-only dialog fits its own content.
+        if let Some(previous) = (!dialog.compact)
             .then(|| self.dialog.as_ref().and_then(|d| d.size))
-            .flatten();
+            .flatten()
+        {
+            dialog.minimum_width = previous.width;
+            dialog.minimum_height = previous.height;
+        }
         if matches!(form, Form::Loading) {
-            dialog.minimum_height = 16;
-            dialog.minimum_width = 76;
+            dialog.minimum_height = dialog.minimum_height.max(16);
+            dialog.minimum_width = dialog.minimum_width.max(76);
         }
         self.dialog = Some(dialog);
         self.form = form;
@@ -4941,8 +4963,9 @@ impl Manager {
                             let label =
                                 crate::client::provider_label(&self.provider_of(&key)).to_owned();
                             self.dialog = None;
+                            let title = self.login_title(&key);
                             self.show(
-                                "Complete provider login",
+                                &title,
                                 vec![
                                     format!("Complete the {label} login in the opened pane…"),
                                     "This popup closes once the login pane opens; the pane reports the result. Cancel only stops waiting; it does not cancel the login.".into(),
@@ -4959,8 +4982,9 @@ impl Manager {
                             return vec![Intent::LaunchLogin(argv)];
                         }
                         self.dialog = None;
+                        let title = self.mutation_login_title();
                         self.show(
-                            "Complete provider login",
+                            &title,
                             vec![
                                 "Run this command in a terminal:".into(),
                                 login_command(&value["login"]["argv"]),
@@ -4978,7 +5002,8 @@ impl Manager {
                             .or_else(|| login["verificationUrl"].as_str())
                             .unwrap_or("See provider login response");
                         self.dialog = None;
-                        self.show("Complete provider login",vec![url.into(),format!("Code: {}",login["userCode"].as_str().unwrap_or("unavailable")),"Complete login in your browser. Closing this dialog does not cancel enrollment.".into()],&["Continue in background"],Form::None);
+                        let title = self.mutation_login_title();
+                        self.show(&title,vec![url.into(),format!("Code: {}",login["userCode"].as_str().unwrap_or("unavailable")),"Complete login in your browser. Closing this dialog does not cancel enrollment.".into()],&["Continue in background"],Form::None);
                     }
                 } else if value["phase"].is_string() {
                     self.active_operation = Some(id(&value).into());
@@ -5065,7 +5090,7 @@ impl Manager {
                 note_accent: false,
                 large: false,
                 fit_description: true,
-                browse_hint: false,
+                hints: &["▲/▼: Choose", "Enter: Select", "Esc: Cancel"],
                 sections: None,
             };
             if self
@@ -5076,6 +5101,11 @@ impl Manager {
             }
             self.popup_size =
                 Some(view.grow_for_selection(self.popup_size.unwrap(), self.options.selected));
+            // The popup draws its own controls; the footer shows none of the page's.
+            let start = canvas.height.saturating_sub(2);
+            for cell in &mut canvas.cells[start * canvas.width..] {
+                *cell = crate::render::Cell::default();
+            }
             crate::popup::paint_choices(
                 canvas,
                 &palette,
@@ -5095,24 +5125,6 @@ impl Manager {
             || self.filter_grab.is_some()
         {
             hint_lines(&["▲/▼: Choose", "Enter: Set", "Esc: Cancel"], canvas.width)
-        } else if let Some(d) = &self.dialog {
-            // The footer follows the top dialog.
-            let info = !d.has_link_option()
-                && (d.compact
-                    || d.buttons.is_empty() && d.fields.is_empty()
-                    || d.buttons.len() == 1 && d.buttons[0].label == "Close");
-            let tokens: &[&str] = if info {
-                &["Enter/Esc: Close"]
-            } else if d
-                .buttons
-                .iter()
-                .any(|b| b.label == "Continue in background")
-            {
-                &["Esc: Close"]
-            } else {
-                &["▲/▼: Choose", "Enter: Select", "Esc: Cancel"]
-            };
-            hint_lines(tokens, canvas.width)
         } else {
             let mut tokens = vec!["▲/▼/◀/▶: Move", "Enter/Space: Select"];
             if self.can_start_move() {
@@ -5136,6 +5148,13 @@ impl Manager {
             } else {
                 lines
             }
+        };
+        // A dialog draws its own controls inside its frame; the footer keeps its rows
+        // (and the Esc close band) but shows no controls for the dialog or the page.
+        let hints = if self.dialog.is_some() {
+            vec![String::new(); hints.len()]
+        } else {
+            hints
         };
         // Saved-session notice: only on the session list, only until fresh state.
         let note = if self.note.is_empty() && self.page == Page::Sessions && self.cached_snapshot {
@@ -7323,7 +7342,7 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
                 "Login required",
                 "auth_required",
                 json!(true),
-                "Login",
+                "Codex login",
                 "login",
             ),
             (
@@ -8829,7 +8848,7 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         let out = m.response(*token, Ok(json!({"account_id":"gemini:gem-main","provider":"gemini","auth_mode":"api_key","api_key_present":true,"auth_required":false,"auth_failed":false,"auth_failure_reason":null,"validation":{"state":"valid","code":null,"reason":null}})));
         assert!(out.iter().all(|i| matches!(i, Intent::Api(..))));
         let d = m.dialog.as_ref().unwrap();
-        assert_eq!(d.title, "API key saved");
+        assert_eq!(d.title, "Gemini API key");
         assert!(d.body[0].contains("saved and verified"));
     }
     #[test]
@@ -8848,11 +8867,11 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             json!({"state":"auth_failed","code":"API_KEY_INVALID","reason":"API key not valid. Please pass a valid API key."}),
         );
         let d = m.dialog.as_ref().unwrap();
-        assert_eq!(d.title, "API key rejected");
+        assert_eq!(d.title, "Gemini API key");
         assert!(d.body[1].contains("API key not valid"));
         let m = respond(json!({"state":"inconclusive","code":"VALIDATION_TIMEOUT","reason":null}));
         let d = m.dialog.as_ref().unwrap();
-        assert_eq!(d.title, "API key saved");
+        assert_eq!(d.title, "Gemini API key");
         assert!(d.body[0].contains("saved but could not be verified (VALIDATION_TIMEOUT)"));
         // A rejected request uses the existing error presentation.
         let mut m = gemini_auth_manager();
@@ -9000,7 +9019,7 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             matches!(&out[..], [Intent::LaunchLogin(argv)] if argv == &strings(&["sessionsation","account","login","claude:new"]))
         );
         let d = m.dialog.as_ref().unwrap();
-        assert_eq!(d.title, "Complete provider login");
+        assert_eq!(d.title, "Claude login");
         assert_eq!(
             d.body[0],
             "Complete the Claude Code login in the opened pane…"
@@ -9019,7 +9038,12 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             panic!()
         };
         m.response(token, Ok(json!([{"id":"claude:new","selectable":true,"provider":"claude","auth_required":false}])));
-        assert_eq!(m.dialog.as_ref().unwrap().title, "Login complete");
+        assert_eq!(m.dialog.as_ref().unwrap().title, "Claude login");
+        assert!(
+            m.dialog.as_ref().unwrap().body[0].ends_with("is signed in for claude-new."),
+            "{:?}",
+            m.dialog.as_ref().unwrap().body
+        );
         assert!(m.login_wait.is_none());
         assert_eq!(m.page, Page::Account("claude:new".into()));
     }
@@ -9039,12 +9063,13 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         m.login_wait.as_mut().unwrap().started =
             std::time::Instant::now() - LOGIN_LIMIT - std::time::Duration::from_secs(1);
         assert!(m.refresh_live().is_empty());
-        assert_eq!(m.dialog.as_ref().unwrap().title, "Login not completed");
+        assert_eq!(m.dialog.as_ref().unwrap().title, "Claude login");
+        assert!(m.dialog.as_ref().unwrap().body[0].starts_with("Login not completed: timed out"));
         let mut m = dual_providers();
         claude_add(&mut m, "new");
         m.login_launched(Err("HERDR could not open the login pane".into()));
         let d = m.dialog.as_ref().unwrap();
-        assert_eq!(d.title, "Login pane could not open");
+        assert_eq!(d.title, "Claude login");
         assert_eq!(d.body[2], "sessionsation account login claude:new");
         assert!(m.login_wait.is_none());
     }
@@ -9076,7 +9101,8 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             m.login_screen(key.into(), Ok(Some(pane_screen("waiting-80"))));
             let d = m.dialog.as_ref().unwrap();
             assert!(d.links().is_empty() && !d.has_link_option());
-            assert!(d.body[0].starts_with("Waiting for"));
+            assert_eq!(d.body[0], "A login is already in progress.");
+            assert!(d.body[1].starts_with("Waiting for"));
             // The screen changes: the rebuilt link appears with the option.
             m.login_screen(
                 key.into(),
@@ -9171,10 +9197,12 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             .position(|r| r.contains("Continue in background"))
             .unwrap();
         let bottom = rows.iter().rposition(|r| r.contains('└')).unwrap();
-        assert_eq!(
-            bottom,
-            option + 1,
-            "the frame ends right after the last option"
+        // Last option, one blank row, the dialog's own hint row, then the border.
+        assert_eq!(bottom, option + 3, "the frame ends right after its hints");
+        assert!(
+            rows[option + 2].contains("Esc: Close"),
+            "{}",
+            rows[option + 2]
         );
     }
     #[test]
@@ -9217,7 +9245,7 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             assert!(m.close_armed.is_none());
             let d = m.dialog.as_ref().expect("back on the login dialog");
             assert!(!d.link_open() && matches!(m.form, Form::None));
-            assert_eq!(d.title, "Complete provider login");
+            assert_eq!(d.title, "Codex login");
             assert_eq!(d.buttons[d.selected].label, dialog::VIEW_LINK);
         }
         assert!(m.key(esc).is_empty());
@@ -9804,6 +9832,217 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         assert!(refreshes(&sent));
         assert!(m.failure("HERDR_ATTACHMENT_MISMATCH".into()).is_empty());
         assert_eq!(m.note, "HERDR_ATTACHMENT_MISMATCH");
+    }
+    /// The rows of the dialog painted alone on a `width`×`height` terminal.
+    fn dialog_rows(m: &mut Manager, width: usize, height: usize) -> Vec<String> {
+        let mut c = Canvas::new(width, height);
+        m.dialog
+            .as_mut()
+            .unwrap()
+            .paint(&mut c, &Palette::default());
+        c.cells
+            .chunks(width)
+            .map(|r| r.iter().map(|c| c.glyph.as_str()).collect())
+            .collect()
+    }
+    /// Asserts the open dialog keeps everything inside its own frame: the title on
+    /// the top border, every option between the borders, the whole body without
+    /// scrolling, and its controls centered on the row above the bottom border.
+    fn assert_inside_frame(m: &mut Manager, width: usize, height: usize, what: &str) {
+        let rows = dialog_rows(m, width, height);
+        let screen = rows.join("\n");
+        let top = rows.iter().position(|r| r.contains('┌')).expect(what);
+        let bottom = rows.iter().rposition(|r| r.contains('└')).expect(what);
+        let chars = |y: usize| rows[y].chars().collect::<Vec<_>>();
+        let left = chars(top).iter().position(|c| *c == '┌').unwrap();
+        let right = chars(top).iter().position(|c| *c == '┐').unwrap();
+        let d = m.dialog.as_ref().unwrap();
+        assert!(rows[top].contains(&d.title), "{what}: title\n{screen}");
+        // The body scrolls only when the frame already has the most rows it can.
+        if d.wrapped > d.visible {
+            assert_eq!(
+                bottom - top + 1,
+                height - 4,
+                "{what}: body scrolls\n{screen}"
+            );
+            assert!(screen.contains("PgUp/PgDn: Scroll"), "{what}\n{screen}");
+        } else {
+            assert!(!screen.contains("PgUp"), "{what}\n{screen}");
+        }
+        for b in d
+            .buttons
+            .iter()
+            .filter(|b| !b.separator && !b.label.is_empty())
+        {
+            let y = rows
+                .iter()
+                .position(|r| {
+                    r.contains(&format!("○ {}", b.label)) || r.contains(&format!("● {}", b.label))
+                })
+                .unwrap_or_else(|| panic!("{what}: option {} missing\n{screen}", b.label));
+            assert!(
+                top < y && y + 2 < bottom,
+                "{what}: {} outside the frame\n{screen}",
+                b.label
+            );
+        }
+        // Controls: centered on the last row inside the frame, nowhere else.
+        let hint: String = chars(bottom - 1)[left + 2..right - 1].iter().collect();
+        assert!(hint.contains("Esc"), "{what}: hint row {hint:?}\n{screen}");
+        let lead = hint.chars().take_while(|c| *c == ' ').count();
+        let trail = hint.chars().rev().take_while(|c| *c == ' ').count();
+        assert!(
+            lead.abs_diff(trail) <= 1,
+            "{what}: hint not centered {hint:?}"
+        );
+        assert_eq!(screen.matches("Esc").count(), 1, "{what}\n{screen}");
+    }
+    fn login_manager() -> Manager {
+        let mut m = quad_providers();
+        let providers = m.capabilities["providers"].as_array_mut().unwrap();
+        providers.iter_mut().find(|p| p["id"] == "gemini").unwrap()["auth_modes"] =
+            gemini_auth_modes();
+        m
+    }
+    const LOGIN_TITLES: [(&str, &str); 4] = [
+        ("codex:account1", "Codex login"),
+        ("claude:claude-main", "Claude login"),
+        ("gemini:gem-main", "Gemini login"),
+        ("antigravity:agy-main", "Antigravity login"),
+    ];
+    #[test]
+    fn every_login_popup_is_titled_provider_login() {
+        for (key, title) in LOGIN_TITLES {
+            assert_eq!(
+                crate::client::login_title(key.split(':').next().unwrap()),
+                title
+            );
+            let mut m = login_manager();
+            let out = m.begin_login(key);
+            assert_eq!(
+                m.dialog.as_ref().unwrap().title,
+                title,
+                "{key}: first popup"
+            );
+            if !out.is_empty() {
+                dialog_rows(&mut m, 80, 24);
+                m.login_screen(key.into(), Ok(None));
+                assert_eq!(m.dialog.as_ref().unwrap().title, title, "{key}: confirm");
+                let mut m = login_manager();
+                m.begin_login(key);
+                m.login_screen(key.into(), Ok(Some(pane_screen("waiting-80"))));
+                assert_eq!(
+                    m.dialog.as_ref().unwrap().title,
+                    title,
+                    "{key}: in progress"
+                );
+            }
+            // The wait, the result and the failure popups of a launched login.
+            let mut m = login_manager();
+            m.mutation = strings(&["account", "login", key]);
+            assert_eq!(m.mutation_login_title(), title);
+            m.login_wait = Some(LoginWait {
+                key: key.into(),
+                argv: strings(&["sessionsation", "account", "login", key]),
+                started: std::time::Instant::now(),
+                last_poll: None,
+            });
+            m.form = Form::LoginWait(key.into());
+            m.login_launched(Err("HERDR could not open the login pane".into()));
+            assert_eq!(m.dialog.as_ref().unwrap().title, title, "{key}: failure");
+        }
+        let mut m = login_manager();
+        m.mutation = strings(&["fixture-only"]);
+        assert_eq!(m.mutation_login_title(), "Provider login");
+    }
+    /// The popups after the small "Checking for a login in progress…" frame kept
+    /// that frame and drew their options below its border (Gemini, Claude,
+    /// Antigravity). Every login popup now fits its own frame at 60, 80 and 120.
+    #[test]
+    fn login_popups_keep_their_content_inside_their_frames() {
+        for (width, height) in [(60, 20), (80, 24), (120, 30)] {
+            for (key, _) in LOGIN_TITLES {
+                let what = format!("{key} {width}x{height}");
+                let mut m = login_manager();
+                if m.begin_login(key).is_empty() {
+                    assert_inside_frame(&mut m, width, height, &format!("{what} confirm"));
+                    continue;
+                }
+                assert_inside_frame(&mut m, width, height, &format!("{what} checking"));
+                m.login_screen(key.into(), Ok(None));
+                assert_inside_frame(&mut m, width, height, &format!("{what} confirm"));
+                if key.starts_with("gemini:") {
+                    // The three options, then the masked API-key entry.
+                    assert!(matches!(m.form, Form::GeminiAuth(..)));
+                    m.dialog.as_mut().unwrap().selected = 2;
+                    m.key(key_event(KeyCode::Enter));
+                    assert!(matches!(m.form, Form::GeminiKey(_)), "{what}");
+                    m.paste("AIzaFixtureKey");
+                    assert_inside_frame(&mut m, width, height, &format!("{what} key"));
+                    let screen = dialog_rows(&mut m, width, height).join("\n");
+                    assert!(!screen.contains("AIzaFixtureKey"), "the key stays masked");
+                }
+                // A login already running: waiting, then its link (one more option).
+                let mut m = login_manager();
+                m.begin_login(key);
+                dialog_rows(&mut m, width, height);
+                m.login_screen(key.into(), Ok(Some(pane_screen("waiting-80"))));
+                assert_inside_frame(&mut m, width, height, &format!("{what} waiting"));
+                m.login_screen(key.into(), Ok(Some(pane_screen("claude-80"))));
+                dialog_rows(&mut m, width, height);
+                assert!(m.dialog.as_ref().unwrap().has_link_option(), "{what}");
+                assert_inside_frame(&mut m, width, height, &format!("{what} link"));
+            }
+        }
+    }
+    /// With a dialog open the main popup's footer keeps its rows but shows no
+    /// controls (neither the dialog's nor the page's); the dialog shows its own.
+    /// The Esc close band still belongs to the footer and draws there.
+    #[test]
+    fn a_dialog_owns_its_hints_and_the_footer_keeps_only_the_close_band() {
+        for (width, height) in [(60, 20), (80, 24), (120, 30)] {
+            let mut m = setup();
+            let screen = |m: &mut Manager| {
+                let mut c = crate::render::Field::new(width, height, 1967).paint(4060);
+                m.paint_at(&mut c, height - 1, 100);
+                c.cells
+                    .chunks(width)
+                    .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
+                    .collect::<Vec<_>>()
+            };
+            let rows = screen(&mut m);
+            assert!(
+                rows[height - 1].contains("Esc: Close"),
+                "the page's own footer"
+            );
+            m.show(
+                "Deregister account",
+                vec!["Credentials remain recoverable.".into()],
+                &["Confirm", "Cancel"],
+                Form::None,
+            );
+            let rows = screen(&mut m);
+            let bottom = rows.iter().rposition(|r| r.contains('└')).unwrap();
+            assert!(rows[bottom - 1].contains("Esc: Cancel"), "{rows:#?}");
+            for row in &rows[bottom + 1..] {
+                assert!(
+                    !row.contains("Esc") && !row.contains("Enter"),
+                    "{width}: {row}"
+                );
+            }
+            // The close band (from an Esc on Home) still draws on the footer rows.
+            m.close_band = Some(std::time::Instant::now() - std::time::Duration::from_millis(400));
+            let rows = screen(&mut m);
+            assert!(
+                rows[height - 1].contains(crate::close_band::MESSAGE),
+                "{rows:#?}"
+            );
+            // Esc belongs to the dialog first: it closes the dialog, not the popup.
+            m.close_band = None;
+            m.key(key_event(KeyCode::Esc));
+            assert!(m.dialog.is_none());
+            assert!(screen(&mut m)[height - 1].contains("Esc: Close"));
+        }
     }
 }
 #[cfg(test)]

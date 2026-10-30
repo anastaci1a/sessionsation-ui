@@ -2199,6 +2199,7 @@ New directories are created only when the session starts."
                 &[],
             );
             dialog.buttons = rows;
+            dialog.hints = Some(self.control_tokens());
             dialog.fields.push(self.popup_field(label));
             dialog.selected = self.options.selected;
             dialog.size = self
@@ -2228,7 +2229,7 @@ New directories are created only when the session starts."
             note_accent: note == "Ready",
             large: editor.is_some(),
             fit_description: matches!(self.page, Page::Accounts | Page::Spaces),
-            browse_hint: editor.is_some(),
+            hints: self.control_tokens(),
             sections: editor
                 .is_some()
                 .then(|| (self.directory_children_offset(), self.directory_tail())),
@@ -2296,17 +2297,20 @@ New directories are created only when the session starts."
             dialog.paint(&mut canvas, &self.manager.palette);
         }
         if Self::is_popup(&self.page) && height > 2 {
-            // The footer follows the top popup or dialog, not the page beneath it.
+            // The popup draws its own controls inside its frame; the footer shows
+            // neither them nor the controls of the page beneath it.
             for cell in &mut canvas.cells[(height - 2) * width..] {
                 *cell = Cell::default();
             }
-            crate::widgets::paint_hints(
-                &mut canvas,
-                &crate::widgets::hint_lines(self.control_tokens(), width),
-            );
         }
         field.apply_masks(&canvas);
         canvas
+    }
+    /// Whether a dialog of this view (not a management one) is open over the page.
+    fn dialog_open(&self) -> bool {
+        self.start_confirmation.is_some()
+            || self.create_confirmation.is_some()
+            || self.launch_dialog && self.manager.dialog.is_some()
     }
     fn control_tokens(&self) -> &'static [&'static str] {
         if self.picker.is_some() {
@@ -2351,6 +2355,13 @@ New directories are created only when the session starts."
             ..Cell::default()
         };
         let hints = crate::widgets::hint_lines(self.control_tokens(), width);
+        // A confirmation or launch dialog draws its own controls inside its frame;
+        // the footer keeps its rows but shows no controls while one is open.
+        let hints = if self.dialog_open() {
+            vec![String::new(); hints.len()]
+        } else {
+            hints
+        };
         let footer = height.saturating_sub(hints.len());
         if width < 24 || footer < 11 {
             canvas.text(
@@ -2570,6 +2581,130 @@ New directories are created only when the session starts."
 }
 #[cfg(test)]
 mod tests {
+    /// The stub gives way to `(usage unavailable)` on the very frame the cursor
+    /// reaches the usage, and comes back on the very frame it leaves.
+    #[test]
+    fn stub_hover_switches_on_the_frame_the_cursor_moves() {
+        use crate::render::Field;
+        let mut a = app();
+        let usage = |state: &str| {
+            if state == "fresh" {
+                json!({"state":"fresh","observed_at":100,
+                    "short":{"duration_minutes":300,"used_percent":20},
+                    "weekly":{"duration_minutes":10080,"used_percent":0}})
+            } else {
+                json!({"state":state,"observed_at":null,"short":null,"weekly":null})
+            }
+        };
+        a.manager.inventory(
+            serde_json::from_value(json!([
+                {"id":"claude:one","provider":"claude","selectable":true,"usage_fresh":true,"enabled":true,"usage":usage("fresh")},
+                {"id":"claude:two","provider":"claude","selectable":true,"usage_fresh":true,"enabled":true,"usage":usage("missing")},
+                {"id":"claude:three","provider":"claude","selectable":true,"usage_fresh":true,"enabled":true,"usage":usage("fresh")},
+                {"id":"gemini:four","provider":"gemini","selectable":true,"usage_fresh":false,"enabled":true,"usage_state":"unsupported","usage":{"state":"unsupported","observed_at":null,"short":null,"weekly":null}},
+            ]))
+            .unwrap(),
+        );
+        a.page = Page::Home;
+        a.manager.options.selected = 5;
+        let mut field = Field::new(100, 30, 1967);
+        let mut t = 1000;
+        // What the terminal shows: each frame through the paced output diff.
+        let mut shown: Option<crate::render::Canvas> = None;
+        let mut rotation = 0;
+        let mut frame = |a: &mut App| {
+            t += 50;
+            let painted = a.paint(&mut field, t, 100, 30);
+            let (_, c) = painted.paced_diff(
+                shown.as_ref(),
+                crate::render::AMBIENT_CELLS_PER_FRAME,
+                &mut rotation,
+            );
+            shown = Some(c.clone());
+            c.cells
+                .chunks(c.width)
+                .map(|r| r.iter().map(|c| c.glyph.as_str()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let stub = crate::usage::UNAVAILABLE;
+        assert!(!frame(&mut a).contains(stub));
+        a.key(key(KeyCode::Right));
+        assert!(!frame(&mut a).contains(stub), "fresh usage focused");
+        a.key(key(KeyCode::Down));
+        assert!(
+            frame(&mut a).contains(stub),
+            "Down onto the stub: same frame"
+        );
+        a.key(key(KeyCode::Down));
+        assert!(
+            !frame(&mut a).contains(stub),
+            "Down off the stub: same frame"
+        );
+        a.key(key(KeyCode::Up));
+        assert!(frame(&mut a).contains(stub), "Up onto the stub");
+        a.key(key(KeyCode::Left));
+        assert!(!frame(&mut a).contains(stub), "Left to the name");
+        a.key(key(KeyCode::Right));
+        assert!(frame(&mut a).contains(stub), "Right onto the stub");
+        // A status-only stub (unsupported usage) switches on the same frame too.
+        a.key(key(KeyCode::Down));
+        assert!(!frame(&mut a).contains(stub), "fresh usage again");
+        a.key(key(KeyCode::Down));
+        assert!(
+            frame(&mut a).contains(stub),
+            "Down onto the unsupported stub"
+        );
+        a.key(key(KeyCode::Up));
+        assert!(!frame(&mut a).contains(stub), "Up off the unsupported stub");
+    }
+    /// Picker popups and this view's own dialogs draw their controls inside their
+    /// frames; the main footer shows none of them.
+    #[test]
+    fn popups_and_confirmations_keep_their_hints_inside_their_frames() {
+        use crate::render::Field;
+        for (width, height) in [(60, 24), (80, 24), (120, 30)] {
+            let rows = |c: &Canvas| -> Vec<String> {
+                c.cells
+                    .chunks(width)
+                    .map(|r| r.iter().map(|c| c.glyph.as_str()).collect())
+                    .collect()
+            };
+            let footer_is_bare = |rows: &[String], bottom: usize| {
+                rows[bottom + 1..]
+                    .iter()
+                    .all(|r| !r.contains("Esc") && !r.contains("Enter"))
+            };
+            // The account picker.
+            let mut a = app();
+            a.accounts = serde_json::from_value(json!([
+                {"id":"codex:a","selectable":true},
+                {"id":"codex:b","selectable":true}
+            ]))
+            .unwrap();
+            a.page = Page::Accounts;
+            let c = a.paint(&mut Field::new(width, height, 1967), 4060, width, height);
+            let r = rows(&c);
+            let bottom = r.iter().rposition(|r| r.contains('└')).unwrap();
+            assert!(r[bottom - 1].contains("Esc: Cancel"), "{width}: {r:#?}");
+            assert!(footer_is_bare(&r, bottom), "{width}: {r:#?}");
+            // A start confirmation over the summary.
+            let mut a = app();
+            a.page = Page::Summary;
+            let dialog = crate::dialog::Dialog::new(
+                "Unfinished history",
+                vec!["Resume anyway?".into()],
+                &["Resume", "Cancel"],
+            );
+            a.start_confirmation = Some((dialog, StartConfirmation::UnfinishedHistory));
+            let c = a.paint(&mut Field::new(width, height, 1967), 4060, width, height);
+            let r = rows(&c);
+            let bottom = r.iter().rposition(|r| r.contains('└')).unwrap();
+            assert!(r[bottom - 1].contains("Esc: Cancel"), "{width}: {r:#?}");
+            assert!(footer_is_bare(&r, bottom), "{width}: {r:#?}");
+        }
+    }
     #[test]
     fn secret_api_effects_never_show_the_secret_in_debug_or_args() {
         let secret = crate::management::Secret(json!({"api_key":"AIzaSECRETkey"}));

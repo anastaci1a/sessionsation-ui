@@ -203,7 +203,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
             }
             "login-antigravity-wait" => {
                 m.dialog = Some(Dialog::new(
-                    "Complete provider login",
+                    "Antigravity login",
                     vec![
                         "Complete the Antigravity CLI login in the opened pane…".into(),
                         "This popup closes once the login pane opens; the pane reports the result. Cancel only stops waiting; it does not cancel the login.".into(),
@@ -233,7 +233,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
             }
             "login-gemini-wait" => {
                 m.dialog = Some(Dialog::new(
-                    "Complete provider login",
+                    "Gemini login",
                     vec![
                         "Complete the Gemini CLI login in the opened pane…".into(),
                         "This popup closes once the login pane opens; the pane reports the result. Cancel only stops waiting; it does not cancel the login.".into(),
@@ -342,7 +342,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
             }
             "login-codex-link" => {
                 let mut d = Dialog::new(
-                    "Complete provider login",
+                    "Codex login",
                     vec![
                         "https://example.invalid/oauth/authorize?client_id=app&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fcb&state=a-b_c.d~e#frag".into(),
                         "Code: ABCD-EFGH".into(),
@@ -356,7 +356,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
             }
             "login-codex" => {
                 m.dialog = Some(Dialog::new(
-                    "Complete provider login",
+                    "Codex login",
                     vec![
                         "https://example.invalid/device".into(),
                         "Code: ABCD-EFGH".into(),
@@ -367,7 +367,7 @@ fn management_geometry_usage_markers_and_picker_columns() {
             }
             "login-claude-wait" => {
                 m.dialog = Some(Dialog::new(
-                    "Complete provider login",
+                    "Claude login",
                     vec![
                         "Complete the Claude Code login in the opened pane…".into(),
                         "This popup closes once the login pane opens; the pane reports the result. Cancel only stops waiting; it does not cancel the login.".into(),
@@ -541,4 +541,129 @@ fn antigravity_account() -> sessionsation_ui::client::Account {
 }
 fn antigravity_caps() -> serde_json::Value {
     serde_json::json!({"providers":[{"id":"antigravity","implemented":true,"enrollment":true,"account_limits":false,"account_logout":false,"usage":false,"usage_state":"unsupported","operations":{"account_limits":{"supported":false,"reason":"Antigravity CLI exposes no usage limits"}}}]})
+}
+
+/// Login popups reached the way a user reaches them (account page → Log in), at
+/// 60, 80 and 120 columns: the confirm or Gemini choice that follows the small
+/// "Checking…" frame, the masked API-key entry, a login already in progress
+/// (waiting, then its link) and the Antigravity confirm.
+#[test]
+fn login_popups_match_cell_goldens_at_three_widths() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use sessionsation_ui::management::{Manager, Page};
+    sessionsation_ui::usage::set_clock(100);
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    let screen = |name: &str| {
+        std::fs::read_to_string(format!(
+            "{}/tests/fixtures/login-screens/{name}.txt",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+    };
+    let manager = || {
+        let mut m = Manager::default();
+        let account = |id: &str, provider: &str| -> sessionsation_ui::client::Account {
+            serde_json::from_value(serde_json::json!({"id":id,"provider":provider,"selectable":true,"enabled":true,"auth_required":true,"usage_fresh":false,"usage":{"state":"unsupported","observed_at":null,"short":null,"weekly":null}})).unwrap()
+        };
+        m.inventory(vec![
+            account("codex:work", "codex"),
+            account("claude:claude-main", "claude"),
+            account("gemini:gem-main", "gemini"),
+            account("antigravity:agy-main", "antigravity"),
+        ]);
+        m.capabilities = serde_json::json!({"providers":[
+            {"id":"codex","implemented":true,"enrollment":true,"account_limits":true},
+            {"id":"claude","implemented":true,"enrollment":true,"account_limits":false},
+            {"id":"gemini","implemented":true,"enrollment":true,"account_limits":false,"auth_modes":[
+                {"id":"google_personal","mode":"google","label":"Google login","available":false,"reason":"retired by Google for personal accounts — use Antigravity, API key or Workspace"},
+                {"id":"google_workspace","mode":"google","label":"Google Workspace login","available":true,"reason":null},
+                {"id":"api_key","mode":"api_key","label":"API key","available":true,"reason":null,"input":"stdin_json","field":"api_key"}]},
+            {"id":"antigravity","implemented":true,"enrollment":true,"account_limits":false}
+        ]});
+        m
+    };
+    for (width, height) in [(60, 20), (80, 24), (120, 30)] {
+        let paint = |m: &mut Manager| {
+            let mut f = Field::new(width, height, 1967);
+            let mut c = f.paint(4060);
+            m.paint_at(&mut c, height - 1, 90062);
+            c
+        };
+        // Account page → "Log in" → Enter, with the first popup painted once.
+        let log_in = |account: &str| {
+            let mut m = manager();
+            m.page = Page::Account(account.into());
+            m.options.selected = m.rows().iter().position(|r| r.label == "Log in").unwrap();
+            let out = m.key(key(KeyCode::Enter));
+            paint(&mut m);
+            (m, !out.is_empty())
+        };
+        for name in [
+            "codex-confirm",
+            "claude-confirm",
+            "gemini-choice",
+            "gemini-key",
+            "antigravity-confirm",
+            "claude-waiting",
+            "gemini-link",
+        ] {
+            let (provider, stage) = name.split_once('-').unwrap();
+            let account = match provider {
+                "codex" => "codex:work",
+                "claude" => "claude:claude-main",
+                "gemini" => "gemini:gem-main",
+                _ => "antigravity:agy-main",
+            };
+            let (mut m, checks) = log_in(account);
+            match stage {
+                "confirm" | "choice" | "key" if checks => {
+                    m.login_screen(account.into(), Ok(None));
+                }
+                "waiting" => {
+                    m.login_screen(account.into(), Ok(Some(screen("waiting-80"))));
+                }
+                "link" => {
+                    m.login_screen(account.into(), Ok(Some(screen("waiting-80"))));
+                    paint(&mut m);
+                    m.login_screen(account.into(), Ok(Some(screen("gemini-80"))));
+                }
+                _ => {}
+            }
+            if stage == "key" {
+                paint(&mut m);
+                m.dialog.as_mut().unwrap().selected = 2;
+                m.key(key(KeyCode::Enter));
+                m.paste("AIzaFixtureKey");
+            }
+            let mut c = paint(&mut m);
+            c.cells[..width].fill(sessionsation_ui::render::Cell::default());
+            let text: String = c.cells.iter().map(|c| c.glyph.as_str()).collect();
+            assert!(!text.contains("AIzaFixtureKey"), "the key stays masked");
+            let cells: Vec<_> = c
+                .cells
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.glyph != " " || c.bg.is_some() || c.strike)
+                .map(|(i, c)| {
+                    serde_json::json!([i % width, i / width, c.glyph, c.fg, c.bg, c.bold, c.strike])
+                })
+                .collect();
+            let actual = serde_json::to_string_pretty(
+                &serde_json::json!({"width":width,"height":height,"cells":cells}),
+            )
+            .unwrap()
+                + "\n";
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/golden/login-{name}-{width}.json"));
+            if std::env::var_os("UPDATE_GOLDENS").is_some() {
+                std::fs::write(&path, &actual).unwrap();
+            }
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap_or_default(),
+                actual,
+                "cell snapshot differs: {}",
+                path.display()
+            );
+        }
+    }
 }

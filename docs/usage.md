@@ -324,12 +324,17 @@ unchanged. Both confirmations require the displayed friendly provider-name label
 While a Claude, Gemini or Antigravity login runs, choosing Log in (or the account's
 "Login required" status) again finds the open `Provider login` pane through HERDR,
 reads only its visible text (`herdr pane read --source visible`; never credential
-files) and shows "Login in progress". The provider CLI prints its OAuth link in that
+files) and says in its login popup that a login is already in progress. The provider CLI prints its OAuth link in that
 pane; the newest `http(s)` link is rebuilt across terminal line wraps (rows as wide
 as the screen's widest row continue on the next row, joined exactly) and offered as
 "View link fullscreen". Until a link is printed the dialog says it is waiting and
 offers no option. The pane is re-read every 2 s and the dialog follows a changed
 screen; with no login pane the usual Login confirmation opens.
+Every popup of a login is titled `<Provider> login` for all four providers alike
+(`Codex login`, `Claude login`, `Gemini login`, `Antigravity login`): the check for a
+running login, the confirmation or Gemini sign-in choice, the link, the wait, and the
+result or failure, whose outcome is the first line of the body. The Gemini API-key
+entry and its validation result are titled `Gemini API key`.
 
 Gemini accounts choose a sign-in mode from the backend's ordered `auth_modes`
 (`api capabilities`, contract revision 21). Add (after `account add`) and Log in open
@@ -505,9 +510,11 @@ Menu bottom controls and pagination share the reference soft accent and sweep
 (55% brightness, regular weight). Popup controls use that same light colored
 accent, including directory navigation, pagination and dialog scroll hints. Each
 control line is centered independently inside its surface. Every key press is delivered at once; nothing is deferred. A press at an edge wraps.
-A hold (the same direction within 150 ms, including Termux's legacy press stream)
-crosses an edge at most once and never spins around; native repeat events never
-wrap. Home, management menus, directory pickers and dialog buttons share this
+A hold crosses an edge at most once and never spins around; native repeat events
+never wrap. Without release or repeat events (Termux, SSH, HERDR) a press continues a
+hold only on the auto-repeat timing signature: the first repeat 250 ms to 1.2 s after
+the press, later repeats at most 110 ms apart. Taps in between are fresh presses, so
+two quick taps from next to an edge reach it and then wrap. Home, management menus, directory pickers and dialog buttons share this
 selection-navigation implementation. The first press always moves immediately; repeat timing comes from the
 terminal; only ambiguous legacy follow-up events use the lookahead. Home/End jump to the first/last list option
 (including directory lists); text editors retain cursor Home/End. These shortcuts
@@ -519,9 +526,17 @@ range/detail rows reserve space only when required. Unavailable options accept
 hover/keyboard focus but cannot be activated; separators are skipped. They strike
 only their text, never the bullet, and their text never becomes bold.
 
-Dialogs use HERDR's `┌Title──…┐` border style without title padding. They hide their
-sole Esc/Close hint and shrink to their content; action buttons remain.
-Scrolling dialogs retain scroll hints. Dialog items have at most one blank line
+Dialogs use HERDR's `┌Title──…┐` border style without title padding. Info dialogs
+hide their sole Close option and shrink to their content; action buttons remain.
+Every sub-popup (dialogs and choice popups such as Choose account, Choose Space,
+Start directory and Operations) draws its own controls through one shared path:
+centered on the bottom row(s) inside its frame after one blank row, keys in the
+panel's text colour and actions muted, with `PgUp/PgDn: Scroll` leading them while
+the body scrolls. Frames are wide enough for one hint row where the terminal allows.
+While a sub-popup is open the main popup's footer keeps its rows, and the Esc close
+band, but shows no controls. A dialog that replaces another keeps at least that
+frame and grows when its own content needs more; options that appear later (such as
+`View link fullscreen`) grow an open frame instead of being drawn past its border. Dialog items have at most one blank line
 between them. Stars never appear within text or its spaces. Fades and the vertical
 gradient blend from the terminal’s OSC 11 background reply without changing that
 background. Star colors never fall below that background in any RGB channel;
