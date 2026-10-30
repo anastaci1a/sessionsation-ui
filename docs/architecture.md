@@ -13,7 +13,11 @@ Authoritative backend references:
 - [Acceptance, ownership and adapter coordination](https://github.com/anastaci1a/sessionsation/blob/main/docs/operations.md)
 - [Verification scope](https://github.com/anastaci1a/sessionsation/blob/main/docs/operations.md)
 
-The UI checks API version and consumes capability hints. Backend mutation-time
+The UI checks API version and consumes capability hints. The backend contract is
+semantically versioned (`contract_version` MAJOR.MINOR.PATCH, MINOR additive; `api_version`
+is the MAJOR). The UI requests `--api-version 1`, requires the envelope `api_version` 1,
+and gates features on `api capabilities` fields rather than revision numbers; unknown
+additive fields, providers and values are ignored or shown generically. Backend mutation-time
 validation remains authoritative. Selections use backend IDs and captured
 generations; stale errors require refresh. No automatic mutation retry, legacy
 receipt adapter or Submit/Queue semantic change belongs here.
