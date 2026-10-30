@@ -449,6 +449,44 @@ fn parse_time(text: &str) -> Option<i64> {
     let days = era * 146_097 + doe - 719_468;
     Some(days * 86_400 + hh * 3600 + mm * 60 + ss - offset)
 }
+/// When an inactive session was last opened, in Unix seconds: the backend's
+/// `last_accessed` (Codex), else the conversation's creation time. Never invented.
+fn last_opened(s: &Value) -> Option<i64> {
+    let secs = |t: i64| if t > 100_000_000_000 { t / 1000 } else { t };
+    s["last_accessed"].as_i64().map(secs).or_else(|| {
+        let c = &s["conversation_created_at"];
+        c.as_i64()
+            .map(secs)
+            .or_else(|| c.as_str().and_then(parse_time))
+    })
+}
+/// Running sessions first (busy, then idle, recent access); inactive ones follow,
+/// most recently opened first with missing times last, then by name and id.
+fn sort_sessions(sessions: &mut [Value]) {
+    let rank = |s: &Value| {
+        if s["availability"] == "running" {
+            if s["activity"] == "busy" { 0 } else { 1 }
+        } else {
+            2
+        }
+    };
+    sessions.sort_by(|a, b| {
+        let order = rank(a).cmp(&rank(b));
+        if rank(a) == 2 && rank(b) == 2 {
+            return order
+                .then_with(|| last_opened(b).cmp(&last_opened(a)))
+                .then_with(|| a["name"].as_str().cmp(&b["name"].as_str()))
+                .then_with(|| id(a).cmp(id(b)));
+        }
+        order
+            .then_with(|| {
+                b["last_accessed"]
+                    .as_i64()
+                    .cmp(&a["last_accessed"].as_i64())
+            })
+            .then_with(|| id(a).cmp(id(b)))
+    });
+}
 /// Human byte size: `24 KB`, `1.2 MB`.
 fn size(bytes: u64) -> String {
     match bytes {
@@ -4441,23 +4479,7 @@ impl Manager {
                 self.sessions_known = true;
                 self.derive_session_fields();
                 self.validate_dialog_names();
-                let rank = |s: &Value| {
-                    if s["availability"] == "running" {
-                        if s["activity"] == "busy" { 0 } else { 1 }
-                    } else {
-                        2
-                    }
-                };
-                self.sessions.sort_by(|a, b| {
-                    rank(a)
-                        .cmp(&rank(b))
-                        .then_with(|| {
-                            b["last_accessed"]
-                                .as_i64()
-                                .cmp(&a["last_accessed"].as_i64())
-                        })
-                        .then_with(|| id(a).cmp(id(b)))
-                });
+                sort_sessions(&mut self.sessions);
                 if initial_sessions {
                     self.options = Options::default();
                 }
@@ -6047,6 +6069,33 @@ mod tests {
             m.sessions
                 [crate::session_list::session_index(&m.sessions, m.options.selected).unwrap()]["id"],
             "saved"
+        );
+    }
+    #[test]
+    fn inactive_sessions_sort_by_last_opened_across_providers_with_fallbacks() {
+        let mut v = vec![
+            json!({"id":"n-none-b","name":"B","availability":"stopped"}),
+            json!({"id":"n-none-a","name":"A","availability":"stale"}),
+            json!({"id":"claude-created","name":"C","availability":"stopped","conversation_created_at":"2026-10-28T04:12:16.412Z"}),
+            json!({"id":"codex-ms","name":"X","availability":"saved","last_accessed":1793267529333_i64,"conversation_created_at":"2026-01-01T00:00:00Z"}),
+            json!({"id":"gem-new","name":"G","availability":"stopped","conversation_created_at":"2026-10-29T11:47:19.039Z"}),
+            json!({"id":"tie-2","name":"Same","availability":"saved","last_accessed":1793267529_i64}),
+            json!({"id":"tie-1","name":"Same","availability":"saved","last_accessed":1793267529_i64}),
+            json!({"id":"run","name":"Run","availability":"running","activity":"idle","last_accessed":1}),
+        ];
+        sort_sessions(&mut v);
+        assert_eq!(
+            v.iter().map(id).collect::<Vec<_>>(),
+            [
+                "run",
+                "gem-new",
+                "tie-1",
+                "tie-2",
+                "codex-ms",
+                "claude-created",
+                "n-none-a",
+                "n-none-b"
+            ]
         );
     }
     #[test]
