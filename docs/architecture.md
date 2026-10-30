@@ -142,9 +142,11 @@ Its reusable components are:
   roll back without breaking the file. Star field: Dense/Normal/Sparse/Off (stored as
   `lively`/`normal`/`calm`/`off` for older builds).
 - `navigation`: per-gesture edge wrapping. Legacy input (no release or repeat events,
-  e.g. Termux) treats a press within `FIRST_REPEAT_GAP` of a hold's first press as its
-  delayed first repeat; once the terminal reports event types, every press is a new
-  gesture, so quick deliberate taps at an edge wrap.
+  e.g. Termux, SSH, HERDR) continues a hold only on the auto-repeat timing signature:
+  a first repeat `REPEAT_DELAY_MIN`..`FIRST_REPEAT_GAP` after the hold's first press,
+  later repeats at most `REPEAT_INTERVAL_MAX` apart. Quick deliberate taps fall in
+  between, so two taps from next to an edge reach it and then wrap; once the terminal
+  reports event types, every press is a new gesture.
 - `close_band`: the "Press Esc again to close" band and the second-Esc window
   (`FADE_IN_MS` + `HOLD_MS` + 75% of `FADE_OUT_MS`).
 - `app`: page navigation, validation revisions and explicit effects. Pages supply

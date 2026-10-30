@@ -3,26 +3,32 @@
 //! Every key press is delivered immediately; nothing is deferred or dropped.
 //! Wrapping past an edge is limited per gesture instead: only the first press of
 //! a gesture may wrap, and only when it is at the edge in its direction. Every
-//! later step of the same hold (the same direction within `HOLD_GAP`, or within
-//! `FIRST_REPEAT_GAP` of the hold's first press) stops at the edge it reaches,
-//! and native repeat events never wrap. Legacy terminals such as Termux report a
-//! held arrow as a stream of presses without repeat or release events; such a
+//! later step of the same hold stops at the edge it reaches, and native repeat
+//! events never wrap. Legacy terminals such as Termux, SSH links and HERDR report
+//! a held arrow as a stream of presses without repeat or release events; such a
 //! hold wraps at most once, on its first press, and never spins around.
-//! Their first auto-repeat arrives only after the keyboard's repeat delay, so a
-//! press within `FIRST_REPEAT_GAP` of the press that began a hold still belongs
-//! to that hold; only later slow presses start a new gesture.
-//! Both windows apply only to such legacy input. Once the terminal has reported a
+//! A legacy press continues a hold only when its timing matches keyboard
+//! auto-repeat: the first repeat after the OS repeat delay (at least
+//! `REPEAT_DELAY_MIN`, at most `FIRST_REPEAT_GAP` after the press that began the
+//! hold), later repeats (and SSH bursts) at most `REPEAT_INTERVAL_MAX` apart.
+//! Deliberate taps fall in between, so two quick taps at an edge both move and
+//! the second may wrap.
+//! These windows apply only to legacy input. Once the terminal has reported a
 //! release or repeat event, a hold arrives as repeats and every press follows a
-//! release, so each press begins a fresh gesture and two quick taps at an edge
-//! both wrap.
+//! release, so each press begins a fresh gesture.
 use crossterm::event::{KeyEvent, KeyEventKind};
 use std::{
     cell::Cell,
     time::{Duration, Instant},
 };
 
-/// Presses of one direction closer together than this continue one hold.
-pub const HOLD_GAP: Duration = Duration::from_millis(150);
+/// Steady auto-repeat (and SSH bursts of it): presses of one direction at most
+/// this far apart continue one hold.
+pub const REPEAT_INTERVAL_MAX: Duration = Duration::from_millis(110);
+/// Lower bound of a keyboard's initial auto-repeat delay: a press this long or
+/// longer after the press that began a hold may be its first repeat. A press
+/// sooner than this (and slower than steady repeat) is a deliberate tap.
+pub const REPEAT_DELAY_MIN: Duration = Duration::from_millis(250);
 /// Upper bound of a keyboard's initial auto-repeat delay: the first repeat of a
 /// legacy hold may lag the press that began it by up to this much.
 pub const FIRST_REPEAT_GAP: Duration = Duration::from_millis(1200);
@@ -112,7 +118,8 @@ impl SelectionNavigation {
             && !(press && (self.repeated || event_types_reported()))
             && self.last.is_some_and(|at| {
                 let gap = now.saturating_duration_since(at);
-                gap < HOLD_GAP || self.started && gap < FIRST_REPEAT_GAP
+                gap <= REPEAT_INTERVAL_MAX
+                    || self.started && (REPEAT_DELAY_MIN..FIRST_REPEAT_GAP).contains(&gap)
             });
         self.started = !continuing;
         self.repeated = !press;
@@ -173,7 +180,7 @@ mod tests {
         // Nine rows, Down × 10 from the top: separate taps wrap on the ninth
         // press; a rapid Termux stream is one hold and stops at the bottom.
         for gap in [0, 3, 50, 100, 250, 400] {
-            let held = gap < HOLD_GAP.as_millis() as u64;
+            let held = gap <= REPEAT_INTERVAL_MAX.as_millis() as u64;
             let path = presses(9, 0, false, 10, gap, true);
             assert_eq!(path[..8], [1, 2, 3, 4, 5, 6, 7, 8], "gap {gap}");
             assert_eq!(path[8], if held { 8 } else { 0 }, "gap {gap}");
@@ -386,6 +393,40 @@ mod tests {
         input.events(release);
         assert!(event_types_reported(), "a release event switches modes");
         set_event_types_reported(false);
+    }
+    #[test]
+    fn two_quick_taps_from_next_to_an_edge_reach_it_then_wrap() {
+        // Legacy input (no release events): taps 120 ms apart are deliberate.
+        for gap in [120, 150, 200] {
+            let path = timed(6, 1, &[(true, 0), (true, gap)]);
+            assert_eq!(path, [0, 5], "Up from the second row, {gap} ms: {path:?}");
+            let path = timed(6, 4, &[(false, 0), (false, gap)]);
+            assert_eq!(path, [5, 0], "Down from the second-to-last row, {gap} ms");
+        }
+        // Three quick taps from the second row: top, wrap, then one more step.
+        let path = timed(6, 1, &[(true, 0), (true, 120), (true, 240)]);
+        assert_eq!(path, [0, 5, 4]);
+    }
+    #[test]
+    fn a_realistic_held_key_from_mid_list_stops_at_the_edge() {
+        // First repeat after a 400 ms OS delay, then steady 33 ms repeats.
+        let path = timed(8, 4, &hold(true, 400, 33, 30));
+        assert_eq!(path[..5], [3, 2, 1, 0, 0]);
+        assert!(path[3..].iter().all(|r| *r == 0), "Up: {path:?}");
+        let path = timed(8, 3, &hold(false, 400, 33, 30));
+        assert_eq!(path[..5], [4, 5, 6, 7, 7]);
+        assert!(path[4..].iter().all(|r| *r == 7), "Down: {path:?}");
+    }
+    #[test]
+    fn a_hold_starting_at_an_edge_wraps_exactly_once() {
+        let path = timed(8, 0, &hold(true, 400, 33, 40));
+        assert_eq!(path[0], 7, "the first press wraps");
+        assert_eq!(path.iter().filter(|r| **r == 7).count(), 1, "{path:?}");
+        assert!(path[7..].iter().all(|r| *r == 0), "{path:?}");
+        let path = timed(8, 7, &hold(false, 400, 33, 40));
+        assert_eq!(path[0], 0);
+        assert_eq!(path.iter().filter(|r| **r == 0).count(), 1, "{path:?}");
+        assert!(path[7..].iter().all(|r| *r == 7), "{path:?}");
     }
     #[test]
     fn a_press_after_native_repeats_is_a_fresh_gesture() {
