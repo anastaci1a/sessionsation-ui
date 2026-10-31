@@ -142,10 +142,15 @@ fn quote(text: &str) -> String {
 /// The shell line that runs a validated launch request in an existing terminal:
 /// the backend's own inline paths (`resume SESSION --expected-generation G`,
 /// `run --account A`), preceded by entering the chosen directory.
+///
+/// `name` is passed as `--name NAME` (shell-quoted) only when the backend advertises
+/// `capabilities.inline_launch.name`; older backends keep the directory-derived name.
 pub fn inline_command(
     binary: &std::path::Path,
     data_dir: &std::path::Path,
     request: &Value,
+    capabilities: &Value,
+    name: &str,
 ) -> Option<String> {
     let mut line = String::new();
     let resume = request["session_id"].as_str();
@@ -174,6 +179,19 @@ pub fn inline_command(
         }
     } else {
         line += &format!(" run --account {}", quote(request["account_id"].as_str()?));
+    }
+    let inline = &capabilities["inline_launch"];
+    if inline["name"] == true && !name.trim().is_empty() {
+        let option = inline["name_option"]
+            .as_str()
+            .filter(|o| {
+                o.starts_with("--")
+                    && o[2..]
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            })
+            .unwrap_or("--name");
+        line += &format!(" {option} {}", quote(name.trim()));
     }
     if let Some(p) = request["permissions"].as_str()
         && matches!(p, "yolo" | "default")
@@ -237,15 +255,15 @@ mod tests {
         let root = std::path::Path::new("/data");
         let new = json!({"account_id":"codex:me","directory":{"path":"/p/it's","create":["/p/it's"]},"permissions":"default"});
         assert_eq!(
-            inline_command(bin, root, &new).unwrap(),
+            inline_command(bin, root, &new, &json!({}), "My it's").unwrap(),
             "mkdir -p -- '/p/it'\\''s' && cd -- '/p/it'\\''s' && '/opt/b in/sessionsation' --data-dir '/data' run --account 'codex:me' --permissions default"
         );
         let resume = json!({"session_id":"s1","expected_generation":"g9","confirm_unfinished":true,"directory":{"path":"/p","create":[]},"permissions":"yolo"});
         assert_eq!(
-            inline_command(bin, root, &resume).unwrap(),
+            inline_command(bin, root, &resume, &json!({}), "x").unwrap(),
             "cd -- '/p' && '/opt/b in/sessionsation' --data-dir '/data' resume 's1' --expected-generation 'g9' --confirm-unfinished --permissions yolo"
         );
-        assert!(inline_command(bin, root, &json!({"session_id":"s1"})).is_none());
+        assert!(inline_command(bin, root, &json!({"session_id":"s1"}), &json!({}), "x").is_none());
         assert!(inline_supported(
             &json!({"contract_version":"1.31.0"}),
             &resume
@@ -256,6 +274,26 @@ mod tests {
         ));
         assert!(!inline_supported(&json!({}), &resume));
         assert!(inline_supported(&json!({}), &new), "run --account is old");
+    }
+    #[test]
+    fn inline_commands_pass_the_name_only_when_the_backend_supports_it() {
+        let bin = std::path::Path::new("/b");
+        let root = std::path::Path::new("/d");
+        let new = json!({"account_id":"codex:me"});
+        let resume = json!({"session_id":"s1","expected_generation":"g9"});
+        let caps = json!({"inline_launch":{"name":true,"name_option":"--name","journaled":true,"future":1}});
+        assert_eq!(
+            inline_command(bin, root, &new, &caps, "Bob's $(x)").unwrap(),
+            "'/b' --data-dir '/d' run --account 'codex:me' --name 'Bob'\\''s $(x)'"
+        );
+        assert_eq!(
+            inline_command(bin, root, &resume, &caps, " Work ").unwrap(),
+            "'/b' --data-dir '/d' resume 's1' --expected-generation 'g9' --name 'Work'"
+        );
+        for old in [json!({}), json!({"inline_launch":{"name":false}})] {
+            let line = inline_command(bin, root, &new, &old, "Work").unwrap();
+            assert!(!line.contains("--name"), "{line}");
+        }
     }
     fn info(shell: u64, group: u64, pids: &[u64]) -> Value {
         json!({"process_info":{"shell_pid":shell,"foreground_process_group_id":group,

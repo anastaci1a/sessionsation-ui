@@ -155,7 +155,7 @@ pub enum Effect {
     ProbeSameName(String, String),
     /// Run the launch request inline in this existing terminal: (Space ID, name,
     /// terminal, request).
-    RunInTerminal(String, String, crate::same_name::Existing, Value),
+    RunInTerminal(String, String, crate::same_name::Existing, Value, Value),
     Save,
     Exit,
     Api(u64, Vec<String>),
@@ -1713,7 +1713,13 @@ impl App {
                 self.launch_background = false;
                 self.launch_dialog = true;
                 self.manager.dialog = Some(crate::dialog::Dialog::progress("Starting session"));
-                vec![Effect::RunInTerminal(space, name, existing, request)]
+                vec![Effect::RunInTerminal(
+                    space,
+                    name,
+                    existing,
+                    request,
+                    self.manager.capabilities.clone(),
+                )]
             }
             _ => vec![],
         }
@@ -3497,7 +3503,7 @@ mod tests {
             a.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         }
         assert!(
-            matches!(enter(&mut a).as_slice(), [Effect::RunInTerminal(s, n, e, r)]
+            matches!(enter(&mut a).as_slice(), [Effect::RunInTerminal(s, n, e, r, _)]
             if s == "w1" && n == "work" && *e == existing && r["account_id"] == "codex:personal")
         );
         // The clash vanished by the fresh check: no question.

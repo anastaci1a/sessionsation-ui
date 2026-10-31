@@ -705,8 +705,16 @@ Confirming Start/Resume with a match first re-reads HERDR and asks: **Choose a u
 one pane, or a same-named pane) and HERDR shows it at its own shell prompt: no agent reported,
 and the foreground process group is the pane's shell PID with no other foreground process. It
 is checked again right before running and refused if anything changed. It runs the backend's
-inline path through HERDR `pane run`: `cd DIR && sessionsation run --account A` or
-`sessionsation resume S --expected-generation G [--confirm-unfinished]` (the latter needs
-contract 1.31), with `--permissions` as set. The pane keeps its name and the session is
-discovered by the backend as for any inline launch in HERDR; it does not go through the launch
-journal or Operations queue.
+inline path through HERDR `pane run`: `cd DIR && sessionsation run --account A --name NAME` or
+`sessionsation resume S --expected-generation G [--confirm-unfinished] --name NAME` (the latter
+needs contract 1.31), with `--permissions` as set. `--name` carries the entered name, shell-quoted,
+when the backend advertises `capabilities.inline_launch.name` (1.32); resume then renames the
+session (its generation changes, handled by the backend) and the backend relabels the invoking
+HERDR tab. On older backends `--name` is omitted and the backend names the session as before.
+With `inline_launch.journaled` (1.32) the run is journaled by the backend and appears in
+Operations; older backends do not journal it.
+
+Inline entries in Operations (`inline:true`, kind launch or resume) read like other launches and
+resumes (`New session` or `Resume`, named by the session name). They report `can_cancel`,
+`can_respond` and `can_recover` as false, so Cancel, Respond and Retry are never available for
+them. An `uncertain` phase reads as checking; unknown fields are ignored.

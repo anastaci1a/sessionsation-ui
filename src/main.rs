@@ -308,13 +308,15 @@ impl Effects {
                         let _ = tx.send(Message::SameName(result)).await;
                     });
                 }
-                Effect::RunInTerminal(space, name, existing, request) => {
+                Effect::RunInTerminal(space, name, existing, request, capabilities) => {
                     tokio::spawn(async move {
                         let result = async {
                             let command = sessionsation_ui::same_name::inline_command(
                                 &client.binary,
                                 &client.root,
                                 &request,
+                                &capabilities,
+                                &name,
                             )
                             .context("Invalid launch request")?;
                             client

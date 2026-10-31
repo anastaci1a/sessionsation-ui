@@ -719,7 +719,7 @@ fn operation_status(record: &Value) -> &str {
         "cancelled" => "cancelled",
         "recovered" => "recovered",
         "queued" => "queued",
-        "unknown" => "checking",
+        "unknown" | "uncertain" => "checking",
         p if p.starts_with("awaiting_") => "confirmation",
         _ => "running",
     }
@@ -834,7 +834,8 @@ fn active_text(kind: &str, record: &Value, spaces: &BTreeMap<String, String>) ->
         "archive_session" => "archiving".into(),
         "restore_session" => "restoring".into(),
         "delete_session" => "deleting".into(),
-        "resume-launch" => "resuming".into(),
+        "resume-launch" | "resume" => "resuming".into(),
+        "launch" => "starting".into(),
         _ => "working".into(),
     }
 }
@@ -850,7 +851,8 @@ fn failed_text(kind: &str) -> String {
         "archive_session" => "archive",
         "restore_session" => "restore",
         "delete_session" => "delete",
-        "resume-launch" => "resume",
+        "resume-launch" | "resume" => "resume",
+        "launch" => "launch",
         _ => "operation",
     };
     format!("{noun} failed")
@@ -2186,7 +2188,12 @@ impl Manager {
             return format!("{} {}", symbol(provider), crate::session_list::full_name(s));
         }
         let provider_of = |a: &str| a.split_once(':').map_or("codex", |(p, _)| p).to_owned();
-        if let Some(name) = r["request"]["name"].as_str().filter(|n| !n.is_empty()) {
+        let named = if kind == "operation" {
+            r["name"].as_str()
+        } else {
+            r["request"]["name"].as_str()
+        };
+        if let Some(name) = named.filter(|n| !n.is_empty()) {
             return format!(
                 "{} {}",
                 symbol(&account.map(provider_of).unwrap_or_else(|| "codex".into())),
@@ -7967,6 +7974,55 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             labels(&m).iter().map(|l| l.0.as_str()).collect::<Vec<_>>(),
             ["Undismiss", "Close"]
         );
+    }
+    #[test]
+    fn inline_operations_render_as_launches_and_resumes_without_actions() {
+        let mut m = setup();
+        m.operations = vec![
+            json!({"id":"i1","kind":"launch","inline":true,"name":"Fresh work","account_id":"codex:fixture0","phase":"attached","pane_id":"w1:p1","can_cancel":false,"can_respond":false,"can_recover":false,"created_at":60,"future_field":{"x":1}}),
+            json!({"id":"i2","kind":"resume","inline":true,"session_id":"s1","phase":"failed","detail":"SESSION_NAME_EXISTS","can_cancel":false,"can_respond":false,"can_recover":false,"created_at":61}),
+        ];
+        m.go(Page::Operations);
+        let text = m
+            .rows()
+            .iter()
+            .map(|r| format!("{} {}", r.label, r.preview.clone().unwrap_or_default()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("Fresh work")
+                && text.contains("New session")
+                && text.contains("in progress"),
+            "{text}"
+        );
+        assert!(text.contains("Resume") && text.contains("failed"), "{text}");
+        for id in ["i1", "i2"] {
+            m.open_operation(id.into());
+            let buttons: Vec<_> = m
+                .dialog
+                .as_ref()
+                .unwrap()
+                .buttons
+                .iter()
+                .map(|b| (b.label.clone(), b.enabled))
+                .collect();
+            for (label, enabled) in &buttons {
+                assert!(
+                    !matches!(
+                        label.as_str(),
+                        "Retry" | "Cancel operation" | "Respond yes" | "Respond no"
+                    ) || !enabled,
+                    "{id}: {label} must not be actionable"
+                );
+            }
+            m.dismiss();
+        }
+        let rows = m.rows();
+        let gated: Vec<_> = rows
+            .iter()
+            .filter(|r| matches!(r.label.as_str(), "Cancel operation" | "Recover"))
+            .collect();
+        assert!(gated.iter().all(|r| !r.enabled));
     }
     #[test]
     fn operation_ids_stay_out_of_the_list_and_details_are_titled_by_kind() {
