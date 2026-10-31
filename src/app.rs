@@ -151,6 +151,11 @@ pub enum Effect {
     Inspect(u64, String),
     Validate(u64, Value),
     Start(Value),
+    /// Fresh same-name check for (Space ID, name) before asking the operator.
+    ProbeSameName(String, String),
+    /// Run the launch request inline in this existing terminal: (Space ID, name,
+    /// terminal, request).
+    RunInTerminal(String, String, crate::same_name::Existing, Value),
     Save,
     Exit,
     Api(u64, Vec<String>),
@@ -163,7 +168,13 @@ pub enum Effect {
     /// Create confirmed settings folders in order (parents first).
     CreateDirectories(Target, PathBuf, Vec<PathBuf>),
 }
+const SAME_NAME_UNIQUE: &str = "Choose a unique name";
+const SAME_NAME_NEW_TAB: &str = "New tab anyway";
+const SAME_NAME_EXISTING: &str = "Run in existing terminal";
 enum StartConfirmation {
+    /// The name is in use in the target Space; the terminal is set when it is
+    /// positively at a shell prompt.
+    SameName(Option<crate::same_name::Existing>),
     SharedDirectory(PathBuf),
     UnfinishedHistory,
     CreateFolders(PathBuf),
@@ -208,6 +219,11 @@ pub struct App {
     pub launch_background: bool,
     pub launch_dialog: bool,
     start_confirmation: Option<(crate::dialog::Dialog, StartConfirmation)>,
+    /// Tabs and panes of the host, refreshed with the inventory.
+    layout: crate::same_name::Layout,
+    /// (Space ID, name) whose same-name clash the operator already accepted.
+    name_accepted: Option<(String, String)>,
+    name_probing: bool,
     /// Settings folders awaiting confirmation: (dialog, target, chosen path, folders to create).
     create_confirmation: Option<(crate::dialog::Dialog, Target, PathBuf, Vec<PathBuf>)>,
     pub resume: Option<Value>,
@@ -267,6 +283,9 @@ impl App {
             launch_background: false,
             launch_dialog: false,
             start_confirmation: None,
+            layout: Default::default(),
+            name_accepted: None,
+            name_probing: false,
             create_confirmation: None,
             resume: None,
             resume_validation: None,
@@ -475,6 +494,10 @@ impl App {
                             row.preview_fg = crate::widgets::MUTED;
                             row.preview_gap = 2;
                             row.preview_selected_only = false;
+                        }
+                        if i == 2 && self.name_in_use() {
+                            row.label += " ⚠";
+                            row = row.with_warning().with_hover_reason("name in use");
                         }
                         row.enabled = i != 3
                             || self.resume.is_none()
@@ -1563,9 +1586,151 @@ impl App {
             && (self.resume.is_some()
                 || (self.manager.sessions_known && !self.manager.cached_snapshot))
     }
+    /// The existing Space and name this draft would create or resume into.
+    fn target_name(&self) -> Option<(String, String)> {
+        match self.draft.space.as_ref()? {
+            Space::Existing { id, .. } if !self.draft.name.trim().is_empty() => {
+                Some((id.clone(), self.draft.name.clone()))
+            }
+            _ => None,
+        }
+    }
+    /// A tab or pane of the target Space already carries the session's name.
+    pub fn name_in_use(&self) -> bool {
+        self.target_name()
+            .is_some_and(|(space, name)| self.layout.in_use(&space, &name))
+    }
+    /// Replace the host's tab/pane snapshot (the ⚠ follows it live).
+    pub fn set_layout(&mut self, layout: crate::same_name::Layout) {
+        if self.layout != layout {
+            self.layout = layout;
+            self.dirty = true;
+        }
+    }
+    fn same_name_dialog(
+        &self,
+        existing: &Option<crate::same_name::Existing>,
+    ) -> crate::dialog::Dialog {
+        let space = self
+            .draft
+            .space
+            .as_ref()
+            .map(Space::label)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("this Space");
+        let mut buttons = vec![SAME_NAME_UNIQUE, SAME_NAME_NEW_TAB];
+        if existing.is_some() {
+            buttons.push(SAME_NAME_EXISTING);
+        }
+        buttons.push("Cancel");
+        crate::dialog::Dialog::new(
+            "Name in use",
+            vec![
+                format!(
+                    "A tab or pane named “{}” already exists in {space}.",
+                    crate::usage::display_name(&self.draft.name)
+                ),
+                if existing.is_some() {
+                    "It is idle at a shell prompt, so the session can run there instead of in a new tab.".into()
+                } else {
+                    "Choose another name, or open a new tab with the same name.".into()
+                },
+            ],
+            &buttons,
+        )
+    }
+    /// The fresh same-name check came back: ask, or go on when the clash is gone.
+    pub fn same_name_probed(
+        &mut self,
+        result: Result<(bool, Option<crate::same_name::Existing>), String>,
+    ) -> Vec<Effect> {
+        self.name_probing = false;
+        self.dirty = true;
+        // A failed probe still knows the clash from the last snapshot: ask without
+        // the terminal option, never offer what could not be verified.
+        let (clash, existing) = result.unwrap_or((true, None));
+        if !self.start_ready() {
+            return vec![];
+        }
+        if !clash {
+            self.name_accepted = self.target_name();
+            return self.begin_start();
+        }
+        let existing = existing.filter(|_| {
+            self.creation_request()
+                .is_some_and(|r| crate::same_name::inline_supported(&self.manager.capabilities, &r))
+        });
+        let dialog = self.same_name_dialog(&existing);
+        self.start_confirmation = Some((dialog, StartConfirmation::SameName(existing)));
+        vec![]
+    }
+    /// The terminal run finished: the tab to bring forward, or the failure.
+    pub fn terminal_ran(&mut self, result: Result<String, String>) -> Option<String> {
+        self.dirty = true;
+        match result {
+            Ok(tab) => {
+                self.success = true;
+                if let Some(d) = &mut self.manager.dialog {
+                    d.body = vec!["Running in the existing terminal.".into()];
+                    d.finish();
+                }
+                Some(tab)
+            }
+            Err(e) => {
+                self.request = None;
+                self.error = format!(
+                    "Launch failed: {}. Esc closes; no automatic retry.",
+                    e.trim_end_matches('.')
+                );
+                if let Some(d) = &mut self.manager.dialog {
+                    d.body = vec![self.error.clone()];
+                    d.finish();
+                }
+                None
+            }
+        }
+    }
+    fn same_name_choice(
+        &mut self,
+        label: &str,
+        existing: Option<crate::same_name::Existing>,
+    ) -> Vec<Effect> {
+        match label {
+            SAME_NAME_UNIQUE => self.push(Page::Name, self.draft.name.clone()),
+            SAME_NAME_NEW_TAB => {
+                self.name_accepted = self.target_name();
+                self.begin_start()
+            }
+            SAME_NAME_EXISTING => {
+                let (Some(existing), Some((space, name)), Some(request)) =
+                    (existing, self.target_name(), self.creation_request())
+                else {
+                    return vec![];
+                };
+                self.submitted = Some(self.draft.revision);
+                self.request = Some(request.clone());
+                self.success = false;
+                self.launch_background = false;
+                self.launch_dialog = true;
+                self.manager.dialog = Some(crate::dialog::Dialog::progress("Starting session"));
+                vec![Effect::RunInTerminal(space, name, existing, request)]
+            }
+            _ => vec![],
+        }
+    }
     fn begin_start(&mut self) -> Vec<Effect> {
         if !self.start_ready() {
             return vec![];
+        }
+        if let Some(target) = self.target_name()
+            && self.name_in_use()
+            && self.name_accepted.as_ref() != Some(&target)
+        {
+            if self.name_probing {
+                return vec![];
+            }
+            self.name_probing = true;
+            return vec![Effect::ProbeSameName(target.0, target.1)];
         }
         if let Some(request) = self.creation_request() {
             self.submitted = Some(self.draft.revision);
@@ -1892,6 +2057,21 @@ impl App {
         if let Some((dialog, confirmation)) = &mut self.start_confirmation
             && !key.modifiers.contains(KeyModifiers::CONTROL)
         {
+            if let StartConfirmation::SameName(existing) = confirmation {
+                let existing = existing.clone();
+                return match dialog.key_with_wrap(key, wrap) {
+                    crate::dialog::Event::Choose(i, _) => {
+                        let label = dialog.buttons[i].label.clone();
+                        self.start_confirmation = None;
+                        self.same_name_choice(&label, existing)
+                    }
+                    crate::dialog::Event::Dismiss => {
+                        self.start_confirmation = None;
+                        vec![]
+                    }
+                    crate::dialog::Event::None => vec![],
+                };
+            }
             match dialog.key_with_wrap(key, wrap) {
                 crate::dialog::Event::Choose(0, _) => {
                     let folders = matches!(confirmation, StartConfirmation::CreateFolders(_));
@@ -1900,6 +2080,7 @@ impl App {
                         | StartConfirmation::CreateFolders(directory) => {
                             self.draft.directory.path() == Some(directory.as_path())
                         }
+                        StartConfirmation::SameName(_) => unreachable!("handled above"),
                         StartConfirmation::UnfinishedHistory => {
                             if let Some(session) = &mut self.resume {
                                 session["confirm_unfinished"] = json!(true);
@@ -3175,6 +3356,189 @@ mod tests {
             focused: false,
         }];
         assert_eq!(a.rows()[0].preview.as_deref(), Some("not set"));
+    }
+    fn clash_layout() -> crate::same_name::Layout {
+        crate::same_name::Layout::parse(
+            &json!({"tabs":[
+                {"tab_id":"w1:t1","workspace_id":"w1","label":"Work"},
+                {"tab_id":"w2:t1","workspace_id":"w2","label":"Free"}]}),
+            &json!({"panes":[
+                {"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"unknown"},
+                {"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","agent_status":"unknown"}]}),
+        )
+    }
+    /// A ready Summary draft named `name` in Space w1.
+    pub(super) fn clash_app(name: &str) -> App {
+        let mut a = app();
+        a.page = Page::Summary;
+        a.launch_supported = true;
+        a.manager.sessions_known = true;
+        a.draft = Draft {
+            account: Some("codex:personal".into()),
+            space: Some(Space::Existing {
+                id: "w1".into(),
+                label: "One".into(),
+            }),
+            name: name.into(),
+            directory: Directory::Existing("/proj".into()),
+            name_valid: true,
+            directory_valid: true,
+            revision: 1,
+        };
+        a.set_layout(clash_layout());
+        a
+    }
+    fn enter(a: &mut App) -> Vec<Effect> {
+        a.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    }
+    /// Paint once so the open dialog is sized, as the running popup always has.
+    fn settle(a: &mut App) {
+        a.paint(&mut Field::new(100, 30, 1), 0, 100, 30);
+    }
+    fn dialog_labels(a: &App) -> Vec<String> {
+        a.start_confirmation
+            .as_ref()
+            .unwrap()
+            .0
+            .buttons
+            .iter()
+            .map(|b| b.label.clone())
+            .collect()
+    }
+    #[test]
+    fn name_warning_follows_name_and_space_and_explains_on_hover() {
+        let mut a = clash_app("work");
+        let row = &a.rows()[2];
+        assert_eq!(
+            row.label,
+            "Name:    work ⚠".replace(
+                "    ",
+                &" ".repeat(row.label.len() - "Name: work ⚠".len() + 1)
+            )
+        );
+        assert!(
+            row.warn
+                && row.preview.as_deref() == Some("(name in use)")
+                && row.preview_selected_only
+        );
+        a.draft.name = "unique".into();
+        assert!(!a.rows()[2].warn && !a.rows()[2].label.contains('⚠'));
+        a.draft.name = "Work".into();
+        a.draft.space = Some(Space::Existing {
+            id: "w2".into(),
+            label: "Two".into(),
+        });
+        assert!(!a.name_in_use(), "same name in another Space is free");
+        a.draft.space = Some(Space::New {
+            label: "Work".into(),
+        });
+        assert!(!a.name_in_use(), "a new Space has no tabs yet");
+    }
+    #[test]
+    fn confirming_a_clash_asks_with_a_safe_default_and_each_choice_acts() {
+        // No terminal option without a verified shell; default is the unique name.
+        let mut a = clash_app("work");
+        a.options.selected = 4;
+        assert!(
+            matches!(enter(&mut a).as_slice(), [Effect::ProbeSameName(s, n)] if s == "w1" && n == "work")
+        );
+        assert!(a.same_name_probed(Ok((true, None))).is_empty());
+        settle(&mut a);
+        assert_eq!(
+            dialog_labels(&a),
+            ["Choose a unique name", "New tab anyway", "Cancel"]
+        );
+        assert_eq!(a.start_confirmation.as_ref().unwrap().0.selected, 0);
+        assert!(
+            enter(&mut a).is_empty(),
+            "default returns to the name field"
+        );
+        assert_eq!(a.page, Page::Name);
+        assert!(a.request.is_none());
+        // Esc leaves everything untouched.
+        let mut a = clash_app("work");
+        a.options.selected = 4;
+        enter(&mut a);
+        a.same_name_probed(Ok((true, None)));
+        settle(&mut a);
+        assert!(
+            a.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .is_empty()
+        );
+        assert!(a.start_confirmation.is_none() && a.request.is_none() && a.page == Page::Summary);
+        // New tab anyway starts the ordinary launch, once.
+        let mut a = clash_app("work");
+        a.options.selected = 4;
+        enter(&mut a);
+        a.same_name_probed(Ok((true, None)));
+        settle(&mut a);
+        a.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(matches!(enter(&mut a).as_slice(), [Effect::Start(_)]));
+        // Terminal option: shown only with a verified terminal, and runs there.
+        let existing = crate::same_name::Existing {
+            pane: "w1:p1".into(),
+            tab: "w1:t1".into(),
+        };
+        let mut a = clash_app("work");
+        a.options.selected = 4;
+        enter(&mut a);
+        a.same_name_probed(Ok((true, Some(existing.clone()))));
+        settle(&mut a);
+        assert_eq!(
+            dialog_labels(&a),
+            [
+                "Choose a unique name",
+                "New tab anyway",
+                "Run in existing terminal",
+                "Cancel"
+            ]
+        );
+        for _ in 0..2 {
+            a.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        assert!(
+            matches!(enter(&mut a).as_slice(), [Effect::RunInTerminal(s, n, e, r)]
+            if s == "w1" && n == "work" && *e == existing && r["account_id"] == "codex:personal")
+        );
+        // The clash vanished by the fresh check: no question.
+        let mut a = clash_app("work");
+        a.options.selected = 4;
+        enter(&mut a);
+        assert!(matches!(
+            a.same_name_probed(Ok((false, None))).as_slice(),
+            [Effect::Start(_)]
+        ));
+        // A failed check still asks, without the unverified terminal option.
+        let mut a = clash_app("work");
+        a.options.selected = 4;
+        enter(&mut a);
+        a.same_name_probed(Err("HERDR timed out".into()));
+        assert_eq!(dialog_labels(&a).len(), 3);
+    }
+    #[test]
+    fn terminal_option_needs_a_backend_with_inline_unfinished_confirmation() {
+        let existing = crate::same_name::Existing {
+            pane: "w1:p1".into(),
+            tab: "w1:t1".into(),
+        };
+        let mut a = clash_app("work");
+        a.resume = Some(json!({"id":"s1","generation":"g","confirm_unfinished":true}));
+        a.manager.capabilities = json!({"contract_version":"1.30.9","resume":{"version":1}});
+        a.options.selected = 4;
+        enter(&mut a);
+        a.same_name_probed(Ok((true, Some(existing.clone()))));
+        settle(&mut a);
+        assert_eq!(
+            dialog_labels(&a).len(),
+            3,
+            "1.30 has no inline --confirm-unfinished"
+        );
+        a.start_confirmation = None;
+        a.name_probing = false;
+        a.manager.capabilities = json!({"contract_version":"1.31.1","resume":{"version":1}});
+        a.same_name_probed(Ok((true, Some(existing))));
+        settle(&mut a);
+        assert_eq!(dialog_labels(&a).len(), 4);
     }
     #[test]
     fn shared_directory_warns_on_hover_and_requires_confirmation_without_mutation() {

@@ -489,9 +489,62 @@ impl Client {
             "HERDR: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+        // `pane run` admits the command and prints nothing.
+        if out.stdout.is_empty() && args.starts_with(&["pane", "run"]) {
+            return Ok(json!({"admitted": true}));
+        }
         let body: Value = serde_json::from_slice(&out.stdout)?;
         ensure!(body.get("error").is_none(), "HERDR rejected request");
         Ok(body.get("result").unwrap_or(&body).clone())
+    }
+
+    /// Tabs and panes of every Space on this host.
+    pub async fn layout(&self) -> Result<crate::same_name::Layout> {
+        let (tabs, panes) =
+            tokio::try_join!(self.host(&["tab", "list"]), self.host(&["pane", "list"]))?;
+        Ok(crate::same_name::Layout::parse(&tabs, &panes))
+    }
+    /// Fresh check of a same-name clash: the one terminal it points at, only
+    /// when HERDR positively shows it sitting at its own shell prompt.
+    pub async fn typable_same_name(
+        &self,
+        space: &str,
+        name: &str,
+    ) -> Result<(bool, Option<crate::same_name::Existing>)> {
+        let layout = self.layout().await?;
+        let clash = layout.in_use(space, name);
+        let [pane] = layout.candidates(space, name)[..] else {
+            return Ok((clash, None));
+        };
+        let info = self
+            .host(&["pane", "process-info", "--pane", &pane.id])
+            .await?;
+        Ok((
+            clash,
+            crate::same_name::typable(&pane.agent_status, &info).then(|| {
+                crate::same_name::Existing {
+                    pane: pane.id.clone(),
+                    tab: pane.tab.clone(),
+                }
+            }),
+        ))
+    }
+    /// Run an inline launch command in an existing terminal, after checking
+    /// again that it is still the same pane, in the same Space, at its shell.
+    pub async fn run_in_terminal(
+        &self,
+        space: &str,
+        name: &str,
+        existing: &crate::same_name::Existing,
+        command: &str,
+    ) -> Result<()> {
+        let (_, now) = self.typable_same_name(space, name).await?;
+        ensure!(
+            now.as_ref() == Some(existing),
+            "The terminal changed; it is no longer at a shell prompt. Nothing was run."
+        );
+        self.host(&["pane", "run", &existing.pane, command]).await?;
+        Ok(())
     }
     /// The visible text of the open provider-login pane, or `None` when no such
     /// pane exists. Reads the pane's screen only; the login plan is never read.

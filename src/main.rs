@@ -112,6 +112,9 @@ enum Message {
     InputError(String),
     Background([u8; 3]),
     Inventory(Result<(Vec<Account>, Vec<Workspace>, Value), String>),
+    Layout(sessionsation_ui::same_name::Layout),
+    SameName(Result<(bool, Option<sessionsation_ui::same_name::Existing>), String>),
+    TerminalRan(Result<String, String>),
     Managed(u64, Result<Value, String>),
     SessionFocused(Result<(), String>),
     LoginLaunched(Result<(), String>),
@@ -133,6 +136,9 @@ impl Message {
             Message::InputError(_) => "input_error",
             Message::Background(_) => "background",
             Message::Inventory(_) => "inventory",
+            Message::Layout(_) => "layout",
+            Message::SameName(_) => "same_name",
+            Message::TerminalRan(_) => "terminal_ran",
             Message::Managed(..) => "managed",
             Message::SessionFocused(_) => "session_focused",
             Message::LoginLaunched(_) => "login_launched",
@@ -293,6 +299,34 @@ impl Effects {
                         let _ = tx.send(Message::Validation(revision, result)).await;
                     }));
                 }
+                Effect::ProbeSameName(space, name) => {
+                    tokio::spawn(async move {
+                        let result = client
+                            .typable_same_name(&space, &name)
+                            .await
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(Message::SameName(result)).await;
+                    });
+                }
+                Effect::RunInTerminal(space, name, existing, request) => {
+                    tokio::spawn(async move {
+                        let result = async {
+                            let command = sessionsation_ui::same_name::inline_command(
+                                &client.binary,
+                                &client.root,
+                                &request,
+                            )
+                            .context("Invalid launch request")?;
+                            client
+                                .run_in_terminal(&space, &name, &existing, &command)
+                                .await?;
+                            Ok::<_, anyhow::Error>(existing.tab.clone())
+                        }
+                        .await
+                        .map_err(|e| e.to_string());
+                        let _ = tx.send(Message::TerminalRan(result)).await;
+                    });
+                }
                 Effect::Start(request) => {
                     let journal = self.launch_journal.clone();
                     let id = request["request_id"]
@@ -386,6 +420,11 @@ impl Effects {
                     client.host(&["workspace", "list"]),
                     client.api(&["capabilities"], None)
                 )?;
+                // The tab/pane snapshot only feeds the same-name hint; a failure
+                // leaves the last one in place.
+                if let Ok(layout) = client.layout().await {
+                    let _ = tx.send(Message::Layout(layout)).await;
+                }
                 Ok::<_, anyhow::Error>((
                     serde_json::from_value(accounts)?,
                     serde_json::from_value(spaces["workspaces"].clone())?,
@@ -486,6 +525,8 @@ fn effect_kind(effect: &Effect) -> String {
         Effect::Inspect(..) => "inspect".into(),
         Effect::Validate(..) => "validate".into(),
         Effect::Start(_) => "start".into(),
+        Effect::ProbeSameName(..) => "probe_same_name".into(),
+        Effect::RunInTerminal(..) => "run_in_terminal".into(),
         Effect::Save => "save".into(),
         Effect::Exit => "exit".into(),
     }
@@ -837,6 +878,9 @@ async fn popup(preferences: Option<PathBuf>) -> Result<()> {
           Message::InputError(e)=>{app.error=e;app.exit=true;},
           Message::Inventory(result)=>{inventory_pending=false;match result{Ok((accounts,spaces,capabilities))=>{if let Ok(saved)=serde_json::to_value(&accounts){let (path,root)=(accounts_cache_path.clone(),cache_root.clone());tokio::task::spawn_blocking(move||{let _=sessionsation_ui::state_cache::save_accounts(&path,&root,&saved);});}app.launch_supported=capabilities["launch"]["version"]==1;let changed=app.manager.capabilities!=capabilities;app.manager.capabilities=capabilities;next=app.inventory(accounts,spaces,now());if changed{let intents=app.manager.refresh();next.extend(app.management(intents));}
           if !app.launch_supported{app.error="Backend launch API is not installed; creation disabled".into();}},Err(e)=>{app.manager.note=e.clone();app.error=e;app.draft.name_valid=false;}}app.dirty=true;},
+          Message::Layout(layout)=>app.set_layout(layout),
+          Message::SameName(result)=>{next=app.same_name_probed(result);},
+          Message::TerminalRan(result)=>{if let Some(tab)=app.terminal_ran(result){effects.focus(tab);}},
           Message::Managed(token,result)=>{let intents=app.manager.response(token,result);next=app.management(intents);if let Some(sessions)=app.manager.cache_out.take(){let (path,root)=(cache_path.clone(),cache_root.clone());tokio::task::spawn_blocking(move||{let _=sessionsation_ui::state_cache::save(&path,&root,&sessions);});}},
           Message::LoginLaunched(result)=>{let intents=app.manager.login_launched(result);next=app.management(intents);app.dirty=true;},
           Message::LoginScreen(key,result)=>{let intents=app.manager.login_screen(key,result);next=app.management(intents);app.dirty=true;},

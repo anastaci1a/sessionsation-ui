@@ -33,6 +33,7 @@ pub mod host_keys;
 pub mod launch_intent;
 pub mod login_link;
 
+pub mod same_name;
 pub mod trace;
 
 pub mod op_queue;

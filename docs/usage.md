@@ -691,3 +691,22 @@ missing or ambiguous context is rejected. Default-session inference is limited t
 a socket positively matching that host's default path. The wrapper sources the
 user's .bashrc while preserving the requested working directory. These details
 support compatibility and do not authorize migration of live agents.
+
+## Name already in use in the target Space
+
+New Session and Resume compare the session name with the tab labels and pane labels of the target
+existing Space (trimmed, case-insensitive, whole name; a new Space has none). A match draws a
+yellow `⚠` after the Name value, with a `(name in use)` note only on the hovered row; it follows
+the name and Space live from the tab/pane snapshot refreshed with the inventory.
+
+Confirming Start/Resume with a match first re-reads HERDR and asks: **Choose a unique name**
+(default; opens the name field), **New tab anyway**, **Run in existing terminal** and **Cancel**
+(Esc). The terminal option appears only when exactly one terminal is meant (a same-named tab with
+one pane, or a same-named pane) and HERDR shows it at its own shell prompt: no agent reported,
+and the foreground process group is the pane's shell PID with no other foreground process. It
+is checked again right before running and refused if anything changed. It runs the backend's
+inline path through HERDR `pane run`: `cd DIR && sessionsation run --account A` or
+`sessionsation resume S --expected-generation G [--confirm-unfinished]` (the latter needs
+contract 1.31), with `--permissions` as set. The pane keeps its name and the session is
+discovered by the backend as for any inline launch in HERDR; it does not go through the launch
+journal or Operations queue.

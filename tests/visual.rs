@@ -688,3 +688,93 @@ fn login_popups_match_cell_goldens_at_three_widths() {
         }
     }
 }
+
+#[test]
+fn same_name_warning_and_confirmation_match_cell_goldens() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use sessionsation_ui::{
+        app::App,
+        draft::{Directory, Draft, Space},
+        preferences::Preferences,
+        same_name::{Existing, Layout},
+    };
+    sessionsation_ui::usage::set_clock(100);
+    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    let layout = Layout::parse(
+        &serde_json::json!({"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"Work"}]}),
+        &serde_json::json!({"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent_status":"unknown"}]}),
+    );
+    let app = || {
+        let mut a = App::new(
+            Preferences::default(),
+            "/tmp".into(),
+            "test".into(),
+            serde_json::json!({}),
+            None,
+        );
+        a.page = sessionsation_ui::app::Page::Summary;
+        a.launch_supported = true;
+        a.manager.sessions_known = true;
+        a.draft = Draft {
+            account: Some("codex:personal".into()),
+            space: Some(Space::Existing {
+                id: "w1".into(),
+                label: "Example".into(),
+            }),
+            name: "Work".into(),
+            directory: Directory::Existing("/proj".into()),
+            name_valid: true,
+            directory_valid: true,
+            revision: 1,
+        };
+        a.set_layout(layout.clone());
+        a
+    };
+    for (width, height) in [(60, 20), (80, 24), (120, 30)] {
+        for name in ["warn-cursor", "warn-away", "confirm", "confirm-terminal"] {
+            let mut a = app();
+            match name {
+                "warn-cursor" => a.options.selected = 2,
+                "warn-away" => a.options.selected = 0,
+                _ => {
+                    a.options.selected = 4;
+                    a.key(enter);
+                    let existing = (name == "confirm-terminal").then(|| Existing {
+                        pane: "w1:p1".into(),
+                        tab: "w1:t1".into(),
+                    });
+                    a.same_name_probed(Ok((true, existing)));
+                }
+            }
+            a.paint(&mut Field::new(width, height, 1967), 4060, width, height);
+            let mut c = a.paint(&mut Field::new(width, height, 1967), 4060, width, height);
+            // The header carries wall-clock time; it is not under test.
+            c.cells[..width].fill(sessionsation_ui::render::Cell::default());
+            let cells: Vec<_> = c
+                .cells
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.glyph != " " || c.bg.is_some() || c.strike)
+                .map(|(i, c)| {
+                    serde_json::json!([i % width, i / width, c.glyph, c.fg, c.bg, c.bold, c.strike])
+                })
+                .collect();
+            let actual = serde_json::to_string_pretty(
+                &serde_json::json!({"width":width,"height":height,"cells":cells}),
+            )
+            .unwrap()
+                + "\n";
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/golden/same-name-{name}-{width}.json"));
+            if std::env::var_os("UPDATE_GOLDENS").is_some() {
+                std::fs::write(&path, &actual).unwrap();
+            }
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap_or_default(),
+                actual,
+                "cell snapshot differs: {}",
+                path.display()
+            );
+        }
+    }
+}

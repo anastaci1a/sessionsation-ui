@@ -790,9 +790,11 @@ impl Row {
             }
         }
         if self.warn && y < canvas.height {
-            let before: String = self.label.chars().take_while(|c| *c != '⚠').collect();
-            if before.len() < self.label.len() {
-                let at = x + 2 + UnicodeWidthStr::width(before.as_str());
+            // The marker is the label's last glyph; a name may itself contain one.
+            let end = self.label.rfind('⚠');
+            let before = end.map(|i| &self.label[..i]).unwrap_or(&self.label);
+            if end.is_some() {
+                let at = x + 2 + UnicodeWidthStr::width(before);
                 canvas.widget_text(
                     at,
                     y,
