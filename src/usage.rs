@@ -382,11 +382,11 @@ impl Usage {
     /// A parenthetical status takes the bars' unfilled grey (lighter normally,
     /// darker when de-emphasized); bold only while the cursor is on it.
     /// Hide the stub (and a missing window's unknown value) on row `y` and show
-    /// [`Usage::status_label`] in its place, bold with the cursor on it.
+    /// [`Usage::status_label`] in its place, not bold.
     fn reveal(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, digits: usize) {
         let span = self.width(bar, digits).max(bar);
         canvas.text(x, y, &" ".repeat(span), Cell::default(), false);
-        self.paint_status(canvas, x, y, bar, true);
+        self.paint_status(canvas, x, y, bar, false);
     }
     /// The stub bar standing in for an unavailable usage bar: the bar's unfilled
     /// grey, never hue-shifted, always bold, with no marker.
@@ -1342,7 +1342,7 @@ mod tests {
             );
             assert_eq!(expected.cells[120 + end + 1], c.cells[120 + end + 1]);
             assert_eq!(c.cells[120 + end + 1].fg, UNFILLED);
-            assert!(c.cells[120 + sx].bold);
+            assert_eq!(c.cells[120 + sx].bold, !u.stub());
         }
     }
     #[test]
@@ -2347,7 +2347,10 @@ mod picker_tests {
                     assert!(!row.contains('━'), "stub hidden: {row}");
                     assert!(!row.contains("?%"), "unknown value hidden: {row}");
                     for x in l.bars + 1..l.bars + 1 + UNAVAILABLE.len() {
-                        assert!(c.cells[y * width + x].bold, "cursor on it: x={x}");
+                        assert!(
+                            !c.cells[y * width + x].bold,
+                            "revealed text is not bold: x={x}"
+                        );
                         assert_eq!(c.cells[y * width + x].fg, UNFILLED, "x={x}");
                     }
                 } else {
