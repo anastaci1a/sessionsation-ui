@@ -1896,6 +1896,10 @@ pub fn picker_labels<A: std::borrow::Borrow<Account>>(accounts: &[A]) -> Vec<Str
         .iter()
         .map(|a| {
             let a: &Account = a.borrow();
+            // No usage values (unsupported, unavailable, action required): nothing extra.
+            if Usage::account(a).status_only() {
+                return None;
+            }
             let unavailable = matches!(usage_state(a), Some("missing" | "no_windows" | "error"));
             let remaining = |key: &str, duration: i64| {
                 (a.usage[key]["duration_minutes"].as_i64() == Some(duration))
@@ -1906,23 +1910,25 @@ pub fn picker_labels<A: std::borrow::Borrow<Account>>(accounts: &[A]) -> Vec<Str
                     .map(|n| format!("{:.0}", 100. - n))
                     .unwrap_or_else(|| "?".into())
             };
-            (
+            Some((
                 (a.usage["short"]["duration_minutes"] == 300).then(|| remaining("short", 300)),
                 remaining("weekly", 10080),
-            )
+            ))
         })
         .collect();
     let digits = values
         .iter()
+        .flatten()
         .flat_map(|(short, weekly)| short.iter().chain(std::iter::once(weekly)))
         .map(String::len)
         .max()
         .unwrap_or(1);
     values
         .into_iter()
-        .map(|(short, weekly)| match short {
-            Some(short) => format!("{short:>digits$}% 5h · {weekly:>digits$}% wk"),
-            None => format!("{weekly:>digits$}% wk"),
+        .map(|values| match values {
+            None => String::new(),
+            Some((Some(short), weekly)) => format!("{short:>digits$}% 5h · {weekly:>digits$}% wk"),
+            Some((None, weekly)) => format!("{weekly:>digits$}% wk"),
         })
         .collect()
 }
@@ -1933,6 +1939,12 @@ mod picker_tests {
     use serde_json::json;
     fn account(short: Option<f64>, weekly: f64) -> Account {
         serde_json::from_value(json!({"id":"codex:fixture","selectable":true,"usage":{"short":short.map(|used|json!({"duration_minutes":300,"used_percent":used})),"weekly":{"duration_minutes":10080,"used_percent":weekly}}})).unwrap()
+    }
+    #[test]
+    fn picker_shows_nothing_for_accounts_without_usage_and_keeps_alignment() {
+        let none: Account = serde_json::from_value(json!({"id":"gemini:g","provider":"gemini","selectable":true,"enabled":true,"usage_state":"unsupported","usage":{"state":"unsupported","short":null,"weekly":null}})).unwrap();
+        let labels = picker_labels(&[account(Some(95.), 20.), none, account(None, 55.)]);
+        assert_eq!(labels, [" 5% 5h · 80% wk", "", "45% wk"]);
     }
     #[test]
     fn picker_padding_is_minimal_and_all_usage_columns_align() {
@@ -1963,6 +1975,7 @@ mod picker_tests {
         let u = Usage::account(&a);
         assert_eq!(u.status, "Usage unsupported");
         assert!(u.status_only());
+        assert_eq!(picker_labels(std::slice::from_ref(&a)), [""]);
         assert_eq!(a.provider(), "antigravity");
     }
     #[test]
@@ -1984,7 +1997,7 @@ mod picker_tests {
             assert_eq!(u.status, "Usage unavailable", "{state}");
             assert!(u.status_only());
             assert!(u.windows.iter().all(|w| w.remaining.is_none()));
-            assert_eq!(picker_labels(&[a]), ["?% 5h · ?% wk"]);
+            assert_eq!(picker_labels(&[a]), [""]);
         }
         let none = claude_account(
             json!({"state":"missing","observed_at":null,"short":null,"weekly":null}),

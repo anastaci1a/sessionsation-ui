@@ -2924,7 +2924,18 @@ impl Manager {
         }
         let mut args = Self::target(&s, "switch");
         args.extend(strings(&["--to", account]));
-        self.confirm("Switch account",vec![format!("Move {} to {} while retaining conversation history? The backend waits for safe idle; it never steers.",s["name"].as_str().unwrap_or("session"),account)],args);
+        let name = s["name"].as_str().unwrap_or("session");
+        let claude = s["provider"] == "claude" || account.starts_with("claude:");
+        let text = if claude {
+            format!(
+                "Move {name} to {account} while retaining conversation history? The session's Claude process is stopped and resumed on the new account in the same pane. History moves; the old account's project memory and settings stay with the old account."
+            )
+        } else {
+            format!(
+                "Move {name} to {account} while retaining conversation history? The backend waits for safe idle; it never steers."
+            )
+        };
+        self.confirm("Switch account", vec![text], args);
     }
     fn dismiss(&mut self) {
         self.login_link = None;
@@ -4602,6 +4613,36 @@ impl Manager {
                 // action going stale: read the session again instead of a notice.
                 if matches!(purpose, Purpose::Observe(_)) && stale_error(&e) {
                     return self.refresh_sessions();
+                }
+                if self.foreground == Some(token)
+                    && matches!(self.form, Form::Progress)
+                    && self.mutation.first().is_some_and(|c| c == "switch")
+                    && !self.mutation.iter().any(|a| a == "--accept-risks")
+                    && e.contains("RISK_CONFIRMATION_REQUIRED")
+                {
+                    // Busy Claude session: --accept-risks only after this explicit choice.
+                    let mut args = self.mutation.clone();
+                    if let Some(i) = args.iter().position(|a| a == "--session")
+                        && let Some(s) = args.get(i + 1).and_then(|id| self.session(id))
+                        && let Some(g) = s["generation"].as_str()
+                        && let Some(j) = args.iter().position(|a| a == "--expected-generation")
+                        && j + 1 < args.len()
+                    {
+                        args[j + 1] = g.to_owned();
+                    }
+                    args.push("--accept-risks".into());
+                    self.foreground = None;
+                    self.show(
+                        "Switch anyway?",
+                        vec![
+                            "This session is busy. Switching now interrupts the current turn."
+                                .into(),
+                        ],
+                        &["Switch anyway", "Cancel"],
+                        Form::Confirm(args),
+                    );
+                    self.dialog.as_mut().unwrap().selected = 1;
+                    return vec![];
                 }
                 self.note = e.clone();
                 if self.foreground == Some(token)
@@ -6349,6 +6390,54 @@ mod tests {
                 "n-none-b"
             ]
         );
+    }
+    #[test]
+    fn claude_switch_wording_is_claude_specific_and_codex_keeps_its_text() {
+        let mut m = setup();
+        let s = |p: &str| json!({"id":"two","name":"Cur","provider":p,"generation":"g1","capabilities":{"switch_account":true}});
+        m.sessions = vec![s("claude")];
+        m.switch_confirmation(s("claude"), "claude:b");
+        let body = m.dialog.as_ref().unwrap().body[0].clone();
+        assert!(body.contains("stopped and resumed on the new account in the same pane"));
+        assert!(body.contains("project memory and settings stay with the old account"));
+        assert!(!body.contains("never steers"));
+        m.sessions = vec![s("codex")];
+        m.switch_confirmation(s("codex"), "codex:b");
+        assert!(m.dialog.as_ref().unwrap().body[0].contains("never steers"));
+    }
+    #[test]
+    fn busy_claude_switch_asks_again_and_only_then_accepts_risks() {
+        for button in [1usize, 0] {
+            let mut m = setup();
+            let s = json!({"id":"two","name":"Cur","provider":"claude","generation":"g1","capabilities":{"switch_account":true}});
+            m.sessions = vec![s.clone()];
+            m.switch_confirmation(s, "claude:b");
+            let sent = m.submit(0, vec![]);
+            let Intent::Api(token, args) = &sent[0] else {
+                panic!()
+            };
+            assert!(!args.iter().any(|a| a == "--accept-risks"));
+            m.sessions[0]["generation"] = json!("g2");
+            m.response(*token, Err("RISK_CONFIRMATION_REQUIRED: busy".into()));
+            let d = m.dialog.as_ref().unwrap();
+            assert!(d.body[0].contains("interrupts the current turn"));
+            assert_eq!(d.selected, 1, "Cancel is the default");
+            let (b0, b1) = (d.buttons[0].label.clone(), d.buttons[1].label.clone());
+            assert_eq!((b0.as_str(), b1.as_str()), ("Switch anyway", "Cancel"));
+            if button == 1 {
+                assert!(m.submit(1, vec![]).is_empty());
+                continue;
+            }
+            let sent = m.submit(0, vec![]);
+            let Intent::Api(_, args) = &sent[0] else {
+                panic!()
+            };
+            assert!(args.iter().any(|a| a == "--accept-risks"));
+            assert!(
+                args.windows(2)
+                    .any(|w| w == ["--expected-generation", "g2"])
+            );
+        }
     }
     #[test]
     fn switching_confirms_latest_snapshot_and_progress_returns_to_sessions() {
