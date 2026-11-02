@@ -307,15 +307,16 @@ impl Usage {
             } else {
                 self.paint_status(canvas, x, y, bar, true);
             }
-            canvas.accent_text(
+            // The selector takes the parenthetical's own colour.
+            canvas.text(
                 sx + UnicodeWidthStr::width(label.as_str()),
                 y,
                 " ◀",
-                Accent {
-                    bold: false,
-                    flash: false,
-                    ..Accent::default()
+                Cell {
+                    fg: UNFILLED,
+                    ..Cell::default()
                 },
+                false,
             );
             return;
         }
@@ -378,8 +379,8 @@ impl Usage {
             }
         }
     }
-    /// A parenthetical status takes the usage bars' hue level; bold only while
-    /// the cursor is on it.
+    /// A parenthetical status takes the bars' unfilled grey (lighter normally,
+    /// darker when de-emphasized); bold only while the cursor is on it.
     /// Hide the stub (and a missing window's unknown value) on row `y` and show
     /// [`Usage::status_label`] in its place, bold with the cursor on it.
     fn reveal(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, digits: usize) {
@@ -403,16 +404,16 @@ impl Usage {
         );
     }
     fn paint_status(&self, canvas: &mut Canvas, x: usize, y: usize, bar: usize, bold: bool) {
-        canvas.accent_text(
+        canvas.text(
             self.status_x(x, bar),
             y,
             &self.status_label(),
-            Accent {
-                brightness: BAR_LEVEL,
+            Cell {
+                fg: UNFILLED,
                 bold,
-                flash: false,
-                ..Accent::default()
+                ..Cell::default()
             },
+            false,
         );
     }
     pub fn paint_selected(
@@ -974,6 +975,16 @@ fn pulse_row(
     }
 }
 #[cfg(test)]
+/// The bars' unfilled grey for a state: darker with the cursor off the
+/// accounts (top options) or on another account's usage, else lighter.
+fn grey_for(back: bool, focus: bool, selected: Option<usize>, index: usize) -> [u8; 3] {
+    if back || selected.is_none() || focus && selected != Some(index) {
+        [93; 3]
+    } else {
+        UNFILLED
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -1234,7 +1245,7 @@ mod tests {
                 assert_eq!(cell.bold, on, "{selected:?} {back} {focus}");
                 assert_eq!(
                     cell.fg,
-                    expected.cells[3 * 100 + x].fg,
+                    grey_for(back, focus, selected, 0),
                     "{selected:?} {back} {focus} x={x}"
                 );
             }
@@ -1319,17 +1330,18 @@ mod tests {
             let end = sx + UnicodeWidthStr::width(u.status_label().as_str());
             assert_eq!(c.cells[120 + end].glyph, " ");
             assert_eq!(c.cells[120 + end + 1].glyph, "◀");
-            expected.accent_text(
+            expected.text(
                 end,
                 2,
                 " ◀",
-                Accent {
-                    bold: false,
-                    flash: false,
-                    ..Accent::default()
+                Cell {
+                    fg: UNFILLED,
+                    ..Cell::default()
                 },
+                false,
             );
             assert_eq!(expected.cells[120 + end + 1], c.cells[120 + end + 1]);
+            assert_eq!(c.cells[120 + end + 1].fg, UNFILLED);
             assert!(c.cells[120 + sx].bold);
         }
     }
@@ -1346,19 +1358,8 @@ mod tests {
         assert_eq!(u.height(), 1);
         let mut c = Canvas::new(60, 5);
         u.paint_selected(&mut c, 1, 1, 20, 3, true);
-        let mut expected = Canvas::new(60, 5);
         let sx = u.status_x(1, 20);
-        expected.accent_text(
-            sx,
-            1,
-            "(disabled)",
-            Accent {
-                bold: false,
-                flash: false,
-                ..Accent::default()
-            },
-        );
-        assert_eq!(c.cells[60 + sx].fg, expected.cells[60 + sx].fg);
+        assert_eq!(c.cells[60 + sx].fg, UNFILLED);
         assert!(!c.cells[60 + sx].bold);
         assert!(c.cells.iter().all(|c| c.glyph != "━"));
         assert_eq!(display_name("abcdefghijklmnopqrstuvwx"), "abcdefghijklmno…");
@@ -2347,6 +2348,7 @@ mod picker_tests {
                     assert!(!row.contains("?%"), "unknown value hidden: {row}");
                     for x in l.bars + 1..l.bars + 1 + UNAVAILABLE.len() {
                         assert!(c.cells[y * width + x].bold, "cursor on it: x={x}");
+                        assert_eq!(c.cells[y * width + x].fg, UNFILLED, "x={x}");
                     }
                 } else {
                     assert_eq!(at, None, "{selected:?} {focus} y={y}: {row}");
@@ -2375,7 +2377,7 @@ mod picker_tests {
         (Some(1), false, true),
         (Some(1), true, true),
     ];
-    /// Action-required parentheticals behave exactly like the filled (hue-shifted)
+    /// Action-required parentheticals take the unfilled grey (no hue) of the bars
     /// part of a real bar in the same row and state, cell by cell: same hue and
     /// level, dimmed whenever the bars dim. Bold only with the cursor on them.
     #[test]
@@ -2422,14 +2424,13 @@ mod picker_tests {
                     let (cell, bar) = (&c.cells[width + x], &bar.cells[width + x]);
                     assert_eq!(bar.glyph, "━", "filled at x={x}");
                     assert_eq!(
-                        cell.fg, bar.fg,
+                        cell.fg,
+                        grey_for(back, focus, selected, 0),
                         "{details} {selected:?} {back} {focus} x={x}"
                     );
                     assert_eq!(cell.bold, on, "{details} {selected:?} {back} {focus} x={x}");
                 }
-                let mut bright = base.clone();
-                Usage::account(&full).paint(&mut bright, l.bars, 1, l.bar_width, l.digits);
-                dimmed |= c.cells[width + sx].fg != bright.cells[width + sx].fg;
+                dimmed |= c.cells[width + sx].fg != UNFILLED;
             }
             assert!(dimmed, "some states dim the status like the bars");
         }
@@ -2481,6 +2482,35 @@ mod picker_tests {
                 }
             }
             assert_eq!(seen.len(), 2, "bright and dimmed gray: {seen:?}");
+        }
+    }
+    /// State to colour for a parenthetical: top option darker, names column
+    /// lighter, selected row bold lighter; the selector shares the colour.
+    #[test]
+    fn parenthetical_state_maps_to_the_bars_unfilled_grey_and_bold() {
+        let u = Usage {
+            status: "Login required".into(),
+            windows: vec![],
+            stale: false,
+            age: None,
+            age_inline: true,
+        };
+        // (paint, grey, bold)
+        type Paint = fn(&Usage, &mut Canvas);
+        let states: [(Paint, [u8; 3], bool); 3] = [
+            (|u, c| u.paint_deemphasized(c, 2, 1, 20, 2), [93; 3], false),
+            (|u, c| u.paint(c, 2, 1, 20, 2), UNFILLED, false),
+            (|u, c| u.paint_focused(c, 2, 1, 20, 2), UNFILLED, true),
+        ];
+        for (paint, grey, bold) in states {
+            let mut c = Canvas::new(60, 4);
+            paint(&u, &mut c);
+            let sx = u.status_x(2, 20);
+            let len = UnicodeWidthStr::width(u.status_label().as_str());
+            for x in sx..sx + len {
+                assert_eq!(c.cells[60 + x].fg, grey, "x={x}");
+                assert_eq!(c.cells[60 + x].bold, bold, "x={x}");
+            }
         }
     }
 }
