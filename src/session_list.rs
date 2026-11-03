@@ -677,9 +677,9 @@ pub fn rows_with_archives(sessions: &[Value], known: bool, archives: bool) -> Ve
     rows.push(Row::yes("Operations"));
     rows
 }
-/// Name budget grows with the popup: about 30% of its width, 12–40 cells.
+/// Name budget grows with the popup: about 30% of its width, 12–40 cells, plus 4.
 pub fn name_budget(width: usize) -> usize {
-    (width * 3 / 10).clamp(12, 40)
+    (width * 3 / 10).clamp(12, 40) + 4
 }
 /// Start (Unix seconds) of the session's attachment process, when the backend
 /// reports `attachment.process_start` (Linux /proc start ticks) and that same
@@ -2022,10 +2022,10 @@ mod tests {
     }
     #[test]
     fn name_budget_scales_with_width_and_unselected_names_truncate() {
-        assert_eq!(name_budget(40), 12);
-        assert_eq!(name_budget(80), 24);
-        assert_eq!(name_budget(110), 33);
-        assert_eq!(name_budget(400), 40);
+        assert_eq!(name_budget(40), 16);
+        assert_eq!(name_budget(80), 28);
+        assert_eq!(name_budget(110), 37);
+        assert_eq!(name_budget(400), 44);
         let long = "abcdefghijklmnopqrstuvwxyz0123456789abcdefghij";
         let sessions = vec![
             json!({"id":"a","name":"short","account_id":"codex:p","availability":"saved"}),
@@ -2077,8 +2077,11 @@ mod tests {
             19,
         );
         let (selected, other) = (text(&c, 3), text(&c, 4));
-        assert!(selected.contains("efghij"), "{selected}");
-        assert!(!selected.contains('…'), "{selected}");
+        assert!(selected.contains("…fghij"), "{selected}");
+        assert!(
+            selected.matches('…').count() == 2,
+            "scrolling edges show …: {selected}"
+        );
         assert!(other.contains("abcdef"), "{other}");
         assert!(
             other.contains('…'),

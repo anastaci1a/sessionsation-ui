@@ -4,7 +4,7 @@ use crate::{
     dialog::{self, Dialog, Field, Palette, Rule},
     render::Canvas,
     usage::{AccountsLayout, Usage, account_title},
-    widgets::{NAME_MAX_CHARS, Options, Row, hint_lines},
+    widgets::{Options, Row, account_name_max, hint_lines},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
@@ -1181,7 +1181,7 @@ impl Manager {
             Form::AccountRenameBackend(a.id.clone(), current.clone(), mismatch),
         );
         let mut field = Field::new("Display name", current);
-        field.input = field.input.limited(NAME_MAX_CHARS);
+        field.input = field.input.limited(account_name_max());
         self.dialog.as_mut().unwrap().fields.push(field);
         self.sync_rename_dialog();
     }
@@ -3459,7 +3459,8 @@ impl Manager {
     fn add_for(&mut self, provider: &str) {
         let label = crate::client::provider_label(provider);
         let mut body = vec![format!(
-            "{label} account name: 1–{NAME_MAX_CHARS} letters, digits, hyphens or underscores."
+            "{label} account name: 1–{} letters, digits, hyphens or underscores.",
+            account_name_max()
         )];
         if matches!(provider, "claude" | "gemini" | "antigravity") {
             body.push(format!(
@@ -4408,13 +4409,14 @@ impl Manager {
             Form::Add(provider) => {
                 let name = value(0);
                 if name.is_empty()
-                    || name.len() > NAME_MAX_CHARS
+                    || name.len() > account_name_max()
                     || !name
                         .bytes()
                         .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
                 {
                     self.dialog.as_mut().unwrap().body = vec![format!(
-                        "Use 1–{NAME_MAX_CHARS} letters, digits, hyphens or underscores."
+                        "Use 1–{} letters, digits, hyphens or underscores.",
+                        account_name_max()
                     )];
                     return vec![];
                 }
@@ -5726,7 +5728,7 @@ mod tests {
         };
         assert!(line(4).contains("… · 1234"), "{}", line(4));
         // The selected name scrolls (from its start) instead of ending in `…`.
-        assert!(line(3).contains("a-ver · 7792"), "{}", line(3));
+        assert!(line(3).contains("a-very-lo · 7792"), "{}", line(3));
         let mut c = Canvas::new(40, 24);
         c.clock = crate::widgets::MARQUEE_PAUSE_MS;
         m.paint_at(&mut c, 23, 100);
@@ -5734,7 +5736,7 @@ mod tests {
             .iter()
             .map(|c| c.glyph.as_str())
             .collect();
-        assert!(line.contains("-very · 7792"), "{line}");
+        assert!(line.contains("-very-lo… · 7792"), "{line}");
     }
     #[test]
     fn loading_confirmation_and_operation_share_the_opened_frame() {

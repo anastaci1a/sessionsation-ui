@@ -9,7 +9,31 @@ pub const SELECTED: [u8; 3] = [238; 3];
 /// Static palette yellow/orange (indexed 214) for warning marks.
 pub const WARN: [u8; 3] = [255, 175, 0];
 pub const UNSET: &str = "not set";
+/// Name length used when the backend advertises no limit (older backends).
 pub const NAME_MAX_CHARS: usize = 30;
+static SESSION_NAME_MAX: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(NAME_MAX_CHARS);
+static ACCOUNT_NAME_MAX: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(NAME_MAX_CHARS);
+/// A positive integer limit from `capabilities[key]`, else the old default.
+pub fn name_limit(capabilities: &serde_json::Value, key: &str) -> usize {
+    capabilities[key]
+        .as_u64()
+        .filter(|n| *n > 0)
+        .map_or(NAME_MAX_CHARS, |n| n.min(4096) as usize)
+}
+/// Adopt the limits advertised in the backend `capabilities` (missing: 30).
+pub fn set_name_limits(capabilities: &serde_json::Value) {
+    use std::sync::atomic::Ordering::Relaxed;
+    SESSION_NAME_MAX.store(name_limit(capabilities, "session_name_max"), Relaxed);
+    ACCOUNT_NAME_MAX.store(name_limit(capabilities, "new_account_name_max"), Relaxed);
+}
+pub fn session_name_max() -> usize {
+    SESSION_NAME_MAX.load(std::sync::atomic::Ordering::Relaxed)
+}
+pub fn account_name_max() -> usize {
+    ACCOUNT_NAME_MAX.load(std::sync::atomic::Ordering::Relaxed)
+}
 pub use crate::navigation::{Navigation, SelectionNavigation};
 
 #[derive(Clone, Default)]
@@ -151,8 +175,22 @@ impl TextInput {
             ..Cell::default()
         };
         let before = &self.value[..self.cursor];
-        let elided = usize::from(width > 3 && UnicodeWidthStr::width(before) > width - 3);
-        let skip = UnicodeWidthStr::width(before).saturating_sub(width - 3 - elided);
+        let before_width = UnicodeWidthStr::width(before);
+        let total_width = UnicodeWidthStr::width(self.value.as_str());
+        // Scroll to keep the cursor visible: `…` first when text is hidden on the
+        // left, and `…` last when text stays hidden on the right (one spare cell
+        // after the cursor is kept for it).
+        let window = |margin: usize| {
+            let elided = usize::from(width > margin && before_width > width - margin);
+            let skip = before_width.saturating_sub(width.saturating_sub(margin + elided));
+            let hidden_right = total_width.saturating_sub(skip) > width - 2 - elided;
+            (elided, skip, hidden_right)
+        };
+        let (mut elided, mut skip, mut hidden_right) = window(3);
+        if hidden_right {
+            (elided, skip, hidden_right) = window(4);
+        }
+        let room = width - 2 - elided - usize::from(hidden_right);
         let mut removed = 0;
         let visible: String = self
             .value
@@ -167,13 +205,17 @@ impl TextInput {
             })
             .scan(0, |used, g| {
                 *used += UnicodeWidthStr::width(g);
-                (*used <= width - 2 - elided).then_some(g)
+                (*used <= room).then_some(g)
             })
             .collect();
         canvas.widget_text(
             x,
             y,
-            &format!("> {}{visible}", if elided > 0 { "…" } else { "" }),
+            &format!(
+                "> {}{visible}{}",
+                if elided > 0 { "…" } else { "" },
+                if hidden_right { "…" } else { "" }
+            ),
             style.clone(),
             true,
         );
@@ -1136,8 +1178,8 @@ pub fn frame_time(canvas: &Canvas) -> u64 {
 /// Text that overflows `width` cells, `elapsed` ms into its marquee loop. A
 /// cycle pauses on the start for [`MARQUEE_PAUSE_MS`], then moves one grapheme
 /// left every [`MARQUEE_STEP_MS`] around `text + MARQUEE_GAP + text …` until the
-/// start is back in place, and repeats. Frames are exactly `width` cells and
-/// never ellipsized; text that fits is returned as is.
+/// start is back in place, and repeats. Frames are exactly `width` cells; an
+/// edge with more than one hidden grapheme of the text shows `…`. Text that fits is returned as is.
 pub fn marquee(text: &str, width: usize, elapsed: u64) -> String {
     if UnicodeWidthStr::width(text) <= width {
         return text.to_owned();
@@ -1154,15 +1196,44 @@ pub fn marquee(text: &str, width: usize, elapsed: u64) -> String {
     } else {
         ((t - MARQUEE_PAUSE_MS) / MARQUEE_STEP_MS) as usize + 1
     };
-    let mut frame = String::new();
+    let text_len = text
+        .graphemes(true)
+        .filter(|g| UnicodeWidthStr::width(*g) > 0)
+        .count();
+    let mut shown: Vec<&str> = vec![];
     let mut used = 0;
     for g in ring.iter().cycle().skip(offset) {
         let w = UnicodeWidthStr::width(*g);
         if used + w > width {
             break;
         }
-        frame.push_str(g);
+        shown.push(g);
         used += w;
+    }
+    // More than one grapheme of the text off a side: that edge shows `…` (one
+    // hidden grapheme just shows as itself; a window in the gap hides nothing).
+    // The opening pause is not scrolling yet and shows the plain start.
+    let left_hidden = if offset < text_len { offset } else { 0 };
+    let end = offset + shown.len();
+    let right_hidden = if offset > 0 && end <= text_len {
+        text_len - end
+    } else {
+        0
+    };
+    let mark = |g: &str| {
+        format!(
+            "…{}",
+            " ".repeat(UnicodeWidthStr::width(g).saturating_sub(1))
+        )
+    };
+    let mut frame = String::new();
+    let last = shown.len().saturating_sub(1);
+    for (i, g) in shown.iter().enumerate() {
+        if (i == 0 && left_hidden > 1) || (i == last && i != 0 && right_hidden > 1) {
+            frame.push_str(&mark(g));
+        } else {
+            frame.push_str(g);
+        }
     }
     // A wide glyph that would straddle the right edge leaves a blank cell.
     frame.push_str(&" ".repeat(width - used));
@@ -1700,13 +1771,13 @@ mod tests {
         let (pause, step) = (MARQUEE_PAUSE_MS, MARQUEE_STEP_MS);
         assert_eq!(MARQUEE_GAP, "  ");
         let frame = |t: u64| marquee("abcdefgh", 5, t);
-        // The opening pause shows the start, without an ellipsis.
+        // The opening pause shows the plain start (not scrolling yet).
         for t in [0, pause / 2, pause - 1] {
             assert_eq!(frame(t), "abcde", "pause at {t}");
         }
         // Then one grapheme left per step, all the way around the loop.
         let steps = [
-            "bcdef", "cdefg", "defgh", "efgh ", "fgh  ", "gh  a", "h  ab", "  abc", " abcd",
+            "bcde…", "…defg", "…efgh", "…fgh ", "…gh  ", "…h  a", "…  ab", "  abc", " abcd",
         ];
         for (k, want) in steps.iter().enumerate() {
             let t = pause + step * k as u64;
@@ -1715,13 +1786,17 @@ mod tests {
         }
         // Exactly two blank cells separate the end from the next start.
         assert!(frame(pause + step * 5).contains("h  a"));
-        assert!(!steps.iter().any(|f| f.contains("   ") || f.contains('…')));
+        // Two or more hidden graphemes on a side show `…`; exactly one shows itself.
+        assert_eq!(frame(pause), "bcde…");
+        assert_eq!(frame(pause + step), "…defg");
+
+        assert!(!steps.iter().any(|f| f.contains("   ")));
         // The start returns to its place and the next cycle pauses again.
         let period = pause + step * steps.len() as u64;
         for t in [period, period + pause - 1] {
             assert_eq!(frame(t), "abcde", "second pause at {t}");
         }
-        assert_eq!(frame(period + pause), "bcdef");
+        assert_eq!(frame(period + pause), "bcde…");
         // Every frame fills its width; text that fits never moves.
         assert!((0..period).all(|t| UnicodeWidthStr::width(frame(t).as_str()) == 5));
         assert_eq!(marquee("short", 5, pause + step * 3), "short");
@@ -1735,7 +1810,7 @@ mod tests {
             assert_eq!(fit_selectable("abcdefgh", 5, now, false), "abcd…");
         }
         assert_eq!(fit_selectable("abcdefgh", 5, 0, true), "abcde");
-        assert_eq!(fit_selectable("abcdefgh", 5, t, true), "defgh");
+        assert_eq!(fit_selectable("abcdefgh", 5, t, true), "…efgh");
         assert_eq!(fit_selectable("abc", 5, t, true), "abc");
         // A menu row: the static ellipsized label until it is selected.
         let row = Row::overflowing("abcdefghijklmnop", 8, true);
@@ -1750,7 +1825,7 @@ mod tests {
                 .collect::<String>()
         };
         assert_eq!(line(false), "abcdefg…");
-        assert_eq!(line(true), "defghijk");
+        assert_eq!(line(true), "…efghij…");
     }
     #[test]
     fn titles_scroll_on_their_own() {
@@ -1771,12 +1846,12 @@ mod tests {
                 .collect::<String>()
         };
         assert_eq!(title(0), "Account se");
-        assert_eq!(title(MARQUEE_PAUSE_MS), "ccount set");
+        assert_eq!(title(MARQUEE_PAUSE_MS), "ccount se…");
         let period = MARQUEE_PAUSE_MS + MARQUEE_STEP_MS * 17;
         assert_eq!(title(period - 1), " Account s");
         assert_eq!(title(period), "Account se");
         // Info text below a list scrolls the same way with nothing selected.
-        assert_eq!(fit_scrolling("abcdefgh", 5, MARQUEE_PAUSE_MS), "bcdef");
+        assert_eq!(fit_scrolling("abcdefgh", 5, MARQUEE_PAUSE_MS), "bcde…");
     }
     #[test]
     fn scrolling_keeps_each_cell_style() {
@@ -1853,6 +1928,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn name_limits_follow_capabilities_and_fall_back_to_thirty() {
+        let caps = serde_json::json!({"session_name_max": 64, "new_account_name_max": 48});
+        assert_eq!(name_limit(&caps, "session_name_max"), 64);
+        assert_eq!(name_limit(&caps, "new_account_name_max"), 48);
+        for bad in [
+            serde_json::json!({}),
+            serde_json::json!(null),
+            serde_json::json!({"session_name_max": "64"}),
+            serde_json::json!({"session_name_max": 0}),
+            serde_json::json!({"session_name_max": -3}),
+            serde_json::json!({"session_name_max": null}),
+        ] {
+            assert_eq!(name_limit(&bad, "session_name_max"), NAME_MAX_CHARS);
+        }
+        assert_eq!(NAME_MAX_CHARS, 30);
+    }
+    #[test]
+    fn overflowing_input_scrolls_with_ellipses_on_both_sides() {
+        let row = |input: &TextInput| {
+            let mut canvas = Canvas::new(12, 1);
+            input.paint(&mut canvas, 0, 0, 12, true);
+            let text: String = canvas.cells.iter().map(|c| c.glyph.as_str()).collect();
+            (text, canvas.cursor)
+        };
+        let mut input = TextInput::new("abcdefghijklmnopqrstuvwxyz".into());
+        // Cursor at the end: only the left side is hidden.
+        let (text, cursor) = row(&input);
+        assert!(
+            text.starts_with("> …") && !text.trim_end().ends_with('…'),
+            "{text}"
+        );
+        assert!(cursor.is_some_and(|(x, _)| x < 12));
+        // Cursor in the middle: hidden on both sides.
+        for _ in 0..10 {
+            input.edit(KeyCode::Left);
+        }
+        let (text, cursor) = row(&input);
+        assert!(
+            text.starts_with("> …") && text.trim_end().ends_with('…'),
+            "{text}"
+        );
+        assert!(cursor.is_some_and(|(x, _)| x < 11), "{cursor:?}");
+        // Cursor at the start: only the right side is hidden.
+        input.edit(KeyCode::Home);
+        let (text, _) = row(&input);
+        assert_eq!(text.trim_end(), "> abcdefghi…");
+        // Short text never shows an ellipsis.
+        let (text, _) = row(&TextInput::new("short".into()));
+        assert!(!text.contains('…'), "{text}");
+    }
     #[test]
     fn overflowing_input_shows_an_ellipsis_and_keeps_the_full_value() {
         let mut input = TextInput::new("/projects/deeper/path".into());

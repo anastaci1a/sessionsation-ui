@@ -1,7 +1,7 @@
 //! Shared, nonblocking dialogs. Validation and cancellation never depend on focus.
 use crate::{
     render::{Canvas, Cell},
-    widgets::{NAME_MAX_CHARS, Row, TextInput},
+    widgets::{Row, TextInput, account_name_max, session_name_max},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
@@ -75,11 +75,12 @@ impl Field {
         }
     }
     pub fn validated(mut self, rule: Rule) -> Self {
-        if matches!(
-            rule,
-            Rule::AccountName | Rule::Name | Rule::SpaceName | Rule::Rename(_)
-        ) {
-            self.input = self.input.limited(NAME_MAX_CHARS);
+        match rule {
+            Rule::AccountName => self.input = self.input.limited(account_name_max()),
+            Rule::Name | Rule::SpaceName | Rule::Rename(_) => {
+                self.input = self.input.limited(session_name_max())
+            }
+            _ => {}
         }
         self.rule = rule;
         self
@@ -170,7 +171,7 @@ impl Field {
                 .is_ok_and(|n| n.is_finite() && (0. ..=100.).contains(&n)),
             Rule::AccountName => {
                 !v.is_empty()
-                    && v.len() <= NAME_MAX_CHARS
+                    && v.len() <= account_name_max()
                     && v.bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
             }
@@ -178,7 +179,7 @@ impl Field {
             Rule::Name | Rule::Rename(_) => {
                 !v.is_empty()
                     && v.trim() == v
-                    && v.chars().count() <= NAME_MAX_CHARS
+                    && v.chars().count() <= session_name_max()
                     && !v.chars().any(char::is_control)
             }
         }
@@ -1079,6 +1080,19 @@ mod tests {
                 assert!(row.starts_with("┌Popup Title──"));
             }
         }
+    }
+    #[test]
+    fn name_fields_use_the_advertised_limits() {
+        let session = Field::new("Name", "").validated(Rule::Name);
+        assert_eq!(
+            session.input.max_chars,
+            Some(crate::widgets::session_name_max())
+        );
+        let account = Field::new("Name", "").validated(Rule::AccountName);
+        assert_eq!(
+            account.input.max_chars,
+            Some(crate::widgets::account_name_max())
+        );
     }
     #[test]
     fn limited_editors_and_only_focused_field_has_a_cursor() {

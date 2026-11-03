@@ -7,7 +7,7 @@ use crate::{
         NewSessionPermissions, Preferences, Starfield, choice_arrow,
     },
     render::{Accent, Canvas, Cell, Field},
-    widgets::{NAME_MAX_CHARS, Options, Row, TextInput, UNSET},
+    widgets::{Options, Row, TextInput, UNSET, session_name_max},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
@@ -399,11 +399,11 @@ impl App {
     fn name_valid(&self, name: &str) -> bool {
         if self.resume.is_some() {
             !name.is_empty()
-                && name.chars().count() <= NAME_MAX_CHARS
+                && name.chars().count() <= session_name_max()
                 && name.trim() == name
                 && !name.chars().any(char::is_control)
         } else {
-            valid_name(name) && name.chars().count() <= NAME_MAX_CHARS
+            valid_name(name) && name.chars().count() <= session_name_max()
         }
     }
     fn ready(&self) -> bool {
@@ -813,7 +813,7 @@ impl App {
         self.options.back = false;
         self.input.value = text;
         self.input.cursor = self.input.value.len();
-        self.input.max_chars = (self.page == Page::Name).then_some(NAME_MAX_CHARS);
+        self.input.max_chars = (self.page == Page::Name).then_some(session_name_max());
         self.listing = Listing::default();
         self.error.clear();
         self.dirty = true;
@@ -865,7 +865,7 @@ impl App {
             self.options.preview_visible = false;
             self.input.value = old.text;
             self.input.cursor = self.input.value.len();
-            self.input.max_chars = (self.page == Page::Name).then_some(NAME_MAX_CHARS);
+            self.input.max_chars = (self.page == Page::Name).then_some(session_name_max());
             self.listing = old.listing;
             self.listing_pending = old.listing_pending;
             self.popup_size = old.popup_size;
