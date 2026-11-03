@@ -39,6 +39,10 @@ pub struct Badge {
     pub active: bool,
     /// Waiting in the UI operation queue; not started yet.
     pub queued: bool,
+    /// Finished successfully (drawn `✓`).
+    pub ok: bool,
+    /// How many operations the badge stands for (more than one: a `(n)` count).
+    pub count: usize,
 }
 /// Operation spinner frames (badges, the Operations popup and the status summary).
 pub const OPERATION_SPINNER_FRAMES: [&str; 4] = ["◜", "◝", "◞", "◟"];
@@ -58,6 +62,8 @@ impl Badge {
             operation_spinner(now_ms)
         } else if self.queued {
             QUEUED_ICON
+        } else if self.ok {
+            "✓"
         } else {
             "✗"
         }
@@ -1107,7 +1113,14 @@ pub fn paint_with(
                         y,
                         icon,
                         Cell {
-                            fg: dim(if badge.queued { SECONDARY } else { FAILURE }, options.back),
+                            fg: dim(
+                                if badge.queued || badge.ok {
+                                    SECONDARY
+                                } else {
+                                    FAILURE
+                                },
+                                options.back,
+                            ),
                             ..Cell::default()
                         },
                         false,
@@ -1658,6 +1671,42 @@ mod tests {
         assert_eq!(c.cells[3 * 100 + sel_name].fg, level(sel_name, 3, 600));
     }
     #[test]
+    fn counted_and_finished_badges_draw_their_icons() {
+        let sessions = sessions();
+        let badge = |text: &str, active: bool, ok: bool, count: usize| Badge {
+            kind: "session-operations".into(),
+            id: "a".into(),
+            text: text.into(),
+            active,
+            queued: false,
+            ok,
+            count,
+        };
+        let row = |b: Badge| {
+            let mut badges = std::collections::BTreeMap::new();
+            badges.insert("a".to_owned(), b);
+            let mut c = crate::render::Field::new(100, 20, 1967).paint(0);
+            paint_with(
+                &mut c,
+                &mut Options::default(),
+                &sessions,
+                true,
+                18,
+                62,
+                19,
+                Extras {
+                    badges: Some(&badges),
+                    ..Extras::default()
+                },
+            );
+            text(&c, 3)
+        };
+        assert!(row(badge("(3)", true, false, 3)).contains("◜ (3)"));
+        assert!(row(badge("(2)", false, true, 2)).contains("✓ (2)"));
+        assert!(row(badge("(2)", false, false, 2)).contains("✗ (2)"));
+        assert!(row(badge("move done", false, true, 1)).contains("✓ move done"));
+    }
+    #[test]
     fn selected_account_and_static_icon_are_bold_until_the_badge_takes_focus() {
         // Row 3: busy codex (animated icon); row 4: idle claude (static icon).
         let sessions = sessions();
@@ -1671,6 +1720,8 @@ mod tests {
                     text: "moving".into(),
                     active: true,
                     queued: false,
+                    ok: false,
+                    count: 1,
                 },
             );
         }
@@ -2264,6 +2315,8 @@ mod tests {
                 text: "moving to work".into(),
                 active: true,
                 queued: false,
+                ok: false,
+                count: 1,
             },
         );
         badges.insert(
@@ -2274,6 +2327,8 @@ mod tests {
                 text: "move failed".into(),
                 active: false,
                 queued: false,
+                ok: false,
+                count: 1,
             },
         );
         let draw = |now: u64, focus: bool| {
@@ -2317,6 +2372,8 @@ mod tests {
                 text: "moving to work".into(),
                 active: true,
                 queued: false,
+                ok: false,
+                count: 1,
             },
         );
         let draw = |focus: bool| {

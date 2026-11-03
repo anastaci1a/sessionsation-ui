@@ -60,6 +60,10 @@ enum Command {
     },
     Popup,
     Open,
+    /// Marks every operation the backend lists as finished dismissed (adds to
+    /// `dismissed-operations.json` beside the preferences; running ones are untouched).
+    #[command(hide = true)]
+    DismissFinished,
     /// Runs a backend login plan handed over by the manager in a plugin pane.
     #[command(hide = true)]
     LoginRun,
@@ -579,6 +583,7 @@ async fn run() -> Result<()> {
             benchmark();
             Ok(())
         }
+        Command::DismissFinished => dismiss_finished(args.preferences).await,
         Command::LoginRun => login_run(),
         Command::Open => {
             let client = Client::load()?;
@@ -667,6 +672,38 @@ fn login_run() -> Result<()> {
     } else {
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
+    Ok(())
+}
+/// Non-interactive: add every finished backend operation to the dismissed set the
+/// popup reads, through the same file and format as an in-popup dismissal.
+async fn dismiss_finished(preferences: Option<PathBuf>) -> Result<()> {
+    let client = Client::load()?;
+    let pref =
+        preferences.unwrap_or_else(|| sessionsation_ui::client::preferences_path(&config_path()));
+    let path = pref.with_file_name("dismissed-operations.json");
+    let listed = client.api(&["operations"], None).await?;
+    let mut dismissed: std::collections::BTreeSet<String> =
+        sessionsation_ui::state_cache::load_dismissed(&path, &client.root)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+    let before = dismissed.len();
+    dismissed.extend(
+        listed
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|o| sessionsation_ui::op_queue::terminal(o["phase"].as_str().unwrap_or("")))
+            .filter_map(|o| o["id"].as_str().map(str::to_owned)),
+    );
+    let all: Vec<String> = dismissed.into_iter().collect();
+    sessionsation_ui::state_cache::save_dismissed(&path, &client.root, &all)?;
+    println!(
+        "dismissed {} finished operation(s) ({} total) in {}",
+        all.len() - before,
+        all.len(),
+        path.display()
+    );
     Ok(())
 }
 async fn popup(preferences: Option<PathBuf>) -> Result<()> {

@@ -13,6 +13,49 @@ pub const RECENT_LIMIT: usize = 5;
 const RECENT_WINDOW_SECS: i64 = 86_400;
 /// Longest failure reason shown on a Recent row.
 const RECENT_REASON_WIDTH: usize = 56;
+/// Finished backend operations that succeeded this long ago count as dismissed.
+pub const AUTO_DISMISS_SECS: i64 = 86_400;
+fn secs(t: i64) -> i64 {
+    if t > 100_000_000_000 { t / 1000 } else { t }
+}
+/// When an operation finished: its last update, else its creation, in seconds.
+pub(super) fn finish_time(o: &Value) -> Option<i64> {
+    o["updated_at"]
+        .as_i64()
+        .or(o["created_at"].as_i64())
+        .map(secs)
+}
+/// A successfully finished operation at least 24 hours old needs no dismissal.
+pub(super) fn auto_dismissed(o: &Value, now: i64) -> bool {
+    matches!(o["phase"].as_str(), Some("complete" | "completed"))
+        && finish_time(o).is_some_and(|t| now - t >= AUTO_DISMISS_SECS)
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OpState {
+    Running,
+    Queued,
+    Done,
+    Failed,
+}
+impl OpState {
+    pub(super) fn finished(self) -> bool {
+        matches!(self, Self::Done | Self::Failed)
+    }
+}
+/// One operation of a session: `op:<backend id>` or `q:<queue entry id>`.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct OpRef {
+    pub key: String,
+    pub label: String,
+    pub text: String,
+    pub state: OpState,
+    pub at: Option<i64>,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum OpsSlot {
+    Heading(String),
+    Op(OpRef),
+}
 
 /// One row of the Operations queue popup.
 #[derive(Clone, Debug, PartialEq)]
@@ -220,7 +263,7 @@ impl Manager {
             self.operations
                 .iter()
                 .filter(|o| terminal(o["phase"].as_str().unwrap_or("")))
-                .filter(|o| !self.dismissed.contains(id(o)))
+                .filter(|o| !self.op_dismissed(o, now))
                 .filter(|o| {
                     o["created_at"]
                         .as_i64()
@@ -433,7 +476,9 @@ impl Manager {
         self.queue_focus = slots.get(i).map(QueueSlot::key);
     }
     pub(super) fn note_queue_focus(&mut self) {
-        if self.page == Page::Queue {
+        if matches!(self.page, Page::SessionOps(_)) {
+            self.note_session_ops_focus();
+        } else if self.page == Page::Queue {
             self.queue_focus = self
                 .queue_slots()
                 .get(self.options.selected)
@@ -493,14 +538,9 @@ impl Manager {
                     },
                     "Cancel removes it before it starts.".into(),
                 ];
-                self.show(
-                    &title,
-                    body,
-                    &["Cancel", "Close"],
-                    Form::Queued(e.id.clone()),
-                );
+                self.show(&title, body, &["Cancel"], Form::Queued(e.id.clone()));
                 if let Some(d) = &mut self.dialog {
-                    d.selected = 1;
+                    d.hints = Some(OPERATION_HINTS_SINGLE);
                 }
             }
             State::Running => {
@@ -511,23 +551,25 @@ impl Manager {
                         "The backend has not confirmed it yet. It is never resent automatically."
                             .into(),
                     ],
-                    &["Close"],
+                    &["Cancel"],
                     Form::None,
                 );
+                if let Some(d) = &mut self.dialog {
+                    d.buttons = vec![
+                        Row::gate("Cancel", false)
+                            .with_hover_reason("starting, not cancellable yet"),
+                    ];
+                    d.hints = Some(OPERATION_HINTS_SINGLE);
+                }
             }
             State::Failed => {
                 let mut body = vec![format!("{} did not complete.", e.subject)];
                 if let Some(d) = &e.detail {
                     body.push(d.clone());
                 }
-                self.show(
-                    &title,
-                    body,
-                    &["Dismiss", "Close"],
-                    Form::QueuedFailed(e.id.clone()),
-                );
+                self.show(&title, body, &["Dismiss"], Form::QueuedFailed(e.id.clone()));
                 if let Some(d) = &mut self.dialog {
-                    d.selected = 1;
+                    d.hints = Some(OPERATION_HINTS_SINGLE);
                 }
             }
         }
@@ -549,97 +591,366 @@ impl Manager {
         self.queue.retain(|o| o.id != key);
         self.queue_out.push(Command::Remove(key.to_owned()));
     }
-    /// The session's most recent finished outcome, from backend operations and
-    /// failed queue entries, as a badge only when it is a failure inside the
-    /// recency window: a newer success (or a dismissed failure) hides older ones.
-    pub(super) fn outcome_badge(
+    /// Whether the user dismissed this finished operation or it succeeded long
+    /// enough ago to count as dismissed.
+    pub(super) fn op_dismissed(&self, o: &Value, now: i64) -> bool {
+        self.dismissed.contains(id(o)) || auto_dismissed(o, now)
+    }
+    /// A session's operations: `(active, finished)`. Active is running work first
+    /// (backend, then starting queue entries), then queued ones; finished are the
+    /// not-dismissed outcomes, newest first.
+    pub(super) fn session_ops(
+        &self,
+        session: &str,
+        s: &Value,
+        now: i64,
+    ) -> (Vec<OpRef>, Vec<OpRef>) {
+        let mut running = vec![];
+        let mut queued = vec![];
+        let mut finished = vec![];
+        let pending = s["pending_operation_id"].as_str();
+        for o in self.operations.iter().filter(|o| {
+            o["source_session_id"] == session
+                || o["session_id"] == session
+                || pending == Some(id(o))
+        }) {
+            let kind = o["kind"].as_str().unwrap_or("operation");
+            let phase = o["phase"].as_str().unwrap_or("unknown");
+            let at = finish_time(o);
+            if !terminal(phase) {
+                running.push(OpRef {
+                    key: format!("op:{}", id(o)),
+                    label: kind_label(kind),
+                    text: active_text(kind, o, &self.space_names),
+                    state: OpState::Running,
+                    at: o["created_at"].as_i64().map(secs),
+                });
+            } else if !self.op_dismissed(o, now) {
+                let noun = kind_noun(kind);
+                let (state, text) = match phase {
+                    "complete" | "completed" | "recovered" => {
+                        (OpState::Done, format!("{noun} done"))
+                    }
+                    "failed" => (OpState::Failed, failed_text(kind)),
+                    other => (OpState::Failed, format!("{noun} {other}")),
+                };
+                finished.push(OpRef {
+                    key: format!("op:{}", id(o)),
+                    label: kind_label(kind),
+                    text,
+                    state,
+                    at,
+                });
+            }
+        }
+        if let Some(op) = pending
+            && !self.operations.iter().any(|o| id(o) == op)
+        {
+            running.push(OpRef {
+                key: format!("op:{op}"),
+                label: "Operation".into(),
+                text: "operation running".into(),
+                state: OpState::Running,
+                at: None,
+            });
+        }
+        let resource = format!("session:{session}");
+        for e in self.queue.iter().filter(|e| e.resource == resource) {
+            let listed = e
+                .operation_id
+                .as_ref()
+                .is_some_and(|op| self.operations.iter().any(|o| id(o) == op));
+            let at = Some(secs(e.finished_at.or(e.started_at).unwrap_or(e.created_at)));
+            let make = |text: String, state| OpRef {
+                key: format!("q:{}", e.id),
+                label: kind_label(&e.kind),
+                text,
+                state,
+                at,
+            };
+            match e.state {
+                State::Running if !listed => {
+                    running.push(make("starting".into(), OpState::Running))
+                }
+                State::Queued => queued.push(make(
+                    format!("{} queued", kind_noun(&e.kind)),
+                    OpState::Queued,
+                )),
+                State::Failed => finished.push(make(
+                    format!("{} failed", kind_noun(&e.kind)),
+                    OpState::Failed,
+                )),
+                State::Running => {}
+            }
+        }
+        running.sort_by_key(|r| std::cmp::Reverse(r.at));
+        running.extend(queued);
+        finished.sort_by_key(|r| std::cmp::Reverse(r.at));
+        (running, finished)
+    }
+    /// The row indicator for a session: active work first (one op shows its
+    /// status, several a spinner and `(n)`), otherwise the not-dismissed
+    /// outcomes (one shows its status, several `✗ (n)` or `✓ (n)`).
+    pub(super) fn session_badge(
         &self,
         session: &str,
         s: &Value,
         now: i64,
     ) -> Option<crate::session_list::Badge> {
-        let secs = |t: i64| if t > 100_000_000_000 { t / 1000 } else { t };
-        let backend = self
-            .operations
-            .iter()
-            .filter(|o| {
-                (o["source_session_id"] == session
-                    || o["session_id"] == session
-                    || s["pending_operation_id"].as_str() == Some(id(o)))
-                    && terminal(o["phase"].as_str().unwrap_or(""))
-            })
-            .map(|o| {
-                let at = o["updated_at"].as_i64().or(o["created_at"].as_i64());
-                let failed = o["phase"] == "failed" && !self.dismissed.contains(id(o));
-                let badge = failed.then(|| crate::session_list::Badge {
-                    kind: "operation".into(),
-                    id: id(o).to_owned(),
-                    text: failed_text(o["kind"].as_str().unwrap_or("operation")),
-                    active: false,
-                    queued: false,
-                });
-                (at.map(secs), badge)
-            });
-        let resource = format!("session:{session}");
-        let local = self
-            .queue
-            .iter()
-            .filter(|e| e.resource == resource && e.state == State::Failed)
-            .map(|e| {
-                let at = e.finished_at.or(e.started_at).unwrap_or(e.created_at);
-                let badge = crate::session_list::Badge {
-                    kind: "queue".into(),
-                    id: e.id.clone(),
-                    text: format!("{} failed", kind_noun(&e.kind)),
-                    active: false,
-                    queued: false,
-                };
-                (Some(secs(at)), Some(badge))
-            });
-        let (at, badge) = backend.chain(local).max_by_key(|(at, _)| *at)?;
-        // Undated outcomes cannot be placed in the window; show them only alone.
-        badge.filter(|_| at.is_none_or(|t| now - t < RECENT_WINDOW_SECS))
-    }
-    /// Queue state for a session row badge: starting or queued.
-    pub(super) fn queue_badge(&self, session: &str) -> Option<crate::session_list::Badge> {
-        let resource = format!("session:{session}");
-        let mine: Vec<&Entry> = self
-            .queue
-            .iter()
-            .filter(|e| e.resource == resource)
-            .collect();
-        let badge =
-            |e: &Entry, text: String, active: bool, queued: bool| crate::session_list::Badge {
-                kind: "queue".into(),
-                id: e.id.clone(),
-                text,
-                active,
-                queued,
+        let (active, finished) = self.session_ops(session, s, now);
+        let single = |r: &OpRef| {
+            let (kind, key) = match r.key.split_once(':') {
+                Some(("q", k)) => ("queue", k),
+                Some((_, k)) => ("operation", k),
+                None => ("operation", r.key.as_str()),
             };
-        if let Some(e) = mine.iter().find(|e| {
-            e.state == State::Running
-                && !e
-                    .operation_id
-                    .as_ref()
-                    .is_some_and(|op| self.operations.iter().any(|o| id(o) == op))
-        }) {
-            return Some(badge(e, "starting".into(), true, false));
-        }
-        if let Some(e) = mine.iter().find(|e| e.state == State::Queued) {
-            return Some(badge(
-                e,
-                format!("{} queued", kind_noun(&e.kind)),
+            crate::session_list::Badge {
+                kind: kind.into(),
+                id: key.to_owned(),
+                text: r.text.clone(),
+                active: r.state == OpState::Running,
+                queued: r.state == OpState::Queued,
+                ok: r.state == OpState::Done,
+                count: 1,
+            }
+        };
+        let many = |n: usize, active: bool, ok: bool| crate::session_list::Badge {
+            kind: "session-operations".into(),
+            id: session.to_owned(),
+            text: format!("({n})"),
+            active,
+            queued: false,
+            ok,
+            count: n,
+        };
+        match (active.as_slice(), finished.as_slice()) {
+            ([one], _) => Some(single(one)),
+            ([_, _, ..], _) => Some(many(active.len(), true, false)),
+            ([], [one]) => Some(single(one)),
+            ([], [_, _, ..]) => Some(many(
+                finished.len(),
                 false,
-                true,
-            ));
+                finished.iter().all(|r| r.state == OpState::Done),
+            )),
+            ([], []) => None,
         }
-        None
+    }
+    /// Mark every finished backend operation in `keys` (`op:<id>`) dismissed.
+    pub(super) fn dismiss_finished(&mut self, keys: &[String]) {
+        let before = self.dismissed.len();
+        for key in keys {
+            if let Some(op) = key.strip_prefix("op:")
+                && self
+                    .operations
+                    .iter()
+                    .any(|o| id(o) == op && terminal(o["phase"].as_str().unwrap_or("")))
+            {
+                self.dismissed.insert(op.to_owned());
+            } else if let Some(entry) = key.strip_prefix("q:")
+                && self
+                    .queue
+                    .iter()
+                    .any(|e| e.id == entry && e.state == State::Failed)
+            {
+                self.dismiss_queued(entry);
+            }
+        }
+        if self.dismissed.len() != before {
+            self.dismissed_out = Some(self.dismissed.iter().cloned().collect());
+            self.badge_focus = false;
+        }
+    }
+    /// Rows of one session's operations popup: Active, then Not dismissed.
+    pub(super) fn session_ops_slots(&self, session: &str) -> Vec<OpsSlot> {
+        let Some(s) = self.session(session) else {
+            return vec![];
+        };
+        let (active, finished) = self.session_ops(session, s, crate::usage::clock());
+        let mut slots = vec![];
+        if !active.is_empty() {
+            slots.push(OpsSlot::Heading("Active".into()));
+            slots.extend(active.into_iter().map(OpsSlot::Op));
+        }
+        if !finished.is_empty() {
+            slots.push(OpsSlot::Heading("Not dismissed".into()));
+            slots.extend(finished.into_iter().map(OpsSlot::Op));
+        }
+        slots
+    }
+    pub(super) fn session_ops_rows(&self, session: &str) -> Vec<Row> {
+        use unicode_width::UnicodeWidthStr;
+        let slots = self.session_ops_slots(session);
+        let width = slots
+            .iter()
+            .filter_map(|s| match s {
+                OpsSlot::Op(r) => Some(UnicodeWidthStr::width(r.label.as_str())),
+                OpsSlot::Heading(_) => None,
+            })
+            .max()
+            .unwrap_or(0);
+        let spinner = crate::session_list::operation_spinner(self.anim_ms);
+        slots
+            .into_iter()
+            .map(|slot| match slot {
+                OpsSlot::Heading(h) => Row::heading(h),
+                OpsSlot::Op(r) => {
+                    let icon = match r.state {
+                        OpState::Running => spinner,
+                        OpState::Queued => crate::session_list::QUEUED_ICON,
+                        OpState::Done => "✓",
+                        OpState::Failed => "✗",
+                    };
+                    let pad =
+                        " ".repeat(width.saturating_sub(UnicodeWidthStr::width(r.label.as_str())));
+                    let mut row = Row::yes(format!("{icon} {}{pad}", r.label)).with_reason(r.text);
+                    row.preview = row.preview.map(|p| p.trim_start_matches("· ").to_owned());
+                    row.preview_column = Some(2 + 2 + width + 2);
+                    row
+                }
+            })
+            .collect()
+    }
+    /// Keys of the finished items the popup lists.
+    fn session_ops_finished(&self, session: &str) -> Vec<String> {
+        self.session_ops_slots(session)
+            .into_iter()
+            .filter_map(|s| match s {
+                OpsSlot::Op(r) if r.state.finished() => Some(r.key),
+                _ => None,
+            })
+            .collect()
+    }
+    /// Keep the cursor on an item (never a heading); close when nothing is left.
+    pub(super) fn retain_session_ops(&mut self) {
+        let Page::SessionOps(session) = self.page.clone() else {
+            return;
+        };
+        let slots = self.session_ops_slots(&session);
+        if slots.is_empty() {
+            if self.dialog.is_none() {
+                self.back();
+            }
+            return;
+        }
+        if let Some(key) = &self.queue_focus
+            && let Some(i) = slots
+                .iter()
+                .position(|s| matches!(s, OpsSlot::Op(r) if &r.key == key))
+        {
+            self.options.selected = i;
+            return;
+        }
+        let mut i = self.options.selected.min(slots.len() - 1);
+        if matches!(slots[i], OpsSlot::Heading(_)) {
+            i = slots
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| matches!(s, OpsSlot::Op(_)))
+                .min_by_key(|(index, _)| index.abs_diff(i))
+                .map_or(0, |(index, _)| index);
+        }
+        self.options.selected = i;
+        self.note_session_ops_focus();
+    }
+    pub(super) fn note_session_ops_focus(&mut self) {
+        if let Page::SessionOps(session) = self.page.clone() {
+            self.queue_focus = match self.session_ops_slots(&session).get(self.options.selected) {
+                Some(OpsSlot::Op(r)) => Some(r.key.clone()),
+                _ => None,
+            };
+        }
+    }
+    /// Open the popup listing all of a session's active and not-dismissed operations.
+    pub(super) fn open_session_ops(&mut self, session: &str) -> Vec<Intent> {
+        self.enter(Page::SessionOps(session.to_owned()));
+        self.queue_focus = None;
+        self.options.selected = 0;
+        self.retain_session_ops();
+        self.refresh()
+    }
+    /// Enter on an item: that operation's own dialog on top of the list.
+    pub(super) fn activate_session_ops(&mut self) -> Vec<Intent> {
+        let Page::SessionOps(session) = self.page.clone() else {
+            return vec![];
+        };
+        match self.session_ops_slots(&session).get(self.options.selected) {
+            Some(OpsSlot::Op(r)) => match r.key.split_once(':') {
+                Some(("q", k)) => {
+                    let k = k.to_owned();
+                    self.open_queue_entry(&k);
+                    vec![]
+                }
+                Some((_, k)) => {
+                    let k = k.to_owned();
+                    self.open_operation(k)
+                }
+                None => vec![],
+            },
+            _ => vec![],
+        }
+    }
+    /// `m` in the session popup: dismiss every finished item it lists.
+    pub(super) fn dismiss_session_ops(&mut self) {
+        if let Page::SessionOps(session) = self.page.clone() {
+            let keys = self.session_ops_finished(&session);
+            self.dismiss_finished(&keys);
+            self.retain_session_ops();
+        }
     }
 }
 impl Manager {
     /// The Operations popup over the page it was opened from.
     pub(super) fn paint_queue(&mut self, canvas: &mut Canvas, footer: usize, now: i64) {
         self.retain_queue_focus();
+        let description = format!(
+            "Up to {} operations run at once; one at a time per session or account.",
+            op_queue::MAX_CONCURRENT
+        );
+        let rows = self.queue_rows();
+        self.paint_popup_page(
+            canvas,
+            footer,
+            now,
+            (Page::Queue, "Operations", &description),
+            rows,
+            &["▲/▼: Choose", "Enter: Select", "Esc: Close"],
+        );
+    }
+    /// One session's operations popup over the list it was opened from.
+    pub(super) fn paint_session_ops(&mut self, canvas: &mut Canvas, footer: usize, now: i64) {
+        self.retain_session_ops();
+        let Page::SessionOps(session) = self.page.clone() else {
+            return;
+        };
+        let title = format!(
+            "{} operations",
+            self.session(&session)
+                .and_then(|s| s["name"].as_str())
+                .map_or_else(|| "Session".to_owned(), clean)
+        );
+        let rows = self.session_ops_rows(&session);
+        let hints: &[&str] = if self.session_ops_finished(&session).is_empty() {
+            &["▲/▼: Choose", "Enter: Open", "Esc: Close"]
+        } else {
+            &[
+                "▲/▼: Choose",
+                "Enter: Open",
+                "m: Dismiss finished",
+                "Esc: Close",
+            ]
+        };
+        let own = self.page.clone();
+        self.paint_popup_page(canvas, footer, now, (own, &title, ""), rows, hints);
+    }
+    fn paint_popup_page(
+        &mut self,
+        canvas: &mut Canvas,
+        footer: usize,
+        now: i64,
+        (own, title, description): (Page, &str, &str),
+        measured: Vec<Row>,
+        hints: &[&str],
+    ) {
         if let Some(beneath) = self.history.pop() {
             let options = std::mem::replace(&mut self.options, beneath.options.clone());
             let dialog = self.dialog.take();
@@ -647,30 +958,25 @@ impl Manager {
             let popup_size = self.popup_size.take();
             self.page = beneath.page.clone();
             self.paint_at(canvas, footer, now);
-            self.page = Page::Queue;
+            self.page = own;
             self.options = options;
             self.dialog = dialog;
             self.note = note;
             self.popup_size = popup_size;
             self.history.push(beneath);
         }
-        let measured = self.queue_rows();
         let mut rows = measured.clone();
         let palette = self.palette.clone();
-        let description = format!(
-            "Up to {} operations run at once; one at a time per session or account.",
-            op_queue::MAX_CONCURRENT
-        );
         let mut view = crate::popup::Choices {
-            title: "Operations",
-            description: &description,
+            title,
+            description,
             rows: &measured,
             editor: None,
             note: &self.note,
             note_accent: false,
             large: false,
             fit_description: false,
-            hints: &["▲/▼: Choose", "Enter: Select", "Esc: Close"],
+            hints,
             sections: None,
         };
         if self
@@ -889,9 +1195,8 @@ mod tests {
         key(&mut m, KeyCode::Enter);
         let d = m.dialog.as_ref().unwrap();
         let buttons: Vec<_> = d.buttons.iter().map(|b| b.label.as_str()).collect();
-        assert_eq!(buttons, ["Cancel", "Close"]);
-        assert_eq!(d.selected, 1, "Close is the safe default");
-        key(&mut m, KeyCode::Up);
+        assert_eq!(buttons, ["Cancel"]);
+        assert_eq!(d.selected, 0);
         key(&mut m, KeyCode::Enter);
         assert!(m.dialog.is_none());
         assert!(!m.queue.iter().any(|e| e.id == second.id));
@@ -937,49 +1242,156 @@ mod tests {
         let hint = lines.iter().position(|l| l.contains("Esc: Close")).unwrap();
         assert!(lines[hint + 1].contains('└'), "{screen}");
     }
+    fn done_op(id: &str, phase: &str, at: i64) -> Value {
+        json!({"id":id,"kind":"move_space","phase":phase,"source_session_id":"a","created_at":at-5,"updated_at":at})
+    }
     #[test]
-    fn row_badge_shows_only_the_most_recent_outcome_when_it_is_a_recent_failure() {
+    fn successes_auto_dismiss_after_exactly_twenty_four_hours() {
+        let ok = json!({"id":"o","phase":"complete","created_at":1000,"updated_at":2000});
+        assert!(!auto_dismissed(&ok, 2000 + AUTO_DISMISS_SECS - 1));
+        assert!(auto_dismissed(&ok, 2000 + AUTO_DISMISS_SECS));
+        // Without updated_at the creation time counts; milliseconds are understood.
+        let created = json!({"id":"o","phase":"completed","created_at":1000});
+        assert!(!auto_dismissed(&created, 1000 + AUTO_DISMISS_SECS - 1));
+        assert!(auto_dismissed(&created, 1000 + AUTO_DISMISS_SECS));
+        let millis = json!({"id":"o","phase":"complete","updated_at":1_700_000_000_000_i64});
+        assert!(auto_dismissed(&millis, 1_700_000_000 + AUTO_DISMISS_SECS));
+        // Failures, cancellations and running work never age out.
+        for phase in ["failed", "cancelled", "dispatching", "recovered"] {
+            let o = json!({"id":"o","phase":phase,"updated_at":1});
+            assert!(!auto_dismissed(&o, 1 + AUTO_DISMISS_SECS * 10), "{phase}");
+        }
+    }
+    #[test]
+    fn session_indicator_counts_and_precedence() {
         let now = crate::usage::clock();
         let mut m = manager();
-        let failed_at = |at: i64| {
-            let mut e = queued("a", "restart");
-            e.state = State::Failed;
-            e.finished_at = Some(at);
-            e
-        };
-        let op = |id: &str, phase: &str, at: i64| json!({"id":id,"kind":"move_space","phase":phase,"source_session_id":"a","created_at":at});
-        // A queue failure older than a later success is not shown.
-        m.queue = vec![failed_at(now - 100)];
-        m.operations = vec![op("ok", "complete", now - 10)];
-        assert!(!m.badges().contains_key("a"), "newer success hides it");
-        // A failure newer than the latest success is.
-        m.queue = vec![failed_at(now - 5)];
-        let badge = &m.badges()["a"];
+        assert!(m.badges().is_empty());
+        // One finished success: its status with a check; two: a counted check.
+        m.operations = vec![done_op("o1", "complete", now - 10)];
+        let b = m.badges()["a"].clone();
         assert_eq!(
-            (badge.kind.as_str(), badge.text.as_str()),
+            (b.text.as_str(), b.ok, b.count, b.icon(0)),
+            ("move done", true, 1, "✓")
+        );
+        m.operations.push(done_op("o2", "complete", now - 20));
+        let b = m.badges()["a"].clone();
+        assert_eq!(
+            (
+                b.text.as_str(),
+                b.kind.as_str(),
+                b.id.as_str(),
+                b.count,
+                b.icon(0)
+            ),
+            ("(2)", "session-operations", "a", 2, "✓")
+        );
+        // Any failure turns the count into a cross.
+        m.operations.push(done_op("o3", "failed", now - 30));
+        let b = m.badges()["a"].clone();
+        assert_eq!((b.text.as_str(), b.count, b.icon(0)), ("(3)", 3, "✗"));
+        // A failed alone keeps its own status.
+        m.operations = vec![done_op("o3", "failed", now - 30)];
+        assert_eq!(m.badges()["a"].text, "move failed");
+        assert_eq!(m.badges()["a"].icon(0), "✗");
+        // Dismissed and day-old successes are not counted; old failures are.
+        m.operations = vec![
+            done_op("ok", "complete", now - AUTO_DISMISS_SECS),
+            done_op("bad", "failed", now - AUTO_DISMISS_SECS * 5),
+            done_op("gone", "failed", now - 5),
+        ];
+        m.dismissed.insert("gone".into());
+        assert_eq!(m.badges()["a"].id, "bad");
+        assert_eq!(m.badges()["a"].count, 1);
+        // Active work takes precedence over finished outcomes.
+        m.operations.push(running_op("run1", "a"));
+        let b = m.badges()["a"].clone();
+        assert!(b.active && b.count == 1 && b.id == "run1", "{b:?}");
+        m.operations.push(running_op("run2", "a"));
+        let b = m.badges()["a"].clone();
+        assert!(b.active && b.count == 2 && b.text == "(2)", "{b:?}");
+        // Queued work counts as active too.
+        m.operations.clear();
+        m.queue = vec![queued("a", "restart")];
+        let b = m.badges()["a"].clone();
+        assert!(b.queued && b.count == 1 && b.icon(0) == "◌", "{b:?}");
+        m.operations.push(running_op("run1", "a"));
+        assert_eq!(m.badges()["a"].count, 2);
+        assert!(m.badges()["a"].active);
+        // A failed queue entry is an unsuccessful finished item.
+        m.operations.clear();
+        let mut e = queued("a", "restart");
+        e.state = State::Failed;
+        m.queue = vec![e];
+        let b = m.badges()["a"].clone();
+        assert_eq!(
+            (b.kind.as_str(), b.text.as_str()),
             ("queue", "restart failed")
         );
-        // Old failures age out of the window.
+    }
+    #[test]
+    fn several_operations_open_a_popup_whose_items_open_dialogs_on_top() {
+        let now = crate::usage::clock();
+        let mut m = manager();
+        m.page = Page::Sessions;
+        m.operations = vec![
+            done_op("old", "complete", now - 50),
+            done_op("new", "failed", now - 10),
+            running_op("run", "a"),
+        ];
+        m.queue = vec![queued("a", "stop")];
+        m.dismissed_out = None;
+        m.open_session_ops("a");
+        assert_eq!(m.page, Page::SessionOps("a".into()));
+        let slots = m.session_ops_slots("a");
+        let shape: Vec<String> = slots
+            .iter()
+            .map(|s| match s {
+                OpsSlot::Heading(h) => h.clone(),
+                OpsSlot::Op(r) => r.key.clone(),
+            })
+            .collect();
+        // Running before queued; finished newest first.
+        assert_eq!(shape[0], "Active");
+        assert_eq!(shape[1], "op:run");
+        assert!(shape[2].starts_with("q:"));
+        assert_eq!(&shape[3..], ["Not dismissed", "op:new", "op:old"]);
+        assert_eq!(m.options.selected, 1, "first item, never a heading");
+        // Enter opens that operation's dialog over the list; Esc returns to it.
+        m.options.selected = 4;
+        m.note_session_ops_focus();
+        key(&mut m, KeyCode::Enter);
+        assert!(m.dialog.is_some());
+        assert_eq!(m.page, Page::SessionOps("a".into()));
+        let labels: Vec<_> = m
+            .dialog
+            .as_ref()
+            .unwrap()
+            .buttons
+            .iter()
+            .map(|b| b.label.clone())
+            .collect();
+        assert_eq!(labels, ["Dismiss", "Retry"]);
+        key(&mut m, KeyCode::Esc);
+        assert!(m.dialog.is_none());
+        assert_eq!(m.page, Page::SessionOps("a".into()));
+        assert!(m.dismissed.is_empty(), "Esc changes nothing");
+        // Dismissing from the dialog drops the item from the list.
+        key(&mut m, KeyCode::Enter);
+        m.submit(0, vec![]);
+        assert!(m.dismissed.contains("new"));
+        assert_eq!(m.page, Page::SessionOps("a".into()));
+        assert_eq!(m.session_ops_slots("a").len(), 6 - 1);
+        // `m` dismisses every finished item and leaves the active ones.
+        key(&mut m, KeyCode::Char('m'));
+        assert!(m.dismissed.contains("old"));
+        assert!(m.dismissed_out.is_some());
+        assert_eq!(m.session_ops_slots("a").len(), 3);
+        // Nothing left to list: the popup closes.
         m.operations.clear();
-        m.queue = vec![failed_at(now - RECENT_WINDOW_SECS - 1)];
-        assert!(!m.badges().contains_key("a"));
-        // The newest of a backend and a queue failure wins.
-        m.queue = vec![failed_at(now - 50)];
-        m.operations = vec![op("bad", "failed", now - 20)];
-        assert_eq!(m.badges()["a"].id, "bad");
-        m.queue = vec![failed_at(now - 1)];
-        assert_eq!(m.badges()["a"].kind, "queue");
-        // Running backend work and queued work still come first.
-        m.operations.push(op("live", "dispatching", now));
-        assert!(m.badges()["a"].active);
-        m.operations.pop();
-        m.queue.push(queued("a", "stop"));
-        assert!(m.badges()["a"].queued);
-        // A dismissed failure is still the latest outcome: older ones stay hidden.
-        m.queue = vec![failed_at(now - 100)];
-        m.operations = vec![op("bad", "failed", now - 20)];
-        m.dismissed.insert("bad".into());
-        assert!(!m.badges().contains_key("a"));
+        m.queue.clear();
+        m.retain_session_ops();
+        assert_eq!(m.page, Page::Sessions);
     }
     #[test]
     fn failed_recent_rows_show_their_reason() {

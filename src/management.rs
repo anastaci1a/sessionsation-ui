@@ -24,6 +24,8 @@ pub enum Page {
     Launch(&'static str, String),
     /// Operations queue popup over the page it was opened from.
     Queue,
+    /// One session's operations popup (Active, Not dismissed) over the list.
+    SessionOps(String),
 }
 #[derive(Clone, Debug)]
 pub enum Intent {
@@ -258,6 +260,7 @@ pub enum OperationFilter {
     InProgress,
     Failed,
     Completed,
+    NotDismissed,
 }
 impl OperationFilter {
     pub fn label(self) -> &'static str {
@@ -266,13 +269,15 @@ impl OperationFilter {
             Self::InProgress => "In progress",
             Self::Failed => "Failed",
             Self::Completed => "Completed",
+            Self::NotDismissed => "Not dismissed",
         }
     }
-    pub const ALL: [OperationFilter; 4] = [
+    pub const ALL: [OperationFilter; 5] = [
         OperationFilter::All,
         OperationFilter::InProgress,
         OperationFilter::Failed,
         OperationFilter::Completed,
+        OperationFilter::NotDismissed,
     ];
 }
 /// Automatic provider login in progress: the backend plan runs in a HERDR pane
@@ -730,33 +735,80 @@ fn launch_status(record: &Value) -> &str {
         phase => phase,
     }
 }
-/// A finished operation's dialog: Dismiss (Undismiss once dismissed), then Close,
-/// which keeps the focus. A failed operation not yet dismissed (`retry` is its
-/// [`retry_state`]) offers Dismiss, Retry, Close with Dismiss focused; Retry is
-/// disabled where the backend says the operation cannot be recovered. Repeated
-/// polls leave a finished dialog and its focus alone.
+const OPERATION_HINTS: &[&str] = &["▲/▼: Choose", "Enter: Select", "Esc: Close"];
+const OPERATION_HINTS_SINGLE: &[&str] = &["Enter: Select", "Esc: Close"];
+/// A finished operation's dialog. Success: only Dismiss (Unmark as dismissed once
+/// dismissed). A failed operation not yet dismissed (`retry` is its
+/// [`retry_state`]) offers Dismiss, then Retry, which is disabled where the
+/// backend says the operation cannot be recovered. There is no Close: Esc closes
+/// without changing anything. Repeated polls leave the dialog and its focus alone.
 fn finish_operation(d: &mut Dialog, dismissed: bool, retry: Option<bool>) {
-    let label = if dismissed { "Undismiss" } else { "Dismiss" };
+    let label = if dismissed {
+        "Unmark as dismissed"
+    } else {
+        "Dismiss"
+    };
     if let Some(b) = d
         .buttons
         .iter_mut()
-        .find(|b| b.label == "Dismiss" || b.label == "Undismiss")
+        .find(|b| b.label == "Dismiss" || b.label == "Unmark as dismissed")
     {
         b.label = label.into();
         return;
     }
-    d.finish();
-    let slots = d.selected;
-    match retry.filter(|_| !dismissed) {
-        Some(can) => {
-            d.buttons.insert(0, Row::yes(label));
-            d.buttons.insert(1, Row::gate("Retry", can));
-            d.selected = slots;
-        }
-        None => {
-            d.buttons.insert(0, Row::yes(label));
-            d.selected += 1;
-        }
+    d.busy = false;
+    d.buttons = vec![Row::yes(label)];
+    if let Some(can) = retry.filter(|_| !dismissed) {
+        d.buttons.push(Row::gate("Retry", can));
+    }
+    d.selected = d.field_slots();
+    d.hints = Some(if d.buttons.len() > 1 {
+        OPERATION_HINTS
+    } else {
+        OPERATION_HINTS_SINGLE
+    });
+}
+/// A running operation's dialog: a Cancel button, enabled where the backend
+/// allows it and otherwise shown disabled with its reason. Esc closes.
+fn active_operation(d: &mut Dialog, o: &Value) {
+    let allowed = o["can_cancel"] != false;
+    let mut row = Row::gate("Cancel", allowed);
+    if !allowed {
+        let reason = [
+            "cancel_reason",
+            "can_cancel_reason",
+            "cancel_blocked_reason",
+        ]
+        .iter()
+        .find_map(|k| o[*k].as_str())
+        .map(|r| {
+            crate::messages::describe(r)
+                .trim_end_matches('.')
+                .to_lowercase()
+        })
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| "too far along to cancel".into());
+        row = row.with_hover_reason(reason);
+    }
+    if d.buttons.len() == 1 && d.buttons[0].label == "Cancel" {
+        d.buttons[0] = row;
+    } else {
+        d.buttons = vec![row];
+        d.selected = d.field_slots();
+    }
+    d.busy = true;
+    d.hints = Some(OPERATION_HINTS_SINGLE);
+}
+/// Buttons for an operation's dialog by state.
+fn operation_buttons(d: &mut Dialog, o: &Value, dismissed: bool) {
+    if o.is_null() {
+        d.busy = true;
+        return;
+    }
+    if terminal(o["phase"].as_str().unwrap_or("")) {
+        finish_operation(d, dismissed, retry_state(o));
+    } else {
+        active_operation(d, o);
     }
 }
 /// For a failed operation: whether the backend allows recovering (retrying) it,
@@ -1733,7 +1785,7 @@ impl Manager {
     }
     pub fn title(&self) -> String {
         match &self.page {
-            Page::Queue => {
+            Page::Queue | Page::SessionOps(_) => {
                 return self.history.last().map_or_else(
                     || "Operations".into(),
                     |l| {
@@ -2035,6 +2087,7 @@ impl Manager {
             }
             Page::Operations => self.operation_rows(),
             Page::Queue => self.queue_rows(),
+            Page::SessionOps(key) => self.session_ops_rows(key),
             Page::Operation(key) => {
                 let o = self
                     .operations
@@ -2107,15 +2160,42 @@ impl Manager {
         });
         entries
     }
+    /// Whether an Operations entry matches the current filter.
+    fn in_filter(&self, kind: &str, record: &Value, now: i64) -> bool {
+        let group = operation_group(kind, record);
+        match self.operation_filter {
+            OperationFilter::All => true,
+            // Everything still needing attention: active work and undismissed outcomes.
+            OperationFilter::NotDismissed => {
+                group == OperationFilter::InProgress
+                    || (kind == "operation" && !self.op_dismissed(record, now))
+            }
+            filter => group == filter,
+        }
+    }
+    /// `m` on the Operations page: dismiss the finished operations the current
+    /// filter shows (active ones cannot be dismissed).
+    fn dismiss_filtered(&mut self) {
+        let now = crate::usage::clock();
+        let keys: Vec<String> = self
+            .operation_entries()
+            .into_iter()
+            .filter(|(kind, _, _, record)| {
+                *kind == "operation"
+                    && terminal(record["phase"].as_str().unwrap_or(""))
+                    && self.in_filter(kind, record, now)
+            })
+            .map(|(_, key, _, _)| format!("op:{key}"))
+            .collect();
+        self.dismiss_finished(&keys);
+    }
     /// Operations page layout: the filter selector, then day headings and entries.
     fn operation_slots(&self) -> Vec<Slot> {
         let now = crate::usage::clock();
         let mut slots = vec![Slot::Filter];
         let mut last: Option<String> = None;
         for (kind, key, _, record) in self.operation_entries() {
-            if self.operation_filter != OperationFilter::All
-                && operation_group(kind, record) != self.operation_filter
-            {
+            if !self.in_filter(kind, record, now) {
                 continue;
             }
             let heading = day_heading(now, record["created_at"].as_i64());
@@ -2409,7 +2489,11 @@ impl Manager {
             || matches!(self.form, Form::Operation(_) | Form::OperationApproval(..))
             || matches!(
                 self.page,
-                Page::Operations | Page::Operation(_) | Page::Sessions | Page::Queue
+                Page::Operations
+                    | Page::Operation(_)
+                    | Page::Sessions
+                    | Page::Queue
+                    | Page::SessionOps(_)
             ))
             && !self
                 .pending
@@ -3050,7 +3134,16 @@ impl Manager {
             self.moving = Some(self.accounts.clone());
             return vec![];
         }
-        if self.page == Page::Queue {
+        if key.code == KeyCode::Char('m') && self.page == Page::Operations && self.dialog.is_none()
+        {
+            self.dismiss_filtered();
+            return vec![];
+        }
+        if matches!(self.page, Page::SessionOps(_)) && key.code == KeyCode::Char('m') {
+            self.dismiss_session_ops();
+            return vec![];
+        }
+        if matches!(self.page, Page::Queue | Page::SessionOps(_)) {
             return match key.code {
                 KeyCode::Esc | KeyCode::Char('o') => self.back(),
                 // Left only moves the cursor to Back; it never leaves the page.
@@ -3063,7 +3156,13 @@ impl Manager {
                     vec![]
                 }
                 KeyCode::Enter | KeyCode::Char(' ') if self.options.back => self.back(),
-                KeyCode::Enter | KeyCode::Char(' ') => self.activate_queue(),
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    if matches!(self.page, Page::SessionOps(_)) {
+                        self.activate_session_ops()
+                    } else {
+                        self.activate_queue()
+                    }
+                }
                 KeyCode::Up | KeyCode::Down => {
                     self.options
                         .step_with_wrap(&self.rows(), false, key.code == KeyCode::Up, wrap);
@@ -3284,54 +3383,17 @@ impl Manager {
         self.close_armed
             .is_some_and(|t| t.elapsed() <= CLOSE_WINDOW)
     }
-    /// Pending and recently failed operations by session ID.
+    /// Operation indicators by session ID (active work, else not-dismissed outcomes).
     pub fn badges(&self) -> BTreeMap<String, crate::session_list::Badge> {
         let now = crate::usage::clock();
-        let mut out = BTreeMap::new();
-        for s in &self.sessions {
-            let key = id(s);
-            let newest = self
-                .operations
-                .iter()
-                .filter(|o| {
-                    o["source_session_id"] == key
-                        || o["session_id"] == key
-                        || s["pending_operation_id"].as_str() == Some(id(o))
-                })
-                .max_by_key(|o| o["created_at"].as_i64());
-            let running = match newest {
-                Some(o) if !terminal(o["phase"].as_str().unwrap_or("unknown")) => Some((
-                    active_text(
-                        o["kind"].as_str().unwrap_or("operation"),
-                        o,
-                        &self.space_names,
-                    ),
-                    id(o),
-                )),
-                Some(_) => None,
-                None => s["pending_operation_id"]
-                    .as_str()
-                    .map(|op| ("operation running".to_owned(), op)),
-            };
-            // Running backend work first, then the queue (starting or queued),
-            // then the session's most recent outcome when it is a recent failure.
-            let badge = match running {
-                Some((text, op)) => Some(crate::session_list::Badge {
-                    kind: "operation".into(),
-                    id: op.to_owned(),
-                    text,
-                    active: true,
-                    queued: false,
-                }),
-                None => self
-                    .queue_badge(key)
-                    .or_else(|| self.outcome_badge(key, s, now)),
-            };
-            if let Some(badge) = badge {
-                out.insert(key.to_owned(), badge);
-            }
-        }
-        out
+        self.sessions
+            .iter()
+            .filter_map(|s| {
+                let key = id(s);
+                self.session_badge(key, s, now)
+                    .map(|badge| (key.to_owned(), badge))
+            })
+            .collect()
     }
     /// Enter on a badge opens that operation's progress or details over the list.
     fn open_badge(&mut self) -> Vec<Intent> {
@@ -3339,6 +3401,9 @@ impl Manager {
             self.badge_focus = false;
             return vec![];
         };
+        if badge.count > 1 {
+            return self.open_session_ops(&badge.id.clone());
+        }
         if badge.kind == "queue" {
             self.open_queue_entry(&badge.id);
             return vec![];
@@ -3353,6 +3418,8 @@ impl Manager {
             text: String::new(),
             active: false,
             queued: false,
+            ok: false,
+            count: 1,
         };
         self.details_open = true;
         let o = self
@@ -3361,8 +3428,6 @@ impl Manager {
             .find(|o| id(o) == badge.id)
             .cloned()
             .unwrap_or(Value::Null);
-        let phase = o["phase"].as_str().unwrap_or("unknown");
-        let finished = terminal(phase);
         let dismissed = self.dismissed.contains(&badge.id);
         self.show(
             &kind_label(o["kind"].as_str().unwrap_or("operation")),
@@ -3373,11 +3438,7 @@ impl Manager {
         if let Some(d) = &mut self.dialog {
             d.dim_from = Some(d.body.len().saturating_sub(2));
             d.hanging = true;
-            if finished {
-                finish_operation(d, dismissed, retry_state(&o));
-            } else {
-                d.busy = true;
-            }
+            operation_buttons(d, &o, dismissed);
         }
         if !self
             .pending
@@ -3612,6 +3673,7 @@ impl Manager {
         let index = self.options.selected;
         match self.page.clone() {
             Page::Queue => return self.activate_queue(),
+            Page::SessionOps(_) => return self.activate_session_ops(),
             Page::Home => match index {
                 0 => return vec![Intent::New],
                 1 => {
@@ -3849,9 +3911,7 @@ impl Manager {
                         if let Some(d) = &mut self.dialog {
                             d.dim_from = Some(d.body.len().saturating_sub(2));
                             d.hanging = true;
-                            if terminal(o["phase"].as_str().unwrap_or("")) {
-                                finish_operation(d, dismissed, retry_state(&o));
-                            }
+                            operation_buttons(d, &o, dismissed);
                         }
                     }
                     1 | 2 => self.confirm(
@@ -4248,7 +4308,25 @@ impl Manager {
                 .map(|b| b.label.as_str())
             {
                 Some("Dismiss") => self.dismiss_operation(&key),
-                Some("Undismiss") => self.undismiss_operation(&key),
+                Some("Unmark as dismissed") => self.undismiss_operation(&key),
+                Some("Cancel") => {
+                    if !self
+                        .dialog
+                        .as_ref()
+                        .is_some_and(|d| d.buttons[button].enabled)
+                    {
+                        return vec![];
+                    }
+                    self.dismiss();
+                    self.confirm(
+                        "Cancel operation",
+                        vec![
+                            "The backend stops this operation if it is still safe to do so.".into(),
+                        ],
+                        strings(&["cancel-operation", &key]),
+                    );
+                    return vec![];
+                }
                 // Retry is the backend's own recover, confirmed first; never automatic.
                 Some("Retry") => {
                     self.dismiss();
@@ -4585,6 +4663,25 @@ impl Manager {
         let value = match result {
             Ok(v) => v,
             Err(e) => {
+                // A cancel that lands too late (the operation moved on) is refused by the
+                // backend: show the refusal and read the operation again; never retried.
+                if self
+                    .mutation
+                    .first()
+                    .is_some_and(|c| c == "cancel-operation")
+                {
+                    self.mutation.clear();
+                    self.dismiss();
+                    self.note = crate::messages::describe(&e);
+                    if self
+                        .pending
+                        .values()
+                        .any(|p| matches!(p, Purpose::Operations))
+                    {
+                        return vec![];
+                    }
+                    return self.request(strings(&["operations"]), Purpose::Operations);
+                }
                 if let Purpose::Reorder(original) = &purpose {
                     // Back to the backend's order, the moved account still selected.
                     let moved = self.selected_account();
@@ -4908,9 +5005,7 @@ impl Manager {
                     d.dim_from = Some(d.body.len().saturating_sub(2));
                     d.hanging = true;
                     d.title = kind_label(o["kind"].as_str().unwrap_or("operation"));
-                    if terminal(o["phase"].as_str().unwrap_or("")) {
-                        finish_operation(d, self.dismissed.contains(key), retry_state(o));
-                    }
+                    operation_buttons(d, o, self.dismissed.contains(key));
                 }
                 if let Some(key) = &self.active_operation
                     && let Some(o) = self.operations.iter().find(|o| id(o) == key)
@@ -5302,14 +5397,8 @@ impl Manager {
                     self.active_operation = Some(id(&value).into());
                     if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
                         self.form = Form::Operation(id(&value).into());
-                        if terminal(value["phase"].as_str().unwrap_or(""))
-                            && let Some(d) = &mut self.dialog
-                        {
-                            finish_operation(
-                                d,
-                                self.dismissed.contains(id(&value)),
-                                retry_state(&value),
-                            );
+                        if let Some(d) = &mut self.dialog {
+                            operation_buttons(d, &value, self.dismissed.contains(id(&value)));
                         }
                     }
                     return self.refresh();
@@ -5359,6 +5448,10 @@ impl Manager {
         let _ = footer; // retained for callers; the layout derives rows from the canvas
         if self.page == Page::Queue {
             self.paint_queue(canvas, footer, now);
+            return;
+        }
+        if matches!(self.page, Page::SessionOps(_)) {
+            self.paint_session_ops(canvas, footer, now);
             return;
         }
         if let Page::Spaces(key) = self.page.clone() {
@@ -6572,7 +6665,11 @@ mod tests {
             m.operations = vec![json!({"id":"job","phase":phase})];
             m.activate();
             assert!(m.dialog.is_some());
-            m.submit(0, vec![]);
+            if phase == "running" {
+                m.dismiss(); // Esc
+            } else {
+                m.submit(0, vec![]); // Dismiss
+            }
             assert_eq!(m.page, Page::Operation("job".into()));
             assert_eq!(m.options.selected, 0);
             assert!(m.dialog.is_none());
@@ -6679,7 +6776,16 @@ mod tests {
         m.operations = vec![json!({"id":"done","phase":"complete"})];
         m.options.selected = 0;
         m.activate();
-        assert_eq!(m.dialog.as_ref().unwrap().buttons[1].label, "Close");
+        assert_eq!(
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .buttons
+                .iter()
+                .map(|b| b.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Dismiss"]
+        );
         m.form = Form::Operation("done".into());
         m.dialog = Some(Dialog::progress("Working"));
         let requests = m.request(strings(&["operations"]), Purpose::Operations);
@@ -6687,7 +6793,16 @@ mod tests {
             panic!()
         };
         m.response(token, Ok(json!([{"id":"done","phase":"complete"}])));
-        assert_eq!(m.dialog.as_ref().unwrap().buttons[1].label, "Close");
+        assert_eq!(
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .buttons
+                .iter()
+                .map(|b| b.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Dismiss"]
+        );
         assert_eq!(m.rows()[0].label, "Details");
     }
     #[test]
@@ -6751,7 +6866,16 @@ mod tests {
         poll(&mut m, "awaiting_background_approval", 7);
         poll(&mut m, "complete", 8);
         assert!(matches!(m.form, Form::Operation(_)));
-        assert_eq!(m.dialog.as_ref().unwrap().buttons[1].label, "Close");
+        assert_eq!(
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .buttons
+                .iter()
+                .map(|b| b.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Dismiss"]
+        );
     }
     #[test]
     fn operation_consent_retains_dedicated_details_return() {
@@ -7886,6 +8010,7 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             json!({"id":"op2","kind":"move_space","session_id":"s2","phase":"failed","created_at":95,"detail":"gone"}),
             json!({"id":"op0","kind":"move_space","session_id":"s2","phase":"complete","created_at":10}),
         ];
+        m.dismissed.insert("op0".into());
         let badges = m.badges();
         assert_eq!(badges["s1"].text, "moving to work");
         assert!(badges["s1"].active);
@@ -7959,18 +8084,13 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         let mut m = fresh();
         // Running: no Dismiss. Failed and not dismissed: Dismiss, Retry, Close with Dismiss focused;
         // Retry is disabled because the backend does not offer recovery for this kind.
-        assert_eq!(open(&mut m, 0), ["Continue in background"]);
-        assert_eq!(open(&mut m, 1), ["Dismiss", "Retry", "Close"]);
+        assert_eq!(open(&mut m, 0), ["Cancel"]);
+        assert_eq!(open(&mut m, 1), ["Dismiss", "Retry"]);
         assert_eq!(m.dialog.as_ref().unwrap().selected, 0);
         assert!(!m.dialog.as_ref().unwrap().buttons[1].enabled);
         m.paint_at(&mut Canvas::new(100, 30), 29, 100);
-        // Down skips the disabled Retry; Up returns to the default Dismiss, which hides
+        // Dismiss is the default focus; it hides
         // the badge and returns to the session row.
-        press(&mut m, KeyCode::Down);
-        press(&mut m, KeyCode::Down);
-        assert_eq!(m.dialog.as_ref().unwrap().selected, 2);
-        press(&mut m, KeyCode::Up);
-        press(&mut m, KeyCode::Up);
         assert_eq!(m.dialog.as_ref().unwrap().selected, 0);
         press(&mut m, KeyCode::Enter);
         assert!(m.dialog.is_none());
@@ -8022,6 +8142,123 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         assert_eq!(reloaded.dismissed_out.take().unwrap(), Vec::<String>::new());
     }
     #[test]
+    fn operation_dialog_buttons_follow_the_operation_state() {
+        let mut m = setup();
+        m.operations = vec![
+            json!({"id":"ok","kind":"move_space","phase":"complete","created_at":90}),
+            json!({"id":"bad","kind":"restart","phase":"failed","can_recover":true,"created_at":91}),
+            json!({"id":"run","kind":"restart","phase":"dispatching","created_at":92}),
+            json!({"id":"late","kind":"restart","phase":"dispatching","can_cancel":false,"created_at":93}),
+            json!({"id":"late2","kind":"restart","phase":"dispatching","can_cancel":false,"cancel_reason":"past the point of no return","created_at":93}),
+        ];
+        let buttons = |m: &mut Manager, key: &str| -> Vec<(String, bool)> {
+            m.open_operation(key.into());
+            m.dialog
+                .as_ref()
+                .unwrap()
+                .buttons
+                .iter()
+                .map(|b| (b.label.clone(), b.enabled))
+                .collect()
+        };
+        assert_eq!(buttons(&mut m, "ok"), [("Dismiss".into(), true)]);
+        assert_eq!(
+            buttons(&mut m, "bad"),
+            [("Dismiss".into(), true), ("Retry".into(), true)]
+        );
+        // Esc closes without dismissing anything.
+        m.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(m.dialog.is_none() && m.dismissed.is_empty());
+        assert_eq!(buttons(&mut m, "run"), [("Cancel".into(), true)]);
+        m.dismiss();
+        // A backend that says it cannot be cancelled gets a crossed-out Cancel with
+        // the reason in parentheses (a default one when it gives none).
+        for (key, reason) in [
+            ("late", "(too far along to cancel)"),
+            ("late2", "(past the point of no return)"),
+        ] {
+            assert_eq!(buttons(&mut m, key), [("Cancel".into(), false)]);
+            let mut c = Canvas::new(80, 24);
+            m.paint_at(&mut c, 23, 100);
+            assert!(
+                screen_text(&c).contains(reason),
+                "{key}\n{}",
+                screen_text(&c)
+            );
+            assert!(c.cells.iter().any(|cell| cell.strike), "crossed out");
+            m.dismiss();
+        }
+        assert!(m.dismissed.is_empty());
+    }
+    #[test]
+    fn a_cancel_that_lands_too_late_shows_the_refusal_and_rereads_the_operation() {
+        let mut m = setup();
+        m.operations =
+            vec![json!({"id":"run","kind":"restart","phase":"dispatching","created_at":92})];
+        m.open_operation("run".into());
+        m.submit(0, vec![]);
+        assert!(matches!(&m.form, Form::Confirm(args) if args == &["cancel-operation", "run"]));
+        let sent = m.submit(0, vec![]);
+        let Some(Intent::Api(token, args)) = sent.first().cloned() else {
+            panic!("cancel request")
+        };
+        assert_eq!(args, ["cancel-operation", "run"]);
+        m.pending.retain(|_, p| !matches!(p, Purpose::Operations));
+        let after = m.response(
+            token,
+            Err("OPERATION_ALREADY_TERMINAL: Operation already finished.".into()),
+        );
+        assert!(m.dialog.is_none());
+        assert!(!m.note.is_empty());
+        assert!(
+            after
+                .iter()
+                .any(|i| matches!(i, Intent::Api(_, a) if a[0] == "operations")),
+            "the operation is read again"
+        );
+        assert!(
+            !after
+                .iter()
+                .any(|i| matches!(i, Intent::Api(_, a) if a[0] == "cancel-operation")),
+            "never retried"
+        );
+    }
+    #[test]
+    fn the_not_dismissed_filter_and_m_cover_only_what_the_filter_shows() {
+        let mut m = setup();
+        m.operations = vec![
+            json!({"id":"f1","kind":"restart","phase":"failed","created_at":90}),
+            json!({"id":"c1","kind":"restart","phase":"complete","created_at":91}),
+            json!({"id":"r1","kind":"restart","phase":"dispatching","created_at":92}),
+            json!({"id":"c0","kind":"restart","phase":"complete","created_at":3,"updated_at":3}),
+        ];
+        m.go(Page::Operations);
+        let press_m =
+            |m: &mut Manager| m.key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        // Failed only: just that one is dismissed.
+        m.operation_filter = OperationFilter::Failed;
+        press_m(&mut m);
+        assert_eq!(m.dismissed.iter().cloned().collect::<Vec<_>>(), ["f1"]);
+        assert!(m.dismissed_out.take().is_some());
+        // Not dismissed: the remaining finished ones; active work is untouched.
+        m.operation_filter = OperationFilter::NotDismissed;
+        let shown: Vec<String> = m
+            .operation_keys()
+            .into_iter()
+            .flatten()
+            .map(|(_, k)| k)
+            .collect();
+        assert!(shown.contains(&"r1".to_string()) && shown.contains(&"c1".to_string()));
+        assert!(!shown.contains(&"f1".to_string()));
+        press_m(&mut m);
+        assert!(m.dismissed.contains("c1") && !m.dismissed.contains("r1"));
+        // The filter picker still lists it last.
+        assert_eq!(
+            OperationFilter::ALL.last(),
+            Some(&OperationFilter::NotDismissed)
+        );
+    }
+    #[test]
     fn dismissed_operation_details_offer_undismiss_which_restores_the_badge() {
         let mut m = setup();
         m.sessions_known = true;
@@ -8043,21 +8280,21 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         };
         // Failed, not dismissed: Dismiss, Retry, Close.
         m.open_operation("op2".into());
-        assert_eq!(labels(&m), ["Dismiss", "Retry", "Close"]);
+        assert_eq!(labels(&m), ["Dismiss", "Retry"]);
         m.dismiss();
         m.dismiss_operation("op2");
         m.dismissed_out = None;
         assert!(!m.badges().contains_key("s2"));
         // Dismissed: the same option undoes it, with Close still focused.
         m.open_operation("op2".into());
-        assert_eq!(labels(&m), ["Undismiss", "Close"]);
-        assert_eq!(m.dialog.as_ref().unwrap().selected, 1);
+        assert_eq!(labels(&m), ["Unmark as dismissed"]);
+        assert_eq!(m.dialog.as_ref().unwrap().selected, 0);
         // A poll of the finished operation keeps the label and the focus.
         if let Some(d) = &mut m.dialog {
             finish_operation(d, true, Some(true));
         }
-        assert_eq!(labels(&m), ["Undismiss", "Close"]);
-        assert_eq!(m.dialog.as_ref().unwrap().selected, 1);
+        assert_eq!(labels(&m), ["Unmark as dismissed"]);
+        assert_eq!(m.dialog.as_ref().unwrap().selected, 0);
         m.paint_at(&mut Canvas::new(100, 30), 29, 100);
         m.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         m.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -8067,7 +8304,7 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         assert_eq!(m.dismissed_out.take().unwrap(), Vec::<String>::new());
         assert_eq!(m.badges()["s2"].id, "op2");
         m.open_operation("op2".into());
-        assert_eq!(labels(&m), ["Dismiss", "Retry", "Close"]);
+        assert_eq!(labels(&m), ["Dismiss", "Retry"]);
     }
     #[test]
     fn retry_is_offered_only_for_failed_undismissed_operations_and_follows_can_recover() {
@@ -8089,11 +8326,7 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         m.open_operation("r1".into());
         assert_eq!(
             labels(&m),
-            [
-                ("Dismiss".into(), true),
-                ("Retry".into(), true),
-                ("Close".into(), true)
-            ]
+            [("Dismiss".into(), true), ("Retry".into(), true)]
         );
         assert_eq!(
             m.dialog.as_ref().unwrap().selected,
@@ -8123,14 +8356,14 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         m.open_operation("r3".into());
         assert_eq!(
             labels(&m).iter().map(|l| l.0.as_str()).collect::<Vec<_>>(),
-            ["Dismiss", "Close"]
+            ["Dismiss"]
         );
         m.dismiss();
         m.dismissed.insert("r1".into());
         m.open_operation("r1".into());
         assert_eq!(
             labels(&m).iter().map(|l| l.0.as_str()).collect::<Vec<_>>(),
-            ["Undismiss", "Close"]
+            ["Unmark as dismissed"]
         );
     }
     #[test]
@@ -8245,21 +8478,21 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
         }
         assert_eq!(
             m.operation_filter,
-            OperationFilter::Completed,
+            OperationFilter::NotDismissed,
             "no wrap at the bottom"
         );
-        assert_eq!(m.rows()[0].preview.as_deref(), Some("↑ Completed"));
+        assert_eq!(m.rows()[0].preview.as_deref(), Some("↑ Not dismissed"));
         press_key(&mut m, KeyCode::Up);
-        assert_eq!(m.rows()[0].preview.as_deref(), Some("↕ Failed"));
+        assert_eq!(m.rows()[0].preview.as_deref(), Some("↕ Completed"));
         // Enter commits; the filter stays.
         press_key(&mut m, KeyCode::Enter);
         assert!(m.filter_grab.is_none());
-        assert_eq!(m.operation_filter, OperationFilter::Failed);
+        assert_eq!(m.operation_filter, OperationFilter::Completed);
         // Esc reverts and does not leave the page.
         press_key(&mut m, KeyCode::Right);
         press_key(&mut m, KeyCode::Up);
         press_key(&mut m, KeyCode::Esc);
-        assert_eq!(m.operation_filter, OperationFilter::Failed);
+        assert_eq!(m.operation_filter, OperationFilter::Completed);
         assert_eq!(m.page, Page::Operations);
         assert!(m.close_armed.is_none());
         // Another row dims while grabbed.
@@ -8399,7 +8632,11 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             Ok(json!({"id":"deletion-1","phase":"admitted","can_cancel":false})),
         );
         assert!(matches!(&m.form, Form::Operation(id) if id == "deletion-1"));
-        assert!(m.submit(0, vec![]).is_empty()); // detach, never cancel/replay
+        // The backend says it cannot be cancelled: Cancel is disabled and does nothing.
+        assert!(!m.dialog.as_ref().unwrap().buttons[0].enabled);
+        assert!(m.submit(0, vec![]).is_empty());
+        assert!(m.dialog.is_some());
+        m.dismiss(); // Esc detaches; never cancels or replays
         assert!(m.dialog.is_none());
     }
     #[test]

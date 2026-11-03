@@ -377,7 +377,7 @@ impl Dialog {
                 .get(index - self.field_slots())
                 .is_none_or(|b| !b.separator)
     }
-    fn field_slots(&self) -> usize {
+    pub fn field_slots(&self) -> usize {
         if self.fields.len() == 1 {
             0
         } else {
