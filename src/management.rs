@@ -719,12 +719,14 @@ fn account_label(id: &str) -> String {
 }
 fn operation_status(record: &Value) -> &str {
     match record["phase"].as_str().unwrap_or("unknown") {
-        "complete" => "complete",
+        "complete" | "completed" => "complete",
         "failed" => "failed",
         "cancelled" => "cancelled",
         "recovered" => "recovered",
         "queued" => "queued",
-        "unknown" | "uncertain" => "checking",
+        "abandoned" => "abandoned",
+        "uncertain" => "needs inspection",
+        "unknown" => "checking",
         p if p.starts_with("awaiting_") => "confirmation",
         _ => "running",
     }
@@ -839,7 +841,7 @@ fn steering_reason(error: &str) -> String {
 fn terminal(phase: &str) -> bool {
     matches!(
         phase,
-        "complete" | "completed" | "cancelled" | "failed" | "recovered"
+        "complete" | "completed" | "cancelled" | "failed" | "recovered" | "abandoned" | "uncertain"
     )
 }
 /// Plain-language name of an operation or launch kind.
@@ -947,7 +949,7 @@ fn operation_group(kind: &str, record: &Value) -> OperationFilter {
         launch_status(record)
     };
     match phase {
-        "failed" => OperationFilter::Failed,
+        "failed" | "abandoned" | "uncertain" => OperationFilter::Failed,
         "complete" | "completed" | "cancelled" | "recovered" => OperationFilter::Completed,
         _ => OperationFilter::InProgress,
     }

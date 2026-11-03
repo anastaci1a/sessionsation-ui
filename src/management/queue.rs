@@ -1263,6 +1263,42 @@ mod tests {
         }
     }
     #[test]
+    fn abandoned_and_uncertain_are_finished_unsuccessful_and_never_age_out() {
+        let now = crate::usage::clock();
+        for phase in ["abandoned", "uncertain"] {
+            assert!(op_queue::terminal(phase) && terminal(phase), "{phase}");
+            let o = json!({"id":"x","phase":phase,"updated_at":1});
+            assert!(!auto_dismissed(&o, 1 + AUTO_DISMISS_SECS * 10), "{phase}");
+            let mut m = manager();
+            m.operations = vec![done_op("x", phase, now - 5)];
+            let b = m.badges()["a"].clone();
+            assert!(!b.active && !b.queued && !b.ok, "{phase}: {b:?}");
+            assert_eq!(b.icon(0), "✗");
+            // Dismissable, and no Retry for either.
+            m.open_operation("x".into());
+            let labels: Vec<_> = m
+                .dialog
+                .as_ref()
+                .unwrap()
+                .buttons
+                .iter()
+                .map(|b| b.label.clone())
+                .collect();
+            assert_eq!(labels, ["Dismiss"], "{phase}");
+            m.dismiss_finished(&["op:x".into()]);
+            assert!(!m.badges().contains_key("a"));
+        }
+        // Auto-recover journal phases in flight are active.
+        for phase in ["admitted", "pane_ready", "resuming", "resumed", "prompting"] {
+            assert!(!terminal(phase), "{phase}");
+            let mut m = manager();
+            m.operations = vec![
+                json!({"id":"r","kind":"auto-recover","phase":phase,"session_id":"a","created_at":90}),
+            ];
+            assert!(m.badges()["a"].active, "{phase}");
+        }
+    }
+    #[test]
     fn session_indicator_counts_and_precedence() {
         let now = crate::usage::clock();
         let mut m = manager();

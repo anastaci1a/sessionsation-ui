@@ -138,7 +138,7 @@ pub fn backend_running(operations: &[Value]) -> BTreeSet<String> {
 pub fn terminal(phase: &str) -> bool {
     matches!(
         phase,
-        "complete" | "completed" | "cancelled" | "failed" | "recovered"
+        "complete" | "completed" | "cancelled" | "failed" | "recovered" | "abandoned" | "uncertain"
     )
 }
 /// Running count: queue entries plus backend operations the queue does not track.
@@ -370,7 +370,7 @@ pub fn settle(
                 let phase = receipt["phase"].as_str().unwrap_or("");
                 match phase {
                     "running" | "complete" | "completed" | "recovered" => false,
-                    "failed" | "cancelled" => {
+                    "failed" | "cancelled" | "abandoned" => {
                         let detail = receipt["detail"]
                             .as_str()
                             .filter(|d| !d.trim().is_empty())
