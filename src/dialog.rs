@@ -1071,10 +1071,14 @@ mod tests {
                 .iter()
                 .map(|c| c.glyph.as_str())
                 .collect::<String>();
-            assert!(row.starts_with(&format!(
-                "┌{}",
-                crate::widgets::clip(title, d.size.unwrap().width - 2)
-            )));
+            // A long title is the marquee start (right `…`); a short one is whole.
+            let width = d.size.unwrap().width - 2;
+            let want = if title.chars().count() > width {
+                crate::widgets::marquee(title, width, 0)
+            } else {
+                title.to_string()
+            };
+            assert!(row.starts_with(&format!("┌{want}")), "{row}");
             assert!(row.ends_with('┐'));
             if title == "Popup Title" {
                 assert!(row.starts_with("┌Popup Title──"));

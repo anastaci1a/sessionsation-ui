@@ -13,6 +13,8 @@ pub const UNSET: &str = "not set";
 pub const NAME_MAX_CHARS: usize = 30;
 static SESSION_NAME_MAX: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(NAME_MAX_CHARS);
+static ACCOUNT_DISPLAY_NAME_MAX: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(NAME_MAX_CHARS);
 static ACCOUNT_NAME_MAX: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(NAME_MAX_CHARS);
 /// A positive integer limit from `capabilities[key]`, else the old default.
@@ -26,10 +28,24 @@ pub fn name_limit(capabilities: &serde_json::Value, key: &str) -> usize {
 pub fn set_name_limits(capabilities: &serde_json::Value) {
     use std::sync::atomic::Ordering::Relaxed;
     SESSION_NAME_MAX.store(name_limit(capabilities, "session_name_max"), Relaxed);
-    ACCOUNT_NAME_MAX.store(name_limit(capabilities, "new_account_name_max"), Relaxed);
+    let account = name_limit(capabilities, "new_account_name_max");
+    ACCOUNT_NAME_MAX.store(account, Relaxed);
+    // The display name has its own limit; older backends use the account-name one.
+    let display = if capabilities["account_display_name_max"]
+        .as_u64()
+        .is_some_and(|n| n > 0)
+    {
+        name_limit(capabilities, "account_display_name_max")
+    } else {
+        account
+    };
+    ACCOUNT_DISPLAY_NAME_MAX.store(display, Relaxed);
 }
 pub fn session_name_max() -> usize {
     SESSION_NAME_MAX.load(std::sync::atomic::Ordering::Relaxed)
+}
+pub fn account_display_name_max() -> usize {
+    ACCOUNT_DISPLAY_NAME_MAX.load(std::sync::atomic::Ordering::Relaxed)
 }
 pub fn account_name_max() -> usize {
     ACCOUNT_NAME_MAX.load(std::sync::atomic::Ordering::Relaxed)
@@ -1179,7 +1195,7 @@ pub fn frame_time(canvas: &Canvas) -> u64 {
 /// cycle pauses on the start for [`MARQUEE_PAUSE_MS`], then moves one grapheme
 /// left every [`MARQUEE_STEP_MS`] around `text + MARQUEE_GAP + text …` until the
 /// start is back in place, and repeats. Frames are exactly `width` cells; an
-/// edge with more than one hidden grapheme of the text shows `…`. Text that fits is returned as is.
+/// edge with name text hidden just past it shows `…`. Text that fits is returned as is.
 pub fn marquee(text: &str, width: usize, elapsed: u64) -> String {
     if UnicodeWidthStr::width(text) <= width {
         return text.to_owned();
@@ -1210,16 +1226,12 @@ pub fn marquee(text: &str, width: usize, elapsed: u64) -> String {
         shown.push(g);
         used += w;
     }
-    // More than one grapheme of the text off a side: that edge shows `…` (one
-    // hidden grapheme just shows as itself; a window in the gap hides nothing).
-    // The opening pause is not scrolling yet and shows the plain start.
-    let left_hidden = if offset < text_len { offset } else { 0 };
-    let end = offset + shown.len();
-    let right_hidden = if offset > 0 && end <= text_len {
-        text_len - end
-    } else {
-        0
-    };
+    // `…` replaces the first/last visible cell when name text continues just past
+    // that edge: left when the previous ring cell is a name character, right when
+    // both the edge cell and the next one are (a gap never gets a right `…`).
+    let ring_len = ring.len();
+    let is_name = |i: usize| i % ring_len < text_len;
+    let left_mark = is_name(offset + ring_len - 1);
     let mark = |g: &str| {
         format!(
             "…{}",
@@ -1229,7 +1241,8 @@ pub fn marquee(text: &str, width: usize, elapsed: u64) -> String {
     let mut frame = String::new();
     let last = shown.len().saturating_sub(1);
     for (i, g) in shown.iter().enumerate() {
-        if (i == 0 && left_hidden > 1) || (i == last && i != 0 && right_hidden > 1) {
+        let right_mark = i == last && i != 0 && is_name(offset + i) && is_name(offset + i + 1);
+        if (i == 0 && left_mark) || right_mark {
             frame.push_str(&mark(g));
         } else {
             frame.push_str(g);
@@ -1771,13 +1784,21 @@ mod tests {
         let (pause, step) = (MARQUEE_PAUSE_MS, MARQUEE_STEP_MS);
         assert_eq!(MARQUEE_GAP, "  ");
         let frame = |t: u64| marquee("abcdefgh", 5, t);
-        // The opening pause shows the plain start (not scrolling yet).
+        // The opening pause shows the plain start, with a right `…` for what is hidden.
         for t in [0, pause / 2, pause - 1] {
-            assert_eq!(frame(t), "abcde", "pause at {t}");
+            assert_eq!(frame(t), "abcd…", "pause at {t}");
         }
         // Then one grapheme left per step, all the way around the loop.
         let steps = [
-            "bcde…", "…defg", "…efgh", "…fgh ", "…gh  ", "…h  a", "…  ab", "  abc", " abcd",
+            "…cde…",
+            "…def…",
+            "…efgh",
+            "…fgh ",
+            "…gh  ",
+            "…h  …",
+            "…  a…",
+            "… ab…",
+            " abc…",
         ];
         for (k, want) in steps.iter().enumerate() {
             let t = pause + step * k as u64;
@@ -1785,23 +1806,36 @@ mod tests {
             assert_eq!(frame(t + step - 1), *want, "held through step {}", k + 1);
         }
         // Exactly two blank cells separate the end from the next start.
-        assert!(frame(pause + step * 5).contains("h  a"));
-        // Two or more hidden graphemes on a side show `…`; exactly one shows itself.
-        assert_eq!(frame(pause), "bcde…");
-        assert_eq!(frame(pause + step), "…defg");
+        assert!(frame(pause + step * 4).contains("gh  "));
+        // A right `…` only when name text follows; a left one only when name text precedes.
+        assert_eq!(frame(pause), "…cde…");
+        assert_eq!(frame(pause + step * 2), "…efgh");
+        assert_eq!(frame(pause + step * 8), " abc…");
 
         assert!(!steps.iter().any(|f| f.contains("   ")));
         // The start returns to its place and the next cycle pauses again.
         let period = pause + step * steps.len() as u64;
         for t in [period, period + pause - 1] {
-            assert_eq!(frame(t), "abcde", "second pause at {t}");
+            assert_eq!(frame(t), "abcd…", "second pause at {t}");
         }
-        assert_eq!(frame(period + pause), "bcde…");
+        assert_eq!(frame(period + pause), "…cde…");
         // Every frame fills its width; text that fits never moves.
         assert!((0..period).all(|t| UnicodeWidthStr::width(frame(t).as_str()) == 5));
         assert_eq!(marquee("short", 5, pause + step * 3), "short");
         // Wide glyphs never straddle the edge: a blank cell takes their place.
-        assert_eq!(marquee("界界界", 5, 0), "界界 ");
+        assert_eq!(marquee("界界界", 5, 0), "界…  ");
+    }
+    #[test]
+    fn marquee_edges_show_ellipses_only_beside_name_characters() {
+        let (pause, step) = (MARQUEE_PAUSE_MS, MARQUEE_STEP_MS);
+        let at = |shift: u64| marquee("abcdefghijklmnop", 10, pause + step * (shift - 1));
+        assert_eq!(marquee("abcdefghijklmnop", 10, 0), "abcdefghi…");
+        assert_eq!(at(1), "…cdefghij…");
+        assert_eq!(at(2), "…defghijk…");
+        assert_eq!(at(7), "…ijklmnop ");
+        assert_eq!(at(8), "…jklmnop  ");
+        assert_eq!(at(9), "…klmnop  …");
+        assert_eq!(at(17), " abcdefgh…");
     }
     #[test]
     fn selectable_text_scrolls_only_while_selected() {
@@ -1809,7 +1843,7 @@ mod tests {
         for now in [0, t, 10_000] {
             assert_eq!(fit_selectable("abcdefgh", 5, now, false), "abcd…");
         }
-        assert_eq!(fit_selectable("abcdefgh", 5, 0, true), "abcde");
+        assert_eq!(fit_selectable("abcdefgh", 5, 0, true), "abcd…");
         assert_eq!(fit_selectable("abcdefgh", 5, t, true), "…efgh");
         assert_eq!(fit_selectable("abc", 5, t, true), "abc");
         // A menu row: the static ellipsized label until it is selected.
@@ -1845,13 +1879,13 @@ mod tests {
                 .map(|c| c.glyph.as_str())
                 .collect::<String>()
         };
-        assert_eq!(title(0), "Account se");
-        assert_eq!(title(MARQUEE_PAUSE_MS), "ccount se…");
+        assert_eq!(title(0), "Account s…");
+        assert_eq!(title(MARQUEE_PAUSE_MS), "…count se…");
         let period = MARQUEE_PAUSE_MS + MARQUEE_STEP_MS * 17;
-        assert_eq!(title(period - 1), " Account s");
-        assert_eq!(title(period), "Account se");
+        assert_eq!(title(period - 1), " Account …");
+        assert_eq!(title(period), "Account s…");
         // Info text below a list scrolls the same way with nothing selected.
-        assert_eq!(fit_scrolling("abcdefgh", 5, MARQUEE_PAUSE_MS), "bcde…");
+        assert_eq!(fit_scrolling("abcdefgh", 5, MARQUEE_PAUSE_MS), "…cde…");
     }
     #[test]
     fn scrolling_keeps_each_cell_style() {
@@ -1944,6 +1978,15 @@ mod tests {
             assert_eq!(name_limit(&bad, "session_name_max"), NAME_MAX_CHARS);
         }
         assert_eq!(NAME_MAX_CHARS, 30);
+        // The display-name limit is separate; without it the account-name limit applies.
+        set_name_limits(
+            &serde_json::json!({"new_account_name_max": 30, "account_display_name_max": 64}),
+        );
+        assert_eq!((account_name_max(), account_display_name_max()), (30, 64));
+        set_name_limits(&serde_json::json!({"new_account_name_max": 40}));
+        assert_eq!(account_display_name_max(), 40);
+        set_name_limits(&serde_json::json!({}));
+        assert_eq!((account_name_max(), account_display_name_max()), (30, 30));
     }
     #[test]
     fn overflowing_input_scrolls_with_ellipses_on_both_sides() {

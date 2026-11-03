@@ -4,7 +4,7 @@ use crate::{
     dialog::{self, Dialog, Field, Palette, Rule},
     render::Canvas,
     usage::{AccountsLayout, Usage, account_title},
-    widgets::{Options, Row, account_name_max, hint_lines},
+    widgets::{Options, Row, account_display_name_max, account_name_max, hint_lines},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
@@ -1181,7 +1181,7 @@ impl Manager {
             Form::AccountRenameBackend(a.id.clone(), current.clone(), mismatch),
         );
         let mut field = Field::new("Display name", current);
-        field.input = field.input.limited(account_name_max());
+        field.input = field.input.limited(account_display_name_max());
         self.dialog.as_mut().unwrap().fields.push(field);
         self.sync_rename_dialog();
     }
@@ -5727,8 +5727,8 @@ mod tests {
                 .collect()
         };
         assert!(line(4).contains("… · 1234"), "{}", line(4));
-        // The selected name scrolls (from its start) instead of ending in `…`.
-        assert!(line(3).contains("a-very-lo · 7792"), "{}", line(3));
+        // The selected name shows the marquee start with a right `…`.
+        assert!(line(3).contains("a-very-l… · 7792"), "{}", line(3));
         let mut c = Canvas::new(40, 24);
         c.clock = crate::widgets::MARQUEE_PAUSE_MS;
         m.paint_at(&mut c, 23, 100);
@@ -5736,7 +5736,7 @@ mod tests {
             .iter()
             .map(|c| c.glyph.as_str())
             .collect();
-        assert!(line.contains("-very-lo… · 7792"), "{line}");
+        assert!(line.contains("…very-lo… · 7792"), "{line}");
     }
     #[test]
     fn loading_confirmation_and_operation_share_the_opened_frame() {
