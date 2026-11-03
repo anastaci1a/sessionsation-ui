@@ -2929,7 +2929,11 @@ impl Manager {
         args.extend(strings(&["--to", account]));
         let name = s["name"].as_str().unwrap_or("session");
         let claude = s["provider"] == "claude" || account.starts_with("claude:");
-        let text = if claude {
+        let text = if s["availability"] != "running" {
+            format!(
+                "Move {name} to {account} while retaining conversation history? The session is not running, so only its history moves; it stays stopped and starts on the new account the next time you resume it."
+            )
+        } else if claude {
             format!(
                 "Move {name} to {account} while retaining conversation history? The session's Claude process is stopped and resumed on the new account in the same pane. History moves; the old account's project memory and settings stay with the old account."
             )
@@ -6449,7 +6453,17 @@ mod tests {
     #[test]
     fn claude_switch_wording_is_claude_specific_and_codex_keeps_its_text() {
         let mut m = setup();
-        let s = |p: &str| json!({"id":"two","name":"Cur","provider":p,"generation":"g1","capabilities":{"switch_account":true}});
+        let s = |p: &str| json!({"id":"two","name":"Cur","provider":p,"generation":"g1","availability":"running","capabilities":{"switch_account":true}});
+        for p in ["claude", "codex"] {
+            let stopped = json!({"id":"two","name":"Cur","provider":p,"generation":"g1","availability":"saved","capabilities":{"switch_account":true}});
+            m.sessions = vec![stopped.clone()];
+            m.switch_confirmation(stopped, &format!("{p}:b"));
+            let body = m.dialog.as_ref().unwrap().body[0].clone();
+            assert!(
+                body.contains("only its history moves; it stays stopped"),
+                "{body}"
+            );
+        }
         m.sessions = vec![s("claude")];
         m.switch_confirmation(s("claude"), "claude:b");
         let body = m.dialog.as_ref().unwrap().body[0].clone();
