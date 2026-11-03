@@ -797,6 +797,7 @@ pub fn kind_label(kind: &str) -> String {
         "account" | "switch" => "Switch account",
         "account_delete" => "Delete account",
         "restart" => "Restart",
+        "auto-recover" | "auto_recover" => "Auto-recover",
         "terminate" | "stop" => "End session",
         "directory" | "relocate" => "Change directory",
         "move_project" => "Move project folder",
@@ -828,6 +829,7 @@ fn active_text(kind: &str, record: &Value, spaces: &BTreeMap<String, String>) ->
             |a| format!("switching to {}", crate::usage::short_name(a)),
         ),
         "restart" => "restarting".into(),
+        "auto-recover" | "auto_recover" => "recovering".into(),
         "terminate" | "stop" => "ending".into(),
         "directory" | "relocate" | "move_project" => "changing directory".into(),
         "pause" => "pausing".into(),
@@ -845,6 +847,7 @@ fn failed_text(kind: &str) -> String {
         "move_space" => "move",
         "account" | "switch" => "switch",
         "restart" => "restart",
+        "auto-recover" | "auto_recover" => "auto-recover",
         "terminate" | "stop" => "end",
         "directory" | "relocate" | "move_project" => "directory change",
         "pause" => "pause",
@@ -4110,6 +4113,19 @@ impl Manager {
                     Purpose::Resume(key),
                 );
             }
+            crate::session_list::Action::AutoRecover => {
+                // Enabling keeps the generation and uses the backend's default prompt.
+                let mut args = Self::target(&s, "auto-recover");
+                args.push(
+                    if s["auto_recover"]["enabled"] == true {
+                        "--disable"
+                    } else {
+                        "--enable"
+                    }
+                    .into(),
+                );
+                return self.mutate(args);
+            }
             crate::session_list::Action::Restart | crate::session_list::Action::Stop => {
                 let command = if action == crate::session_list::Action::Restart {
                     "restart"
@@ -5588,6 +5604,43 @@ impl Manager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn auto_recover_toggle_sends_enable_or_disable_and_labels_its_operations() {
+        let args = |session: Value| {
+            let mut m = Manager::default();
+            let intents = m.session_action(session, crate::session_list::Action::AutoRecover);
+            let Some(Intent::Api(_, args)) = intents.first() else {
+                panic!("request required")
+            };
+            args.clone()
+        };
+        let off = json!({"id":"s1","generation":"g1","name":"T","availability":"running","capabilities":{"auto_recover":true}});
+        assert_eq!(
+            args(off),
+            [
+                "auto-recover",
+                "--session",
+                "s1",
+                "--expected-generation",
+                "g1",
+                "--enable"
+            ]
+        );
+        let on = json!({"id":"s1","generation":"g2","name":"T","availability":"running","auto_recover":{"enabled":true}});
+        assert_eq!(
+            args(on),
+            [
+                "auto-recover",
+                "--session",
+                "s1",
+                "--expected-generation",
+                "g2",
+                "--disable"
+            ]
+        );
+        assert_eq!(kind_label("auto-recover"), "Auto-recover");
+        assert_eq!(failed_text("auto-recover"), "auto-recover failed");
+    }
     #[test]
     fn relocation_requires_preview_then_confirmation_and_preserves_target() {
         let mut m = Manager::default();

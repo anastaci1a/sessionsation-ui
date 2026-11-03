@@ -2,7 +2,7 @@
 use crate::preferences::{
     AntigravitySpinner, ClaudeSpinner, CodexSpinner, GeminiSpinner, Spinners,
 };
-use crate::widgets::RowMode;
+use crate::widgets::{RowMode, WARN};
 use crate::{
     render::{Accent, Canvas, Cell},
     usage::short_name,
@@ -22,6 +22,7 @@ pub enum Action {
     MoveProject,
     ChangeDirectory,
     Restart,
+    AutoRecover,
     Stop,
     Archive,
     Delete,
@@ -175,6 +176,55 @@ fn live_gate(s: &Value, label: &str, capability: &str) -> Row {
         row.with_hover_reason("not available now")
     }
 }
+/// The backend's per-session auto-recover record, when it reports one.
+fn auto_recover_on(s: &Value) -> bool {
+    s["auto_recover"]["enabled"] == true
+}
+/// "Auto-recover: on/off", only when the backend advertises the capability
+/// (older backends have no such key and show nothing). Disabling is always
+/// allowed; enabling needs a live session and otherwise shows the backend reason.
+fn auto_recover_row(s: &Value) -> Option<(Row, Action)> {
+    if !s["capabilities"]["auto_recover"].is_boolean() && !auto_recover_on(s) {
+        return None;
+    }
+    let on = auto_recover_on(s);
+    let label = if on {
+        "Auto-recover: on"
+    } else {
+        "Auto-recover: off"
+    };
+    let row = Row::gate(label, on || s["capabilities"]["auto_recover"] == true);
+    if row.enabled {
+        return Some((row, Action::AutoRecover));
+    }
+    let reason = if pending(s) {
+        "operation running".to_owned()
+    } else {
+        backend_reason(s, "auto_recover")
+            .or_else(|| {
+                let text = reason_text(s["capability_reasons"]["auto_recover"].as_str()?);
+                (text != "unavailable").then_some(text)
+            })
+            .unwrap_or_else(|| "only for live sessions".into())
+    };
+    Some((row.with_hover_reason(reason), Action::Unavailable))
+}
+/// Short list indicator for a session with auto-recover on: `(text, warning)`.
+pub fn auto_recover_tag(s: &Value) -> Option<(String, bool)> {
+    if !auto_recover_on(s) {
+        return None;
+    }
+    let a = &s["auto_recover"];
+    Some(if a["suppressed"] == true {
+        ("↻ auto-recover suppressed".into(), true)
+    } else {
+        match a["last_result"].as_str() {
+            Some("rate_limited") => ("↻ auto-recover rate limited".into(), true),
+            Some("failed") => ("↻ auto-recover failed".into(), true),
+            _ => ("↻ auto-recover".into(), false),
+        }
+    })
+}
 /// A running session outside a HERDR pane whose backend advertises the
 /// `add_to_herdr` capability gets "Add to HERDR" in place of "Focus session".
 /// Older backends (no such capability key) keep today's rows.
@@ -193,9 +243,13 @@ fn add_to_herdr_row(s: &Value) -> Option<Row> {
 }
 /// Reasons arrive as "CODE: text"; show the text and never the bare code.
 fn add_reason(s: &Value) -> String {
-    let reason = s["capability_reasons"]["add_to_herdr"]
-        .as_str()
-        .unwrap_or("");
+    reason_text(
+        s["capability_reasons"]["add_to_herdr"]
+            .as_str()
+            .unwrap_or(""),
+    )
+}
+fn reason_text(reason: &str) -> String {
     match reason.split_once(": ") {
         Some((_, text)) if !text.trim().is_empty() => {
             let text = text.trim().trim_end_matches('.');
@@ -326,6 +380,18 @@ pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
     } else {
         codex_actions(s, resume)
     };
+    if s["availability"] != "archived"
+        && let Some(row) = auto_recover_row(s)
+    {
+        // Beside Restart/End; stopped sessions only keep it to switch it off.
+        if let Some(i) = rows.iter().position(|(_, a)| *a == Action::Restart) {
+            rows.insert(i, row);
+        } else if auto_recover_on(s)
+            && let Some(i) = rows.iter().position(|(_, a)| *a == Action::Rename)
+        {
+            rows.insert(i + 1, row);
+        }
+    }
     let mut aligned: Vec<Row> = rows.iter().map(|(r, _)| r.clone()).collect();
     crate::widgets::align_reasons(&mut aligned);
     for ((row, _), aligned) in rows.iter_mut().zip(aligned) {
@@ -1097,6 +1163,30 @@ pub fn paint_with(
                 &detail,
                 Cell {
                     fg: MUTED,
+                    ..Cell::default()
+                },
+                false,
+            );
+        } else if let Some((tag, warn)) = auto_recover_tag(session)
+            && room >= 6
+        {
+            // Like a badge, only where it fits; a warning wears the failure colour.
+            let text = crate::widgets::ellipsize(&tag, room.saturating_sub(2));
+            canvas.widget_text(
+                x + 2,
+                y,
+                &text,
+                Cell {
+                    fg: dim(
+                        if warn {
+                            WARN
+                        } else if selected {
+                            SECONDARY
+                        } else {
+                            MUTED
+                        },
+                        options.back,
+                    ),
                     ..Cell::default()
                 },
                 false,
@@ -2055,6 +2145,80 @@ mod tests {
                 "{width}: {shown}"
             );
         }
+    }
+    #[test]
+    fn auto_recover_row_needs_the_capability_and_shows_state_or_reason() {
+        let find = |s: &Value| {
+            actions(s, true)
+                .into_iter()
+                .find(|(r, _)| r.label.starts_with("Auto-recover"))
+        };
+        // Older backend: no capability key, no row (native and Codex sessions).
+        for provider in ["codex", "claude"] {
+            let old = json!({"availability":"running","provider":provider,"capabilities":{"restart":true,"stop":true}});
+            assert!(find(&old).is_none(), "{provider}");
+        }
+        for provider in ["codex", "claude"] {
+            let mut s = json!({"availability":"running","provider":provider,"capabilities":{"restart":true,"stop":true,"auto_recover":true}});
+            let (row, action) = find(&s).unwrap();
+            assert!(row.label.starts_with("Auto-recover: off") && row.enabled);
+            assert_eq!(action, Action::AutoRecover);
+            s["auto_recover"] = json!({"enabled":true});
+            assert!(find(&s).unwrap().0.label.starts_with("Auto-recover: on"));
+            // Not live: greyed with the backend reason, but switching off still works.
+            s["capabilities"]["auto_recover"] = json!(false);
+            s["capability_reasons"] =
+                json!({"auto_recover":"AUTO_RECOVER_REQUIRES_LIVE: Session is not live."});
+            assert!(find(&s).unwrap().0.enabled);
+            s["auto_recover"] = json!({"enabled":false});
+            let (row, action) = find(&s).unwrap();
+            assert!(!row.enabled && action == Action::Unavailable);
+            assert!(
+                row.preview
+                    .as_deref()
+                    .unwrap()
+                    .contains("session is not live"),
+                "{row:?}"
+            );
+        }
+    }
+    #[test]
+    fn auto_recover_indicator_marks_enabled_sessions_and_problems() {
+        assert_eq!(auto_recover_tag(&json!({})), None);
+        assert_eq!(
+            auto_recover_tag(&json!({"auto_recover":{"enabled":false}})),
+            None
+        );
+        let tag = |a: Value| auto_recover_tag(&json!({"auto_recover": a})).unwrap();
+        assert_eq!(
+            tag(json!({"enabled":true})),
+            ("↻ auto-recover".into(), false)
+        );
+        assert!(tag(json!({"enabled":true,"suppressed":true})).1);
+        assert_eq!(
+            tag(json!({"enabled":true,"last_result":"rate_limited"})).0,
+            "↻ auto-recover rate limited"
+        );
+        assert_eq!(
+            tag(json!({"enabled":true,"last_result":"failed"})).0,
+            "↻ auto-recover failed"
+        );
+        let sessions = vec![
+            json!({"id":"a","name":"alpha","account_id":"codex:p","availability":"saved","auto_recover":{"enabled":true}}),
+            json!({"id":"b","name":"beta","account_id":"codex:p","availability":"saved"}),
+        ];
+        let mut c = Canvas::new(100, 20);
+        paint(
+            &mut c,
+            &mut Options::default(),
+            &sessions,
+            true,
+            16,
+            100,
+            19,
+        );
+        assert!(text(&c, 3).contains("↻ auto-recover"), "{}", text(&c, 3));
+        assert!(!text(&c, 4).contains('↻'), "{}", text(&c, 4));
     }
     #[test]
     fn only_the_selected_long_name_scrolls_and_others_stay_ellipsized() {
