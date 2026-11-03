@@ -1227,8 +1227,8 @@ pub fn marquee(text: &str, width: usize, elapsed: u64) -> String {
         used += w;
     }
     // `…` replaces the first/last visible cell when name text continues just past
-    // that edge: left when the previous ring cell is a name character, right when
-    // both the edge cell and the next one are (a gap never gets a right `…`).
+    // that edge: left when the cell before the window is a name character, right
+    // when the cell after it is (so a trailing gap cell can carry the `…`).
     let ring_len = ring.len();
     let is_name = |i: usize| i % ring_len < text_len;
     let left_mark = is_name(offset + ring_len - 1);
@@ -1241,7 +1241,7 @@ pub fn marquee(text: &str, width: usize, elapsed: u64) -> String {
     let mut frame = String::new();
     let last = shown.len().saturating_sub(1);
     for (i, g) in shown.iter().enumerate() {
-        let right_mark = i == last && i != 0 && is_name(offset + i) && is_name(offset + i + 1);
+        let right_mark = i == last && i != 0 && is_name(offset + i + 1);
         if (i == 0 && left_mark) || right_mark {
             frame.push_str(&mark(g));
         } else {
@@ -1794,7 +1794,7 @@ mod tests {
             "…def…",
             "…efgh",
             "…fgh ",
-            "…gh  ",
+            "…gh …",
             "…h  …",
             "…  a…",
             "… ab…",
@@ -1806,7 +1806,7 @@ mod tests {
             assert_eq!(frame(t + step - 1), *want, "held through step {}", k + 1);
         }
         // Exactly two blank cells separate the end from the next start.
-        assert!(frame(pause + step * 4).contains("gh  "));
+        assert_eq!(frame(pause + step * 4), "…gh …");
         // A right `…` only when name text follows; a left one only when name text precedes.
         assert_eq!(frame(pause), "…cde…");
         assert_eq!(frame(pause + step * 2), "…efgh");
@@ -1833,7 +1833,7 @@ mod tests {
         assert_eq!(at(1), "…cdefghij…");
         assert_eq!(at(2), "…defghijk…");
         assert_eq!(at(7), "…ijklmnop ");
-        assert_eq!(at(8), "…jklmnop  ");
+        assert_eq!(at(8), "…jklmnop …");
         assert_eq!(at(9), "…klmnop  …");
         assert_eq!(at(17), " abcdefgh…");
     }
