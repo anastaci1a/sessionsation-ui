@@ -5,8 +5,10 @@ inside [HERDR](https://herdr.dev). Choose an account, Space, name and directory;
 start in a normal tab; manage accounts, saved sessions and background operations.
 The CLI owns credentials and lifecycle. Closing the popup leaves agents running.
 
-**Early development.** Codex is supported through a compatible sessionsation backend.
-Claude is preparation-only. Some lifecycle/experimental actions remain unavailable;
+**Early development.** Codex, Claude Code, Gemini CLI and Antigravity CLI are supported
+through a compatible sessionsation backend (tested against contract 1.42.0); each session
+and account offers only what the backend capabilities allow. Some lifecycle/experimental
+actions remain unavailable;
 [capabilities and limits](docs/usage.md#capabilities-and-limits) describe what actually works.
 
 ![Real HERDR in Rose Pine and sessionsation-ui with synthetic accounts, session management and new-session handoff](docs/assets/demo.gif)
@@ -16,8 +18,9 @@ Synthetic personal/work accounts and an inert shell; no provider calls.
 
 ## Requirements and install
 
-Linux, HERDR **0.9.5** (the tested version), a configured sessionsation CLI with
-public API v1, Git, a C toolchain and rustup. Node.js **22.18+** runs the optional
+Linux, HERDR **0.9.5** (the tested version), a configured sessionsation CLI speaking
+public API v1 with contract MAJOR 1 and MINOR 17 or newer (the popup refuses an older or
+different-MAJOR backend at start), Git, a C toolchain and rustup. Node.js **22.18+** runs the optional
 configuration installer and compatibility tools. The pinned Rust toolchain is
 1.95.0; the package declares a 1.88 minimum, which is not independently verified.
 
@@ -31,8 +34,23 @@ herdr plugin link "$PWD" --enabled
 ```
 
 The repository is public; cloning and building do not require GitHub authentication.
+The popup uses the backend at `/mnt/user/live/packages/sessionsation/current/sessionsation`
+by default: it follows the `current` symlink on every call instead of pinning a release,
+so a backend update needs no UI change. `SESSIONSATION_BIN` or the `binary` key of
+`.runtime/config.json` overrides it ([details](docs/usage.md#install-and-configure)).
 Keep the checkout/plugin and executable available. These steps do not configure
 provider accounts or automatically change your terminal startup.
+
+### Update
+
+```sh
+git pull --ff-only
+CARGO_TARGET_DIR=target-ui cargo build --release --locked
+install -m 755 target-ui/release/sessionsation-ui .runtime/sessionsation-ui
+```
+
+Open popups keep running the old binary; new ones use the installed one. Backend updates
+are separate and need no rebuild.
 
 ## Quick start
 
@@ -49,6 +67,22 @@ successful handoff to a normal tab. Resume retains the provider conversation; it
 is not a cross-provider conversion or automatic migration of existing agents.
 
 For a credential-free preview, see the [isolated demo](docs/verification.md#animated-demo).
+
+## Development and tests
+
+```sh
+scripts/check-rust.sh   # cargo fmt --check, clippy -D warnings, cargo test (locked)
+npm test                # Node tests (node --test)
+npm run check           # JS/Bash syntax, manifest fields, local Markdown links
+```
+
+Without local toolchains, build `scripts/Dockerfile.check` and run the same commands in
+it; the [contributor guide](agents/README.md) has the recipe. Docs-only changes need
+`npm run check`. Optional PTY/HERDR scripts and the demo (`scripts/Dockerfile.demo`) are in
+[verification](docs/verification.md).
+
+## Documentation
+
 See [usage/configuration](docs/usage.md), [architecture](docs/architecture.md),
 [checks/demo regeneration](docs/verification.md), and [contributing](agents/README.md).
 MIT licensed; [NOTICE](NOTICE) records upstream palette/reference attribution and

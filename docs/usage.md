@@ -37,16 +37,16 @@ override them with `SESSIONSATION_UI_BIN` and `SESSIONSATION_UI_CONFIG`.
 Config contains `binary` and `dataDir`. `SESSIONSATION_BIN` and
 `SESSIONSATION_DATA_DIR` override stored backend settings.
 
-Use the backend's stable symlinked path,
-`/mnt/user/live/packages/sessionsation/current/sessionsation`, as `binary`; it is the default
-when `binary` is unset (and the installer's default `--binary`). The UI never canonicalises it:
+The UI follows the backend's `current` symlink rather than pinning a release: the
+stable path `/mnt/user/live/packages/sessionsation/current/sessionsation` is the default
+`binary` when it is unset (and the installer's default `--binary`). The UI never canonicalises it:
 the operating system follows the link on every backend call, so each popup start (and every
 later call) uses the release the backend's cutover selected, and a backend-only cutover needs no
 UI config change. A stored `binary` that pins one release of that package
 (`.../sessionsation/releases/<id>/sessionsation`) is replaced by the stable path while it exists;
 `SESSIONSATION_BIN` is always used as given. At each popup start the UI runs `api version` and
-requires contract MAJOR 1 and MINOR 17 or newer (features beyond that are gated on
-`api capabilities`). A different MAJOR, or an older MINOR, is refused with a message naming the
+requires contract MAJOR 1 and MINOR 17 or newer (newer MINORs are accepted; features beyond
+that are gated on `api capabilities`; the live backend is contract 1.42.0). A different MAJOR, or an older MINOR, is refused with a message naming the
 backend path and its contract version, shown in the popup until Enter. Preferences are
 `preferences.json` beside the resolved client-config target. If using a config
 symlink, its writable sidecar stays beside the real target. No account credentials
@@ -121,13 +121,13 @@ there is no matching selection; refreshed lists retain the hovered account by ID
 - The popup uses public backend API v1 only: accounts/usage/limits, new/resume,
   session details/rename, supported switch/restart/stop, HERDR Space moves, archive/restore/delete,
   and operation progress. Final checks and destructive confirmations belong to CLI.
-- Claude Code, Gemini CLI and Antigravity CLI sessions offer what each session's backend capabilities
-  allow: focus, rename, start, and (contract revision 17) archive, restore and delete of
-  stopped conversations. Rows they cannot use stay greyed with the session's backend
-  reason (`exit the agent first`, `hosted worker running`) or `not supported for
-  Claude Code`/`Gemini CLI`/`Antigravity CLI` when the provider has no such control
-  (Antigravity has no archive, restore, delete, stop, restart, account switch, Space move or
-  Add to HERDR; new, resume and rename are supported).
+- Claude Code, Gemini CLI and Antigravity CLI sessions share one menu shape and offer what each
+  session's backend capabilities allow: focus, details, rename, start, account switch, Space
+  move, restart, end, archive, restore and delete. Rows they cannot use stay greyed with the
+  session's backend reason (`exit the agent first`, `hosted worker running`) or `not supported
+  for Claude Code`/`Gemini CLI`/`Antigravity CLI` when the provider has no such control
+  (Antigravity has no restart, account switch, Space move or Add to HERDR; since contract
+  1.25 it supports stop, archive, restore and delete; new, resume and rename are supported).
   Cross-provider conversion is outside this version.
 - Active Codex sessions support Change working directory and Move project folder
   when the backend advertises those capabilities. Enter a destination, review the
@@ -186,10 +186,16 @@ account step to the session's provider. Usage details name the source, semantics
 age and reset time; a missing or unusable window is shown as unavailable or unknown,
 never as 0%.
 
-A Claude Code session offers only Focus Session (verified HERDR attachment),
-Session Details, Rename Session (Sessionsation name; the native title follows at
-the next launch or resume) and, when stopped, Start Session. Everything else is
-omitted. Stale or unknown sessions explain why they cannot be started.
+A Claude Code session shows the same rows as Gemini and Antigravity sessions, each
+enabled only when the backend capability allows it: Focus Session (verified HERDR
+attachment) or Start Session when stopped, Session Details, Rename Session
+(Sessionsation name; the native title follows at the next launch or resume), Switch
+account, Move to Space, Restart, End session, Archive and Delete. Stale or unknown
+sessions explain why they cannot be started. Switching a Claude session stops and
+resumes its process on the new account in the same pane; history moves, while the old
+account's project memory and settings stay with it. A busy session asks for a separate
+"Switch anyway" confirmation (the backend's `RISK_CONFIRMATION_REQUIRED`), since the
+switch interrupts the current turn. Switching a stopped session only moves its history.
 
 Home orders New session, Manage sessions, Add account, a dot separator and
 Settings, followed by every account in backend order. There is no separate accounts
@@ -268,11 +274,14 @@ line length (one cell less than the rendered width). Percentages precede period 
 observations show Disabled, Login required or Usage unavailable as appropriate;
 stale observations are marked. New/resume account pickers use standard bullets
 with white/gray names and an aligned `x% 5h · x% wk` block one space after the longest name, omitting the short period and
-slash for weekly-only accounts. Every account’s status stays visible on the right of its row, independently of selection. Optional usage gives way when width is constrained. Ready uses the popup accent, unbolded; other statuses remain unbolded gray. Account names accept at most 30 ASCII characters;
-typing and paste stop at the limit.
+slash for weekly-only accounts. Accounts without usage data show no usage block in these pickers. Every account’s status stays visible on the right of its row, independently of selection. Optional usage gives way when width is constrained. Ready uses the popup accent, unbolded; other statuses remain unbolded gray. New account names accept at most `new_account_name_max` ASCII characters (30),
+account display names `account_display_name_max` and session names `session_name_max`
+(Unicode scalar values; the latter two are 64 on contract 1.35 and newer). The UI reads
+these limits from `api capabilities` and falls back to 30 for any the backend does not
+advertise; the CLI enforces them too. Typing and paste stop at the limit, and a name
+longer than its input scrolls inside it, with `…` at an edge that hides more than one
+character.
 Duplicate names immediately invalidate the editor and disable confirmation.
-Session creation/resume/rename accepts at most 30 Unicode scalar values, also
-enforced by the CLI.
 Inputs use the terminal's native cursor without overriding its shape, color or
 blink settings. Only the focused editor shows it; a single-field dialog keeps it
 editable while its buttons are selected. Menus hide it, and closing the popup
@@ -433,24 +442,29 @@ their own. Colours and weights stay those of each cell.
 Manage Sessions → Operations (or `o` while the status lane shows operations) opens
 the Operations popup over the current page: Running (operation spinner, kind,
 subject, live elapsed counter), Queued (in order, `queued #n`) and Recent (the last
-five finished or failed, newest first; a failure shows its reason, shortened to
+five finished or failed operations from the past day that are not dismissed, newest first; a failure shows its reason, shortened to
 the popup), then All operations (the full list below)
-and Close. It updates live and keeps the selected item. A queued item offers Cancel
-and Close; a recent one Dismiss and Close; a running one its progress dialog.
-Esc/Left return to the opener at its remembered row.
+and Close. It updates live and keeps the selected item. A queued item opens a dialog
+with Cancel (removing it before it starts), a started-but-unconfirmed one a disabled
+Cancel, and a running backend operation its progress dialog, with Cancel where the
+backend allows it (otherwise struck through with the backend's reason). Esc closes a
+dialog; there is no Close button. A finished operation's dialog offers Dismiss (or
+Unmark as dismissed) and, for a failure that can be recovered, Retry; a retry is
+never automatic. Esc/Left return to the opener at its remembered row.
 Operations has a filter row (`Show › All`, an Up/Down picker like Settings: All, In
-progress, Failed, Completed) above day groups (`• Today`, `• Yesterday`, `• Mon Oct 26`;
+progress, Failed, Completed, Not dismissed) above day groups (`• Today`, `• Yesterday`, `• Mon Oct 26`;
 undated legacy records last). Each row shows relative creation time, the subject
 (provider symbol and session or account), a plain kind (Move to Space, Delete
 account, Resume…) and a dim status; failures carry their reason inline. IDs are
 shown only in the operation's details, in a dim Identifiers group; details are
-titled by kind.
+titled by kind. On the Operations page, `m` dismisses the finished operations the current
+filter shows (active ones are untouched); it has no footer hint.
 It also lists original New/Resume receipts after reopening, without resending them.
 Operations are newest-first by creation time; unknown legacy creation dates sort
 last. Status updates retain the selected ID. New/Resume launches display complete
-once creation is verified, independently of the agent continuing to run. Completed
-submenus offer Details, and completed dialogs offer Close (no period), updating on
-the one-second status poll. Closing Progress/Details opened from a dedicated
+once creation is verified, independently of the agent continuing to run. Abandoned and
+uncertain operations are finished and unsuccessful (filed under Failed) and are never
+auto-dismissed. Dialogs update on the one-second status poll. Closing Progress/Details opened from a dedicated
 operation submenu returns to that submenu and retains its selection; subsequent
 status polls do not reopen the dialog.
 Resume has editable account, Space and name. Its directory picker is enabled when the backend advertises `resume.directory_selection`; it initially preserves the saved directory and sends the displayed choice explicitly, preventing a later default-location fallback. Existing/new directory choices use the same staged picker as creation and create nothing until Start is confirmed. The CLI performs final path/history checks and records the selected location after verified handoff; project files are not moved. Older backends retain the read-only saved directory. If checking a replacement directory reveals unfinished history, Start asks for separate confirmation while preserving the chosen account, Space, name and directory. Cancelling that warning starts nothing.
@@ -485,19 +499,28 @@ Every row has the name, then a state marker in place of the provider symbol and 
 account (`liq-glass-lead  ⏣ gate1`): the provider's chosen spinner while busy (or a
 pulsing symbol for Glow), the provider symbol and account name in the position-based
 accent while running idle, and both dim for saved history. Name width scales with the popup (about
-30% of its width, 12–40 cells); unselected long names end in `…`, and the selected
+30% of its width, 12–40 cells, plus 4); unselected long names end in `…`, and the selected
 one scrolls left (pause, scroll, pause, loop) to reveal the rest. A session with a
-pending or recently failed operation shows a badge after the account (`◜ moving to
-work` animates while active, `✗ move failed`), and a queued one `◌ restart queued`.
-A failure badge shows only the session's most recent outcome: a later success hides
-it, and failures older than a day are not shown; Right moves focus onto the badge,
-Enter opens that operation's progress or details over the list, and Left returns.
-A finished operation's dialog offers `Dismiss` before `Close`: it hides that badge
-for good (kept in `dismissed-operations.json` beside the preferences, pruned when
-the backend no longer lists the operation). Running operations cannot be
-dismissed, and a newer operation on the same session shows its badge again. A
-dismissed operation's dialog offers `Undismiss` instead, which removes it from
-`dismissed-operations.json` so its badge shows again under the same rules.
+active, queued or not-yet-dismissed operation shows an indicator after the account (`◜ moving to
+work` animates while active, `◌ restart queued`, `✓ move done`, `✗ move failed`). Active
+work wins; otherwise the not-dismissed outcomes show. Several operations show a count
+instead (`◜ (3)` running, `✓ (2)` all succeeded, `✗ (2)` otherwise). Right moves focus onto
+the indicator, Left returns. Enter opens the one operation's progress or details over the
+list, or, for a count, a per-session popup titled `<name> operations` with Active and
+Not dismissed groups (Enter opens an item, `m` dismisses the finished ones, Esc closes).
+Dismiss in an operation's dialog hides it for good (kept in `dismissed-operations.json`
+beside the preferences, pruned when the backend no longer lists the operation). Running
+operations cannot be dismissed. A successful backend operation counts as dismissed 24 hours
+after it finished; failures stay until dismissed. A dismissed operation's dialog offers
+`Unmark as dismissed` instead, which removes it from `dismissed-operations.json`. The
+non-interactive `./bin/sessionsation-popup dismiss-finished` marks every finished backend operation
+as dismissed through the same file.
+A running session shows `↻ auto-recover` after its account when the backend reports
+auto-recover on (`↻ auto-recover suppressed`, `rate limited` or `failed` in the warning
+colour when it last did not recover). Where the backend advertises
+`capabilities.auto_recover`, the session menu has an `Auto-recover: on/off` row beside
+Restart that toggles it with `api auto-recover --enable|--disable`; enabling needs a live
+session, and a stopped one only keeps the row to switch it off.
 The selected row's account name and static provider icon are bold at the selected
 accent level (other rows use the dim level; an animated icon keeps its own styling);
 with focus on the badge they return to the dim level, unbolded. Without a badge, the

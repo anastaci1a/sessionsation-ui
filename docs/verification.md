@@ -117,7 +117,9 @@ shipped as a README asset. See [agg](https://github.com/asciinema/agg),
 
 A public-image Debian bookworm environment, Rust 1.95.0 and Node.js 22.18.0
 passed formatting, Clippy, **184 Rust tests** (182 unit and two visual tests covering
-25 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation.
+25 goldens), **22 Node tests**, syntax/manifest/docs checks and Python compilation
+(this is the original acceptance record; the suite has grown since, and `npm test` now runs
+28 Node tests).
 The original clean build fetched locked public dependencies without the operator's
 cache; the navigation/selection follow-up used cached dependencies with networking
 disabled. Regressions cover Back history, stable selection across refreshed lists,
