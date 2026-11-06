@@ -26,7 +26,7 @@ use std::{
 };
 use tokio::sync::{Semaphore, mpsc};
 #[derive(Parser)]
-#[command(version, about = "Account and session management popup for HERDR")]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " ", env!("SESSIONSATION_UI_BUILD_COMMIT")), about = "Account and session management popup for HERDR")]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,

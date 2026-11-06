@@ -89,3 +89,14 @@ See [usage/configuration](docs/usage.md), [architecture](docs/architecture.md),
 [checks/demo regeneration](docs/verification.md), and [contributing](agents/README.md).
 MIT licensed; [NOTICE](NOTICE) records upstream palette/reference attribution and
 unresolved reference-license provenance; public visibility does not resolve it.
+
+## Release procedure
+
+1. Build from a clean checkout of the commit (never a `git archive` copy) into a **fresh, empty
+   target dir**: `SESSIONSATION_COMMIT=$(git rev-parse HEAD) CARGO_TARGET_DIR=$(mktemp -d) cargo build --release --locked`.
+   A reused target dir with copied sources can keep stale artifacts (cdebfee shipped without
+   `claude_spinner` that way).
+2. Run `scripts/check-rust.sh`; the binary's `--version` must print the release sha.
+3. Install to `releases/<sha>`, write `deployments/<ts>/`, switch `.runtime/sessionsation-ui`, then run
+   `scripts/smoke-installed.sh <installed binary> <sha>`. Failure means: switch the link back to
+   the previous release immediately (`rollback-note.txt`).
