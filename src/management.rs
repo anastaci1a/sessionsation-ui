@@ -124,6 +124,8 @@ enum Form {
     ActionWarning(Value, crate::session_list::Action),
     OperationApproval(String, u64),
     Rename(Value),
+    /// The Auto start prompt editor for a session.
+    AutoStartPrompt(Value),
     Relocation(Value, bool),
     SessionMutation(Value, &'static str),
     SessionDetails(String),
@@ -210,6 +212,8 @@ pub struct Manager {
     bypass_unavailable: BTreeMap<String, String>,
     /// The Bypass warning selector is grabbed: the choice pending Enter (true = Skip).
     bypass_pick: Option<bool>,
+    /// The Auto start row: grabbed picker choice and prompt-control focus.
+    auto_ui: crate::session_list::AutoUi,
     /// The Operations filter is grabbed: the value to restore on Esc.
     filter_grab: Option<OperationFilter>,
     pub active_operation: Option<String>,
@@ -346,6 +350,7 @@ impl Default for Manager {
             bypass: BTreeMap::new(),
             bypass_unavailable: BTreeMap::new(),
             bypass_pick: None,
+            auto_ui: Default::default(),
             filter_grab: None,
             active_operation: None,
             foreground: None,
@@ -852,6 +857,7 @@ pub fn kind_label(kind: &str) -> String {
         "account_delete" => "Delete account",
         "restart" => "Restart",
         "auto-recover" | "auto_recover" => "Auto-recover",
+        "auto-start" | "auto_start" => "Auto start",
         "terminate" | "stop" => "End session",
         "directory" | "relocate" => "Change directory",
         "move_project" => "Move project folder",
@@ -884,6 +890,7 @@ fn active_text(kind: &str, record: &Value, spaces: &BTreeMap<String, String>) ->
         ),
         "restart" => "restarting".into(),
         "auto-recover" | "auto_recover" => "recovering".into(),
+        "auto-start" | "auto_start" => "starting".into(),
         "terminate" | "stop" => "ending".into(),
         "directory" | "relocate" | "move_project" => "changing directory".into(),
         "pause" => "pausing".into(),
@@ -902,6 +909,7 @@ fn failed_text(kind: &str) -> String {
         "account" | "switch" => "switch",
         "restart" => "restart",
         "auto-recover" | "auto_recover" => "auto-recover",
+        "auto-start" | "auto_start" => "auto-start",
         "terminate" | "stop" => "end",
         "directory" | "relocate" | "move_project" => "directory change",
         "pause" => "pause",
@@ -1848,6 +1856,7 @@ impl Manager {
         self.queue_focus = None;
         self.steering_pick = None;
         self.bypass_pick = None;
+        self.auto_ui = Default::default();
         self.filter_grab = None;
         self.options = Options::default();
         self.options.selected = self.rows().iter().position(|r| !r.separator).unwrap_or(0);
@@ -2062,13 +2071,28 @@ impl Manager {
                     }),
                 &self.new_space_state(self.place),
             ),
-            Page::Session(key) => crate::session_list::actions(
-                self.session(key).unwrap_or(&Value::Null),
-                self.capabilities["resume"]["version"] == 1,
-            )
-            .into_iter()
-            .map(|(row, _)| row)
-            .collect(),
+            Page::Session(key) => {
+                let mut rows: Vec<Row> = crate::session_list::actions_with(
+                    self.session(key).unwrap_or(&Value::Null),
+                    self.capabilities["resume"]["version"] == 1,
+                    &self.auto_ui,
+                )
+                .into_iter()
+                .map(|(row, _)| row)
+                .collect();
+                crate::widgets::apply_selector_mode(&mut rows);
+                // The prompt control holds the focus: its row lights up, the rest darken.
+                if self.auto_ui.focus {
+                    for (i, row) in rows.iter_mut().enumerate() {
+                        row.mode = if i == self.options.selected {
+                            crate::widgets::RowMode::Active
+                        } else {
+                            crate::widgets::RowMode::Other
+                        };
+                    }
+                }
+                rows
+            }
             Page::Launch(kind, key) => {
                 let receipt = self.launch_record(kind, key);
                 vec![
@@ -3097,6 +3121,9 @@ impl Manager {
         if let Some(out) = self.move_key(key) {
             return out;
         }
+        if let Some(out) = self.auto_start_key(key.code) {
+            return out;
+        }
         if self.steering_pick.is_some() {
             return self.steering_key(key.code);
         }
@@ -3307,6 +3334,103 @@ impl Manager {
             }
             _ => {}
         }
+        vec![]
+    }
+    /// The selected row is the available Auto start picker: its session and mode.
+    fn auto_start_selected(&self) -> Option<(Value, crate::session_list::AutoMode)> {
+        let Page::Session(key) = &self.page else {
+            return None;
+        };
+        if self.options.back || self.dialog.is_some() {
+            return None;
+        }
+        let s = self.session(key)?;
+        let rows = crate::session_list::actions(s, self.capabilities["resume"]["version"] == 1);
+        (rows.get(self.options.selected)?.1 == crate::session_list::Action::AutoStart)
+            .then(|| (s.clone(), crate::session_list::auto_mode(s)))
+    }
+    /// Keys on the Auto start row. Enter or Right grabs the picker (Up/Down choose, Enter
+    /// sets, Esc reverts); with Start/Prompt, Right moves on to the prompt control, Enter
+    /// opens its editor and Left returns. Other keys are left to the list.
+    fn auto_start_key(&mut self, code: KeyCode) -> Option<Vec<Intent>> {
+        use crate::session_list::AutoMode;
+        let (s, current) = self.auto_start_selected()?;
+        let ui = self.auto_ui;
+        if ui.focus {
+            return match code {
+                KeyCode::Left | KeyCode::Esc => {
+                    self.auto_ui.focus = false;
+                    Some(vec![])
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => Some(self.open_auto_prompt(s)),
+                KeyCode::Up | KeyCode::Down => {
+                    self.auto_ui.focus = false;
+                    None
+                }
+                _ => Some(vec![]),
+            };
+        }
+        if let Some(pick) = ui.pick {
+            let at = AutoMode::ALL.iter().position(|m| *m == pick).unwrap_or(0);
+            match code {
+                KeyCode::Up => self.auto_ui.pick = Some(AutoMode::ALL[at.saturating_sub(1)]),
+                KeyCode::Down => self.auto_ui.pick = Some(AutoMode::ALL[(at + 1).min(2)]),
+                KeyCode::Esc => self.auto_ui.pick = None,
+                KeyCode::Right if pick == AutoMode::StartPrompt && current == pick => {
+                    self.auto_ui.pick = None;
+                    self.auto_ui.focus = true;
+                }
+                KeyCode::Left | KeyCode::Enter | KeyCode::Char(' ') => {
+                    self.auto_ui.pick = None;
+                    if pick != current {
+                        let mut args = Self::target(&s, "auto-start");
+                        args.extend(strings(&["--mode", pick.api()]));
+                        // Keep a custom prompt when going back to Start/Prompt.
+                        if let (AutoMode::StartPrompt, Some(p)) =
+                            (pick, s["auto_start"]["prompt"].as_str())
+                        {
+                            args.extend(strings(&["--prompt", p]));
+                        }
+                        return Some(self.mutate(args));
+                    }
+                }
+                _ => {}
+            }
+            return Some(vec![]);
+        }
+        match code {
+            KeyCode::Right if current == AutoMode::StartPrompt => self.auto_ui.focus = true,
+            KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
+                self.auto_ui.pick = Some(current)
+            }
+            _ => return None,
+        }
+        Some(vec![])
+    }
+    /// The prompt editor: a multiline input prefilled with the custom prompt (empty shows
+    /// the backend's default as a hint); Save sets Start/Prompt with it, empty clears it.
+    fn open_auto_prompt(&mut self, s: Value) -> Vec<Intent> {
+        let hint = self.capabilities["auto_start"]["default_prompt"]
+            .as_str()
+            .unwrap_or("Auto-start: the host restarted and sessionsation resumed this session. Re-check your state and continue your work.")
+            .to_owned();
+        let max = self.capabilities["auto_start"]["max_prompt_bytes"]
+            .as_u64()
+            .map_or(4000, |n| n as usize);
+        let current = s["auto_start"]["prompt"].as_str().unwrap_or("").to_owned();
+        self.show(
+            "Auto start prompt",
+            vec!["Sent to the session once it is started. Empty uses the default.".into()],
+            &["Save", "Cancel"],
+            Form::AutoStartPrompt(s),
+        );
+        if let Some(d) = self.dialog.as_mut() {
+            d.fields
+                .push(Field::multiline("Prompt", current, &hint, 6, max));
+            d.minimum_width = d.minimum_width.max(64);
+            d.hints = Some(&["▲/▼/◀/▶: Move", "Enter: Save", "Esc: Cancel"]);
+        }
+        self.auto_ui = Default::default();
         vec![]
     }
     /// The selected row is an available Live steering selector: its account and state.
@@ -3841,6 +3965,7 @@ impl Manager {
                         crate::session_list::Action::Focus
                             | crate::session_list::Action::AddToHerdr
                             | crate::session_list::Action::Details
+                            | crate::session_list::Action::AutoStart
                             | crate::session_list::Action::Unavailable
                     )
                 {
@@ -4179,6 +4304,8 @@ impl Manager {
                     Purpose::Resume(key),
                 );
             }
+            // The picker row is handled by its own keys; nothing to activate.
+            crate::session_list::Action::AutoStart => return vec![],
             crate::session_list::Action::AutoRecover => {
                 // Enabling keeps the generation and uses the backend's default prompt.
                 let mut args = Self::target(&s, "auto-recover");
@@ -4604,6 +4731,15 @@ impl Manager {
             Form::AccountRename(key) => {
                 let name: String = value(0).trim().chars().take(64).collect();
                 strings(&["account", "rename", &key, "--display-name", &name])
+            }
+            Form::AutoStartPrompt(s) => {
+                let mut args = Self::target(&s, "auto-start");
+                args.extend(strings(&["--mode", "start_prompt"]));
+                // Empty clears the custom prompt: the backend default applies.
+                if !value(0).trim().is_empty() {
+                    args.extend(strings(&["--prompt", value(0)]));
+                }
+                args
             }
             Form::Rename(s) => {
                 let mut args = Self::target(&s, "rename");
@@ -5512,8 +5648,11 @@ impl Manager {
         }
         let hints = if self.moving.is_some() {
             hint_lines(&["▲/▼: Move", "Enter: Save", "Esc: Cancel"], canvas.width)
+        } else if self.auto_ui.focus {
+            hint_lines(&["◀: Back", "Enter: Edit prompt"], canvas.width)
         } else if self.steering_pick.is_some()
             || self.bypass_pick.is_some()
+            || self.auto_ui.pick.is_some()
             || self.filter_grab.is_some()
         {
             hint_lines(&["▲/▼: Choose", "Enter: Set", "Esc: Cancel"], canvas.width)
@@ -5665,6 +5804,8 @@ impl Manager {
                 }
                 self.options.right_mode = self.steering_pick.is_some()
                     || self.bypass_pick.is_some()
+                    || self.auto_ui.pick.is_some()
+                    || self.auto_ui.focus
                     || self.filter_grab.is_some();
                 self.options
                     .paint_menu(canvas, &rows, 3, bottom, menu_controls)
@@ -5703,6 +5844,170 @@ impl Manager {
 
 #[cfg(test)]
 mod tests {
+    #[allow(clippy::field_reassign_with_default)]
+    fn auto_manager(mode: &str, prompt: Option<&str>) -> Manager {
+        let mut m = Manager::default();
+        m.capabilities =
+            json!({"resume":{"version":1},"auto_start":{"default_prompt":"DEFAULT TEXT"}});
+        m.sessions = vec![
+            json!({"id":"s1","generation":"g1","name":"T","provider":"claude","availability":"running",
+            "capabilities":{"restart":true,"stop":true,"auto_start":true},"auto_start":{"mode":mode,"prompt":prompt}}),
+        ];
+        m.go(Page::Session("s1".into()));
+        m.options.selected = m
+            .rows()
+            .iter()
+            .position(|r| r.label == "Auto start")
+            .unwrap();
+        m
+    }
+    fn api_args(intents: Vec<Intent>) -> Option<Vec<String>> {
+        match intents.into_iter().next() {
+            Some(Intent::Api(_, args)) => Some(args),
+            _ => None,
+        }
+    }
+    fn press_all(m: &mut Manager, codes: &[KeyCode]) -> Vec<Intent> {
+        let mut last = vec![];
+        for c in codes {
+            // Options need a painted frame to be chosen; stand in for one.
+            if let Some(d) = m.dialog.as_mut() {
+                d.visible = d.visible.max(1);
+            }
+            last = m.key(KeyEvent::new(*c, KeyModifiers::NONE));
+        }
+        last
+    }
+    #[test]
+    fn auto_start_picker_grabs_chooses_without_wrap_and_sets_the_mode() {
+        let mut m = auto_manager("start_prompt", None);
+        assert!(press_all(&mut m, &[KeyCode::Enter]).is_empty());
+        assert_eq!(
+            m.auto_ui.pick,
+            Some(crate::session_list::AutoMode::StartPrompt)
+        );
+        // Up at the top stays; Down walks to Disabled and stops there.
+        press_all(&mut m, &[KeyCode::Up]);
+        assert_eq!(
+            m.auto_ui.pick,
+            Some(crate::session_list::AutoMode::StartPrompt)
+        );
+        press_all(&mut m, &[KeyCode::Down, KeyCode::Down, KeyCode::Down]);
+        assert_eq!(
+            m.auto_ui.pick,
+            Some(crate::session_list::AutoMode::Disabled)
+        );
+        let args = api_args(press_all(&mut m, &[KeyCode::Enter])).unwrap();
+        assert_eq!(
+            args,
+            [
+                "auto-start",
+                "--session",
+                "s1",
+                "--expected-generation",
+                "g1",
+                "--mode",
+                "disabled"
+            ]
+        );
+        // Esc reverts without a request; choosing the current mode sends nothing.
+        let mut m = auto_manager("start", None);
+        press_all(&mut m, &[KeyCode::Enter, KeyCode::Down, KeyCode::Esc]);
+        assert_eq!(m.auto_ui.pick, None);
+        assert!(api_args(press_all(&mut m, &[KeyCode::Enter, KeyCode::Enter])).is_none());
+        // Back to Start/Prompt keeps a stored custom prompt.
+        let mut m = auto_manager("disabled", Some("keep"));
+        let args = api_args(press_all(
+            &mut m,
+            &[KeyCode::Enter, KeyCode::Up, KeyCode::Up, KeyCode::Enter],
+        ))
+        .unwrap();
+        assert_eq!(&args[5..], ["--mode", "start_prompt", "--prompt", "keep"]);
+    }
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn prompt_control_takes_right_only_with_start_prompt_and_left_returns() {
+        let mut m = auto_manager("start_prompt", None);
+        press_all(&mut m, &[KeyCode::Right]);
+        assert!(m.auto_ui.focus && m.auto_ui.pick.is_none());
+        press_all(&mut m, &[KeyCode::Left]);
+        assert!(!m.auto_ui.focus && !m.options.back);
+        // From the grabbed picker, Right moves on to the control without a change.
+        assert!(api_args(press_all(&mut m, &[KeyCode::Enter, KeyCode::Right])).is_none());
+        assert!(m.auto_ui.focus && m.auto_ui.pick.is_none());
+        // Start and Disabled have no control: Right grabs the picker as usual.
+        for mode in ["start", "disabled"] {
+            let mut m = auto_manager(mode, None);
+            press_all(&mut m, &[KeyCode::Right]);
+            assert!(!m.auto_ui.focus && m.auto_ui.pick.is_some(), "{mode}");
+        }
+        // A backend before 1.43 keeps the old on/off toggle row.
+        let mut old = Manager::default();
+        old.capabilities = json!({"resume":{"version":1}});
+        old.sessions = vec![
+            json!({"id":"s1","generation":"g1","name":"T","provider":"claude","availability":"running",
+            "capabilities":{"restart":true,"stop":true,"auto_recover":true}}),
+        ];
+        old.go(Page::Session("s1".into()));
+        assert!(
+            old.rows()
+                .iter()
+                .any(|r| r.label.starts_with("Auto-recover"))
+        );
+        assert!(!old.rows().iter().any(|r| r.label == "Auto start"));
+    }
+    #[test]
+    fn prompt_editor_saves_with_enter_discards_with_esc_and_clearing_resets() {
+        let mut m = auto_manager("start_prompt", Some("old prompt"));
+        press_all(&mut m, &[KeyCode::Right, KeyCode::Enter]);
+        let d = m.dialog.as_ref().expect("editor open");
+        assert_eq!(d.title, "Auto start prompt");
+        assert_eq!(d.fields[0].input.value, "old prompt");
+        assert_eq!(d.fields[0].multiline.as_ref().unwrap().hint, "DEFAULT TEXT");
+        // Typing edits; Enter does not add a newline but saves.
+        for c in " plus".chars() {
+            m.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        let args = api_args(press_all(&mut m, &[KeyCode::Enter])).unwrap();
+        assert_eq!(
+            &args[5..],
+            ["--mode", "start_prompt", "--prompt", "old prompt plus"]
+        );
+        // Esc closes without saving.
+        let mut m = auto_manager("start_prompt", Some("old"));
+        press_all(&mut m, &[KeyCode::Right, KeyCode::Enter]);
+        m.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(api_args(press_all(&mut m, &[KeyCode::Esc])).is_none());
+        assert!(m.dialog.is_none());
+        // An empty save clears the custom prompt: no --prompt, so the default applies.
+        let mut m = auto_manager("start_prompt", Some("ab"));
+        press_all(
+            &mut m,
+            &[
+                KeyCode::Right,
+                KeyCode::Enter,
+                KeyCode::Backspace,
+                KeyCode::Backspace,
+            ],
+        );
+        let args = api_args(press_all(&mut m, &[KeyCode::Enter])).unwrap();
+        assert_eq!(&args[5..], ["--mode", "start_prompt"]);
+        // No custom prompt: the field starts empty (the default is only a hint).
+        let mut m = auto_manager("start_prompt", None);
+        press_all(&mut m, &[KeyCode::Right, KeyCode::Enter]);
+        assert_eq!(m.dialog.as_ref().unwrap().fields[0].input.value, "");
+    }
+    #[test]
+    fn prompt_editor_stops_at_the_byte_limit() {
+        let mut m = auto_manager("start_prompt", None);
+        press_all(&mut m, &[KeyCode::Right, KeyCode::Enter]);
+        m.dialog.as_mut().unwrap().paste(&"a".repeat(3999));
+        m.dialog.as_mut().unwrap().paste("日本");
+        let v = &m.dialog.as_ref().unwrap().fields[0].input.value;
+        assert_eq!(v.len(), 3999, "a 3-byte char that does not fit is not cut");
+        m.dialog.as_mut().unwrap().paste("bcd");
+        assert_eq!(m.dialog.as_ref().unwrap().fields[0].input.value.len(), 4000);
+    }
     #[test]
     fn auto_recover_toggle_sends_enable_or_disable_and_labels_its_operations() {
         let args = |session: Value| {

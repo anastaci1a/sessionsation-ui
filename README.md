@@ -2,11 +2,13 @@
 
 An animated terminal popup for [sessionsation](https://github.com/anastaci1a/sessionsation)
 inside [HERDR](https://herdr.dev). Choose an account, Space, name and directory;
-start in a normal tab; manage accounts, saved sessions and background operations.
+start in a normal tab; manage accounts, saved sessions and background operations, including a
+per-session **Auto start** mode (Disabled, Start, or Start/Prompt with an editable prompt; contract 1.43+,
+[usage](docs/usage.md)).
 The CLI owns credentials and lifecycle. Closing the popup leaves agents running.
 
 **Early development.** Codex, Claude Code, Gemini CLI and Antigravity CLI are supported
-through a compatible sessionsation backend (tested against contract 1.42.0); each session
+through a compatible sessionsation backend (tested against contract 1.43.0); each session
 and account offers only what the backend capabilities allow. Some lifecycle/experimental
 actions remain unavailable;
 [capabilities and limits](docs/usage.md#capabilities-and-limits) describe what actually works.

@@ -515,12 +515,35 @@ after it finished; failures stay until dismissed. A dismissed operation's dialog
 `Unmark as dismissed` instead, which removes it from `dismissed-operations.json`. The
 non-interactive `./bin/sessionsation-popup dismiss-finished` marks every finished backend operation
 as dismissed through the same file.
-A running session shows `↻ auto-recover` after its account when the backend reports
-auto-recover on (`↻ auto-recover suppressed`, `rate limited` or `failed` in the warning
-colour when it last did not recover). Where the backend advertises
-`capabilities.auto_recover`, the session menu has an `Auto-recover: on/off` row beside
-Restart that toggles it with `api auto-recover --enable|--disable`; enabling needs a live
-session, and a stopped one only keeps the row to switch it off.
+A running session shows `↻ auto-start` after its account when the backend reports Auto start on in
+either start mode (`↻ auto-start suppressed`, `rate limited` or `failed` in the warning colour when it
+last did not start). Where the backend advertises `capabilities.auto_start` (contract 1.43.0), the
+session menu has an **Auto start** row beside Restart with the same Up/Down option picker as the
+settings screen: `Start/Prompt`, `Start`, `Disabled` from top to bottom. `Disabled` is the default for
+every session, including new ones, and a session with no record shows `Disabled`. Enter or Right grabs
+the picker (the arrow before the value, as in settings), Up/Down choose without wrapping, Enter sets
+it with `api auto-start --mode start_prompt|start|disabled`, Esc reverts. `Start` resumes the session
+after its process disappears and sends nothing; `Start/Prompt` also sends the prompt once. Enabling
+needs a live session; a stopped one only keeps the row to switch it off. Against a backend that only
+advertises `capabilities.auto_recover` (before 1.43.0) the menu keeps the old `Auto-recover: on/off`
+row (`api auto-recover --enable|--disable`); the UI picks the new row whenever
+`capabilities.auto_start` (or an `auto_start` record) is present, else the old one.
+
+With `Start/Prompt`, a prompt control sits after the value: `› Start/Prompt ≡` (the glyph is one
+constant, `PROMPT_GLYPH` in `src/session_list.rs`). It expands to `≡ prompt` while the picker is
+grabbed or the control has focus, without moving the arrow or the value. Right moves focus to it (from
+the row, or from the grabbed picker without changing the mode), Left returns, and Enter opens the
+**Auto start prompt** editor. It uses the same colours as other controls on the right of a row (the
+operation badge): bold bright when focused, secondary while the row is hovered, muted otherwise.
+
+The prompt editor is a multiline text input (`Field::multiline`, `src/multiline.rs`): text wraps at
+word boundaries, Up/Down/Left/Right move the cursor through the wrapped lines (Up/Down on the first or
+last line move on to the options), Enter does not insert a newline but activates **Save**
+(`api auto-start --mode start_prompt --prompt TEXT`), and Esc closes without saving. It is prefilled
+with the current custom prompt; with none it starts empty and shows the backend's default prompt
+(`capabilities.auto_start.default_prompt`) as grey hint text. Input stops at 4000 bytes (a counter
+appears near the limit). Saving an empty prompt clears the custom prompt (`--mode start_prompt`
+without `--prompt`), so the default applies.
 The selected row's account name and static provider icon are bold at the selected
 accent level (other rows use the dim level; an animated icon keeps its own styling);
 with focus on the badge they return to the dim level, unbolded. Without a badge, the

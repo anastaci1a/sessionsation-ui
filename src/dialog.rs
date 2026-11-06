@@ -64,14 +64,46 @@ pub struct Field {
     pub input: TextInput,
     pub rule: Rule,
     pub excluded: Vec<String>,
+    /// A multiline field (see [`crate::multiline`]): text rows and the grey hint shown
+    /// while it is empty. Enter still activates the default button.
+    pub multiline: Option<Multiline>,
+    /// Text width of the last paint, for moving the cursor between wrapped lines.
+    wrap_width: std::cell::Cell<usize>,
+}
+#[derive(Clone, Debug)]
+pub struct Multiline {
+    pub rows: usize,
+    pub hint: String,
 }
 impl Field {
+    /// A standard multiline input of `rows` text rows; `max_bytes` bounds the value.
+    pub fn multiline(
+        label: &str,
+        value: impl Into<String>,
+        hint: &str,
+        rows: usize,
+        max_bytes: usize,
+    ) -> Self {
+        let mut field = Self::new(label, value);
+        field.input = field.input.limited_bytes(max_bytes);
+        field.multiline = Some(Multiline {
+            rows: rows.max(1),
+            hint: hint.into(),
+        });
+        field
+    }
+    /// Rows the field box takes: borders plus text rows.
+    pub fn height(&self) -> usize {
+        2 + self.multiline.as_ref().map_or(1, |m| m.rows)
+    }
     pub fn new(label: &str, value: impl Into<String>) -> Self {
         Self {
             label: label.into(),
             input: TextInput::new(value.into()),
             rule: Rule::Any,
             excluded: vec![],
+            multiline: None,
+            wrap_width: std::cell::Cell::new(40),
         }
     }
     pub fn validated(mut self, rule: Rule) -> Self {
@@ -99,7 +131,7 @@ impl Field {
         palette: &Palette,
         focused: bool,
     ) {
-        if width < 6 || y + 2 >= canvas.height {
+        if width < 6 || y + self.height() > canvas.height {
             return;
         }
         let style = Cell {
@@ -115,8 +147,13 @@ impl Field {
             },
             ..style.clone()
         };
+        let counter = self.multiline.as_ref().and_then(|_| {
+            let max = self.input.max_bytes?;
+            (self.input.value.len() * 10 >= max * 9)
+                .then(|| format!(" {} ({}/{})", self.label, self.input.value.len(), max))
+        });
         let label = crate::widgets::fit_scrolling(
-            &format!(" {} ", self.label),
+            &counter.unwrap_or_else(|| format!(" {} ", self.label)),
             width - 4,
             crate::widgets::frame_time(canvas),
         );
@@ -132,13 +169,36 @@ impl Field {
             field_style.clone(),
             false,
         );
-        canvas.text(x, y + 1, "│", field_style.clone(), false);
-        canvas.text(x + width - 1, y + 1, "│", field_style.clone(), false);
-        self.input
-            .paint_focused(canvas, x + 1, y + 1, width - 3, self.valid(), focused);
+        let rows = self.height() - 2;
+        for r in 0..rows {
+            canvas.text(x, y + 1 + r, "│", field_style.clone(), false);
+            canvas.text(x + width - 1, y + 1 + r, "│", field_style.clone(), false);
+        }
+        if let Some(m) = &self.multiline {
+            self.wrap_width.set(width - 5);
+            crate::multiline::paint(
+                canvas,
+                x + 2,
+                y + 1,
+                width - 4,
+                m.rows,
+                &self.input.value,
+                self.input.cursor,
+                &m.hint,
+                &field_style,
+                &Cell {
+                    fg: palette.muted,
+                    ..field_style.clone()
+                },
+                focused,
+            );
+        } else {
+            self.input
+                .paint_focused(canvas, x + 1, y + 1, width - 3, self.valid(), focused);
+        }
         canvas.text(
             x,
-            y + 2,
+            y + 1 + rows,
             &format!("└{}┘", "─".repeat(width - 2)),
             field_style.clone(),
             false,
@@ -370,6 +430,27 @@ impl Dialog {
             self.buttons.insert(i, Row::separator());
         }
     }
+    /// Up/Down inside a multiline editor: move the cursor one wrapped line when there is
+    /// one; at the first or last line the keys go on to select options.
+    fn move_in_text(&mut self, up: bool) -> bool {
+        let Some(i) = self.editor() else { return false };
+        let field = &mut self.fields[i];
+        if field.multiline.is_none() {
+            return false;
+        }
+        match crate::multiline::vertical(
+            &field.input.value,
+            field.input.cursor,
+            field.wrap_width.get(),
+            up,
+        ) {
+            Some(at) => {
+                field.input.cursor = at;
+                true
+            }
+            None => false,
+        }
+    }
     fn selectable(&self, index: usize) -> bool {
         index < self.field_slots()
             || self
@@ -420,6 +501,12 @@ impl Dialog {
             }
             KeyCode::PageUp if self.wrapped > self.visible => {
                 self.offset = self.offset.saturating_sub(self.visible.max(1))
+            }
+            KeyCode::Up | KeyCode::Down if self.move_in_text(key.code == KeyCode::Up) => {
+                // Typing position moved: the default option (Save) is selected again.
+                if slots == 0 {
+                    self.selected = 0;
+                }
             }
             KeyCode::Up | KeyCode::Down if count > 0 => {
                 self.selected = self.navigation.step(
@@ -601,7 +688,11 @@ impl Dialog {
             .map(|s| UnicodeWidthStr::width(s.as_str()))
             .chain(self.fields.iter().map(|f| {
                 (UnicodeWidthStr::width(f.label.as_str()) + 4)
-                    .max(UnicodeWidthStr::width(f.input.value.as_str()) + 3)
+                    .max(if f.multiline.is_some() {
+                        0
+                    } else {
+                        UnicodeWidthStr::width(f.input.value.as_str()) + 3
+                    })
                     .max(24)
             }))
             .chain(
@@ -668,7 +759,7 @@ impl Dialog {
         let controls = if compact || self.buttons.is_empty() && self.fields.is_empty() {
             2
         } else {
-            self.fields.len() * 3
+            self.fields.iter().map(Field::height).sum::<usize>()
                 + self.buttons.len()
                 + detached
                 + if self.fields.is_empty() { 3 } else { 4 }
@@ -781,7 +872,7 @@ impl Dialog {
                     palette,
                     self.editor() == Some(index),
                 );
-                row += 3;
+                row += field.height();
             }
             row += 1;
             let slots = self.field_slots();
@@ -1097,6 +1188,70 @@ mod tests {
             account.input.max_chars,
             Some(crate::widgets::account_name_max())
         );
+    }
+    fn multiline_dialog(value: &str) -> Dialog {
+        let mut d = Dialog::new("Prompt", vec!["Body".into()], &["Save", "Cancel"]);
+        d.fields.push(Field::multiline(
+            "Prompt",
+            value,
+            "the default hint text",
+            4,
+            100,
+        ));
+        d.minimum_width = 40;
+        d
+    }
+    #[test]
+    fn multiline_field_wraps_shows_its_hint_and_moves_through_wrapped_lines() {
+        // Empty: the grey hint shows wrapped, the cursor sits at the start.
+        let mut d = multiline_dialog("");
+        let mut c = Canvas::new(60, 20);
+        d.paint(&mut c, &Palette::default());
+        let screen = rows(&c).join("\n");
+        assert!(screen.contains("the default hint text"), "{screen}");
+        assert!(c.cursor.is_some());
+        // A long value wraps at word boundaries inside the box.
+        let mut d =
+            multiline_dialog("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda");
+        let mut c = Canvas::new(60, 20);
+        d.paint(&mut c, &Palette::default());
+        let screen = rows(&c);
+        assert!(
+            screen.iter().any(|r| r.contains("alpha beta gamma delta")),
+            "{screen:#?}"
+        );
+        assert!(
+            screen
+                .iter()
+                .all(|r| !r.contains("epsilon zeta eta theta iota")),
+            "{screen:#?}"
+        );
+        // Up moves the cursor one wrapped line instead of selecting an option.
+        let end = d.fields[0].input.cursor;
+        assert!(matches!(d.key(key(KeyCode::Up)), Event::None));
+        assert!(d.fields[0].input.cursor < end);
+        assert_eq!(d.selected, 0);
+        d.key(key(KeyCode::Down));
+        assert!(d.fields[0].input.cursor > 0);
+        // Enter never inserts a newline; it activates Save with the text intact.
+        d.visible = 1;
+        match d.key(enter()) {
+            Event::Choose(0, values) => assert!(!values[0].contains('\n')),
+            _ => panic!("Enter saves"),
+        }
+    }
+    #[test]
+    fn multiline_field_keeps_its_box_height_and_stays_inside_the_frame() {
+        let mut d = multiline_dialog("x");
+        let mut c = Canvas::new(60, 20);
+        d.paint(&mut c, &Palette::default());
+        let top = rows(&c)
+            .iter()
+            .position(|r| r.contains("┌─ Prompt"))
+            .unwrap();
+        let bottom = rows(&c).iter().position(|r| r.contains("└──")).unwrap();
+        assert_eq!(bottom - top, 5, "four text rows between the borders");
+        assert!(rows(&c).iter().any(|r| r.contains("Save")));
     }
     #[test]
     fn limited_editors_and_only_focused_field_has_a_cursor() {

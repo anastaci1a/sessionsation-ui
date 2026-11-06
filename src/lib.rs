@@ -12,6 +12,7 @@ pub mod close_band;
 pub mod dialog;
 pub mod host_theme;
 pub mod management;
+pub mod multiline;
 pub mod popup;
 pub mod state_cache;
 pub mod status;

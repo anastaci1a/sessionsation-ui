@@ -23,6 +23,8 @@ pub enum Action {
     ChangeDirectory,
     Restart,
     AutoRecover,
+    /// The Auto start picker row (1.43+ backends); handled by its own keys.
+    AutoStart,
     Stop,
     Archive,
     Delete,
@@ -186,10 +188,109 @@ fn live_gate(s: &Value, label: &str, capability: &str) -> Row {
 fn auto_recover_on(s: &Value) -> bool {
     s["auto_recover"]["enabled"] == true
 }
-/// "Auto-recover: on/off", only when the backend advertises the capability
+/// The prompt control right of the Auto start picker (swap the glyph here).
+pub const PROMPT_GLYPH: &str = "≡";
+/// Its expanded text.
+pub const PROMPT_LABEL: &str = "prompt";
+/// What the Auto start picker offers, top to bottom (Disabled last).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoMode {
+    StartPrompt,
+    Start,
+    Disabled,
+}
+impl AutoMode {
+    pub const ALL: [AutoMode; 3] = [AutoMode::StartPrompt, AutoMode::Start, AutoMode::Disabled];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::StartPrompt => "Start/Prompt",
+            Self::Start => "Start",
+            Self::Disabled => "Disabled",
+        }
+    }
+    /// The value of `api auto-start --mode`.
+    pub fn api(self) -> &'static str {
+        match self {
+            Self::StartPrompt => "start_prompt",
+            Self::Start => "start",
+            Self::Disabled => "disabled",
+        }
+    }
+    fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.api() == text)
+    }
+}
+/// A session's Auto start mode; a session without a record is Disabled.
+pub fn auto_mode(s: &Value) -> AutoMode {
+    s["auto_start"]["mode"]
+        .as_str()
+        .and_then(AutoMode::parse)
+        .unwrap_or(AutoMode::Disabled)
+}
+/// The backend advertises Auto start (1.43+) for this session.
+pub fn auto_start_advertised(s: &Value) -> bool {
+    s["capabilities"]["auto_start"].is_boolean() || s["auto_start"].is_object()
+}
+/// Transient state of the Auto start row (owned by the management screen).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AutoUi {
+    /// The picker is grabbed on this choice.
+    pub pick: Option<AutoMode>,
+    /// The prompt control has keyboard focus.
+    pub focus: bool,
+}
+/// The Auto start picker row. The control after the value shows only for Start/Prompt:
+/// the glyph alone, expanded to `glyph prompt` while the picker is grabbed or the
+/// control is focused.
+fn auto_start_row(s: &Value, ui: &AutoUi) -> Option<(Row, Action)> {
+    if !auto_start_advertised(s) {
+        return None;
+    }
+    let current = auto_mode(s);
+    let enabled = current != AutoMode::Disabled || s["capabilities"]["auto_start"] == true;
+    if !enabled {
+        let reason = if pending(s) {
+            "operation running".to_owned()
+        } else {
+            backend_reason(s, "auto_start")
+                .or_else(|| {
+                    let text = reason_text(s["capability_reasons"]["auto_start"].as_str()?);
+                    (text != "unavailable").then_some(text)
+                })
+                .unwrap_or_else(|| "only for live sessions".into())
+        };
+        return Some((
+            Row::gate("Auto start", false).with_hover_reason(reason),
+            Action::Unavailable,
+        ));
+    }
+    let shown = ui.pick.unwrap_or(current);
+    let mut row = Row::yes("Auto start")
+        .with_picker(
+            shown.label(),
+            crate::preferences::choice_arrow(&AutoMode::ALL, shown),
+        )
+        .grabbed(ui.pick.is_some());
+    if shown == AutoMode::StartPrompt {
+        let expanded = ui.pick.is_some() || ui.focus;
+        row = row.with_trailing(
+            if expanded {
+                format!("{PROMPT_GLYPH} {PROMPT_LABEL}")
+            } else {
+                PROMPT_GLYPH.to_owned()
+            },
+            ui.focus,
+        );
+    }
+    Some((row, Action::AutoStart))
+}
+/// "Auto-recover: on/off" (backends before 1.43), only when the backend advertises the capability
 /// (older backends have no such key and show nothing). Disabling is always
 /// allowed; enabling needs a live session and otherwise shows the backend reason.
 fn auto_recover_row(s: &Value) -> Option<(Row, Action)> {
+    if auto_start_advertised(s) {
+        return None;
+    }
     if !s["capabilities"]["auto_recover"].is_boolean() && !auto_recover_on(s) {
         return None;
     }
@@ -215,19 +316,32 @@ fn auto_recover_row(s: &Value) -> Option<(Row, Action)> {
     };
     Some((row.with_hover_reason(reason), Action::Unavailable))
 }
-/// Short list indicator for a session with auto-recover on: `(text, warning)`.
+/// Short list indicator for a session with Auto start on: `(text, warning)`. One tag for
+/// both start modes (the row's picker shows which); older backends' `auto_recover` reads
+/// as on/off.
 pub fn auto_recover_tag(s: &Value) -> Option<(String, bool)> {
-    if !auto_recover_on(s) {
-        return None;
-    }
-    let a = &s["auto_recover"];
-    Some(if a["suppressed"] == true {
-        ("↻ auto-recover suppressed".into(), true)
+    let a = if s["auto_start"].is_object() {
+        if auto_mode(s) == AutoMode::Disabled {
+            return None;
+        }
+        &s["auto_start"]
     } else {
-        match a["last_result"].as_str() {
-            Some("rate_limited") => ("↻ auto-recover rate limited".into(), true),
-            Some("failed") => ("↻ auto-recover failed".into(), true),
-            _ => ("↻ auto-recover".into(), false),
+        if !auto_recover_on(s) {
+            return None;
+        }
+        &s["auto_recover"]
+    };
+    Some(if a["suppressed"] == true {
+        ("↻ auto-start suppressed".into(), true)
+    } else {
+        // 1.43 reports `last_result` as an object, 1.35 backends as a string state.
+        let state = a["last_result"]["state"]
+            .as_str()
+            .or_else(|| a["last_result"].as_str());
+        match state {
+            Some("rate_limited") => ("↻ auto-start rate limited".into(), true),
+            Some("failed") => ("↻ auto-start failed".into(), true),
+            _ => ("↻ auto-start".into(), false),
         }
     })
 }
@@ -381,18 +495,21 @@ fn archived_actions(s: &Value) -> Vec<(Row, Action)> {
     ]
 }
 pub fn actions(s: &Value, resume: bool) -> Vec<(Row, Action)> {
+    actions_with(s, resume, &AutoUi::default())
+}
+pub fn actions_with(s: &Value, resume: bool, ui: &AutoUi) -> Vec<(Row, Action)> {
     let mut rows = if is_native_provider(s) {
         claude_actions(s, resume)
     } else {
         codex_actions(s, resume)
     };
     if s["availability"] != "archived"
-        && let Some(row) = auto_recover_row(s)
+        && let Some(row) = auto_start_row(s, ui).or_else(|| auto_recover_row(s))
     {
         // Beside Restart/End; stopped sessions only keep it to switch it off.
         if let Some(i) = rows.iter().position(|(_, a)| *a == Action::Restart) {
             rows.insert(i, row);
-        } else if auto_recover_on(s)
+        } else if (auto_recover_on(s) || auto_mode(s) != AutoMode::Disabled)
             && let Some(i) = rows.iter().position(|(_, a)| *a == Action::Rename)
         {
             rows.insert(i + 1, row);
@@ -1134,20 +1251,7 @@ pub fn paint_with(
                         x + 4,
                         y,
                         &text,
-                        Cell {
-                            fg: dim(
-                                if focused {
-                                    SELECTED
-                                } else if selected {
-                                    SECONDARY
-                                } else {
-                                    MUTED
-                                },
-                                options.back,
-                            ),
-                            bold: focused,
-                            ..Cell::default()
-                        },
+                        crate::widgets::right_option_cell(selected, focused, options.back),
                         false,
                     );
                     if focused {
@@ -2233,6 +2337,138 @@ mod tests {
             );
         }
     }
+    fn auto_session(mode: &str) -> Value {
+        json!({"availability":"running","provider":"claude","capabilities":{"restart":true,"stop":true,"auto_start":true},
+            "auto_start":{"mode":mode}})
+    }
+    fn auto_row(s: &Value, ui: &AutoUi) -> Row {
+        actions_with(s, true, ui)
+            .into_iter()
+            .find(|(_, a)| *a == Action::AutoStart)
+            .unwrap()
+            .0
+    }
+    fn painted(row: &Row, selected: bool) -> String {
+        let mut c = Canvas::new(60, 1);
+        row.paint(&mut c, 0, 0, selected, false);
+        text(&c, 0).trim_end().to_owned()
+    }
+    #[test]
+    fn auto_start_row_needs_the_capability_and_old_backends_keep_the_toggle() {
+        let new = auto_session("disabled");
+        assert!(labels(&new, true).iter().any(|(l, _)| l == "Auto start"));
+        assert!(
+            !labels(&new, true)
+                .iter()
+                .any(|(l, _)| l.starts_with("Auto-recover"))
+        );
+        let old = json!({"availability":"running","provider":"claude","capabilities":{"restart":true,"stop":true,"auto_recover":true}});
+        assert!(
+            labels(&old, true)
+                .iter()
+                .any(|(l, _)| l.starts_with("Auto-recover: off"))
+        );
+        assert!(!labels(&old, true).iter().any(|(l, _)| l == "Auto start"));
+        let neither = json!({"availability":"running","provider":"claude","capabilities":{"restart":true,"stop":true}});
+        assert!(
+            !labels(&neither, true)
+                .iter()
+                .any(|(l, _)| l.starts_with("Auto"))
+        );
+        // A session without a record reads Disabled; not live and disabled: unavailable.
+        assert_eq!(auto_mode(&json!({})), AutoMode::Disabled);
+        let mut stopped = auto_session("disabled");
+        stopped["capabilities"]["auto_start"] = json!(false);
+        let row = actions(&stopped, true)
+            .into_iter()
+            .find(|(r, _)| r.label == "Auto start")
+            .unwrap()
+            .0;
+        assert!(!row.enabled);
+    }
+    #[test]
+    fn auto_start_options_run_start_prompt_start_disabled() {
+        let labels: Vec<_> = AutoMode::ALL.iter().map(|m| m.label()).collect();
+        assert_eq!(labels, ["Start/Prompt", "Start", "Disabled"]);
+        let api: Vec<_> = AutoMode::ALL.iter().map(|m| m.api()).collect();
+        assert_eq!(api, ["start_prompt", "start", "disabled"]);
+        assert_eq!(auto_mode(&auto_session("start")), AutoMode::Start);
+    }
+    #[test]
+    fn prompt_control_shows_only_for_start_prompt_and_expands_when_active() {
+        let idle = AutoUi::default();
+        // Minimised: arrow, value, then the glyph alone.
+        let row = auto_row(&auto_session("start_prompt"), &idle);
+        assert_eq!(
+            painted(&row, true),
+            format!("● Auto start ↕ Start/Prompt  {PROMPT_GLYPH}").replace("↕", "›")
+        );
+        // Grabbed picker or focused control: expanded, same start columns.
+        let grabbed = auto_row(
+            &auto_session("start_prompt"),
+            &AutoUi {
+                pick: Some(AutoMode::StartPrompt),
+                focus: false,
+            },
+        );
+        let focused = auto_row(
+            &auto_session("start_prompt"),
+            &AutoUi {
+                pick: None,
+                focus: true,
+            },
+        );
+        let min = painted(&row, true);
+        assert!(painted(&grabbed, true).starts_with("● Auto start "));
+        assert!(painted(&grabbed, true).ends_with(&format!("{PROMPT_GLYPH} {PROMPT_LABEL}")));
+        assert!(painted(&focused, true).contains(&format!("{PROMPT_GLYPH} {PROMPT_LABEL} ◀")));
+        let value_col = |s: &str| s.find("Start/Prompt").unwrap();
+        assert_eq!(value_col(&min), value_col(&painted(&focused, true)));
+        // Start and Disabled never show it, nor does a grabbed pick of them.
+        for mode in ["start", "disabled"] {
+            let r = auto_row(&auto_session(mode), &idle);
+            assert!(!painted(&r, true).contains(PROMPT_GLYPH), "{mode}");
+        }
+        let r = auto_row(
+            &auto_session("start_prompt"),
+            &AutoUi {
+                pick: Some(AutoMode::Start),
+                focus: false,
+            },
+        );
+        assert!(!painted(&r, true).contains(PROMPT_GLYPH));
+    }
+    #[test]
+    fn prompt_control_uses_the_shared_right_option_colours() {
+        let row = auto_row(
+            &auto_session("start_prompt"),
+            &AutoUi {
+                pick: None,
+                focus: true,
+            },
+        );
+        let mut c = Canvas::new(60, 1);
+        row.paint(&mut c, 0, 0, true, false);
+        let at = c
+            .cells
+            .iter()
+            .position(|x| x.glyph == PROMPT_GLYPH)
+            .unwrap();
+        let want = crate::widgets::right_option_cell(true, true, false);
+        assert_eq!((c.cells[at].fg, c.cells[at].bold), (want.fg, want.bold));
+        let unfocused = auto_row(&auto_session("start_prompt"), &AutoUi::default());
+        let mut c = Canvas::new(60, 1);
+        unfocused.paint(&mut c, 0, 0, false, false);
+        let at = c
+            .cells
+            .iter()
+            .position(|x| x.glyph == PROMPT_GLYPH)
+            .unwrap();
+        assert_eq!(
+            c.cells[at].fg,
+            crate::widgets::right_option_cell(false, false, false).fg
+        );
+    }
     #[test]
     fn auto_recover_indicator_marks_enabled_sessions_and_problems() {
         assert_eq!(auto_recover_tag(&json!({})), None);
@@ -2241,19 +2477,20 @@ mod tests {
             None
         );
         let tag = |a: Value| auto_recover_tag(&json!({"auto_recover": a})).unwrap();
-        assert_eq!(
-            tag(json!({"enabled":true})),
-            ("↻ auto-recover".into(), false)
-        );
+        assert_eq!(tag(json!({"enabled":true})), ("↻ auto-start".into(), false));
         assert!(tag(json!({"enabled":true,"suppressed":true})).1);
         assert_eq!(
             tag(json!({"enabled":true,"last_result":"rate_limited"})).0,
-            "↻ auto-recover rate limited"
+            "↻ auto-start rate limited"
         );
         assert_eq!(
             tag(json!({"enabled":true,"last_result":"failed"})).0,
-            "↻ auto-recover failed"
+            "↻ auto-start failed"
         );
+        let new = |mode: &str| auto_recover_tag(&json!({"auto_start":{"mode":mode}}));
+        assert_eq!(new("disabled"), None);
+        assert_eq!(new("start"), new("start_prompt"));
+        assert_eq!(new("start").unwrap().0, "↻ auto-start");
         let sessions = vec![
             json!({"id":"a","name":"alpha","account_id":"codex:p","availability":"saved","auto_recover":{"enabled":true}}),
             json!({"id":"b","name":"beta","account_id":"codex:p","availability":"saved"}),
@@ -2268,7 +2505,7 @@ mod tests {
             100,
             19,
         );
-        assert!(text(&c, 3).contains("↻ auto-recover"), "{}", text(&c, 3));
+        assert!(text(&c, 3).contains("↻ auto-start"), "{}", text(&c, 3));
         assert!(!text(&c, 4).contains('↻'), "{}", text(&c, 4));
     }
     #[test]

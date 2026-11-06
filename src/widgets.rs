@@ -58,6 +58,8 @@ pub struct TextInput {
     /// UTF-8 byte offset at a grapheme boundary.
     pub cursor: usize,
     pub max_chars: Option<usize>,
+    /// Byte limit of the value (insertion stops gracefully at it).
+    pub max_bytes: Option<usize>,
     /// Faint completion drawn after the value while the cursor is at its end.
     pub ghost: String,
     /// Secret input: each grapheme is drawn as a mask character, never the text.
@@ -86,6 +88,7 @@ impl TextInput {
             value,
             cursor,
             max_chars: None,
+            max_bytes: None,
             ghost: String::new(),
             secret: false,
         }
@@ -102,9 +105,14 @@ impl TextInput {
             value: SECRET_MASK.repeat(total),
             cursor: SECRET_MASK.len() * before,
             max_chars: None,
+            max_bytes: None,
             ghost: String::new(),
             secret: false,
         }
+    }
+    pub fn limited_bytes(mut self, max_bytes: usize) -> Self {
+        self.max_bytes = Some(max_bytes);
+        self
     }
     pub fn limited(mut self, max_chars: usize) -> Self {
         self.max_chars = Some(max_chars);
@@ -116,10 +124,18 @@ impl TextInput {
             .max_chars
             .map(|n| n.saturating_sub(self.value.chars().count()))
             .unwrap_or(usize::MAX);
+        let mut room = self
+            .max_bytes
+            .map_or(usize::MAX, |n| n.saturating_sub(self.value.len()));
         let clean: String = text
             .chars()
             .filter(|c| !c.is_control())
             .take(available)
+            .take_while(|c| {
+                let fits = c.len_utf8() <= room;
+                room = room.saturating_sub(c.len_utf8());
+                fits
+            })
             .collect();
         self.value.insert_str(self.cursor, &clean);
         self.cursor += clean.len();
@@ -293,6 +309,9 @@ pub struct Row {
     pub preview_arrows: bool,
     /// The choice is grabbed (picker mode): the value is bold.
     pub preview_grabbed: bool,
+    /// A control right of the preview (text, focused), drawn like an operation badge:
+    /// never counts toward centering, shown only where it fits.
+    pub trailing: Option<(String, bool)>,
     /// Leading label characters drawn in the bright text colour (typed prefix).
     pub highlight: usize,
     /// A settings submenu row whose preview shows that submenu's selected option.
@@ -315,6 +334,60 @@ pub struct Row {
     pub preview_full: Option<String>,
     /// A trailing "⚠" in the label is drawn in the warning colour.
     pub warn: bool,
+}
+/// Colours of a control right of a row (operation badge, auto-start prompt): bright and
+/// bold when focused, secondary while its row is hovered, muted otherwise; dimmed while
+/// Back holds the focus.
+pub fn right_option_cell(selected: bool, focused: bool, back: bool) -> Cell {
+    let fg = if focused {
+        SELECTED
+    } else if selected {
+        SECONDARY
+    } else {
+        MUTED
+    };
+    Cell {
+        fg: if back {
+            fg.map(|n| (u16::from(n) * 60 / 100) as u8)
+        } else {
+            fg
+        },
+        bold: focused,
+        ..Cell::default()
+    }
+}
+/// Marker after a focused right-side control: Left returns to the row.
+pub const RIGHT_FOCUS_MARK: &str = " ◀";
+/// Draw a right-side control and, while focused, its return marker.
+pub fn paint_right_option(
+    canvas: &mut Canvas,
+    x: usize,
+    y: usize,
+    text: &str,
+    selected: bool,
+    focused: bool,
+    back: bool,
+) {
+    canvas.widget_text(
+        x,
+        y,
+        text,
+        right_option_cell(selected, focused, back),
+        false,
+    );
+    if focused {
+        canvas.widget_text(
+            x + UnicodeWidthStr::width(text),
+            y,
+            RIGHT_FOCUS_MARK,
+            Cell {
+                fg: SELECTED,
+                bold: true,
+                ..Cell::default()
+            },
+            false,
+        );
+    }
 }
 /// While a row's Up/Down selector is grabbed, the standard styling of every other row:
 /// the grabbing row is [`RowMode::Active`], the rest [`RowMode::Other`] (darker names
@@ -387,6 +460,7 @@ impl Row {
             preview_choice: false,
             preview_info: false,
             preview_arrows: false,
+            trailing: None,
             preview_grabbed: false,
             min_width: 0,
             highlight: 0,
@@ -553,6 +627,11 @@ impl Row {
         self.preview_gap = 1;
         self
     }
+    /// A control after the preview (see [`Row::trailing`]); `focused` marks keyboard focus.
+    pub fn with_trailing(mut self, text: impl Into<String>, focused: bool) -> Self {
+        self.trailing = Some((text.into(), focused));
+        self
+    }
     /// Label `text` shortened to `width` cells (ellipsized while unselected,
     /// a marquee while selected).
     pub fn overflowing(label: impl Into<String>, width: usize, enabled: bool) -> Self {
@@ -619,6 +698,7 @@ impl Row {
             preview_choice: false,
             preview_info: false,
             preview_arrows: false,
+            trailing: None,
             preview_grabbed: false,
             min_width: 0,
             highlight: 0,
@@ -872,6 +952,15 @@ impl Row {
             && let Some(start) = self.preview_position(canvas.width, x)
         {
             self.paint_preview(canvas, start, y, preview, selected && !back, back, grabbed);
+            if let Some((text, focused)) = &self.trailing {
+                let at = start + UnicodeWidthStr::width(preview.as_str()) + 2;
+                let focus = *focused && selected && !back;
+                let room = canvas.width.saturating_sub(at + 1);
+                let shown = ellipsize(text, room.saturating_sub(if focus { 2 } else { 0 }));
+                if !shown.is_empty() && y < canvas.height {
+                    paint_right_option(canvas, at, y, &shown, selected && !back, focus, back);
+                }
+            }
             if let Some(info) = self.info.as_deref()
                 && (!self.hover_info || selected && !back)
                 && let Some(at) = self.info_position(canvas.width, x)
