@@ -3350,7 +3350,7 @@ impl Manager {
             .then(|| (s.clone(), crate::session_list::auto_mode(s)))
     }
     /// Keys on the Auto start row. Enter or Right grabs the picker (Up/Down choose, Enter
-    /// sets, Esc reverts); with Start/Prompt, Right moves on to the prompt control, Enter
+    /// sets, Esc reverts); on the picker with Start/Prompt, Right moves on to the prompt control, Enter
     /// opens its editor and Left returns. Other keys are left to the list.
     fn auto_start_key(&mut self, code: KeyCode) -> Option<Vec<Intent>> {
         use crate::session_list::AutoMode;
@@ -3359,7 +3359,9 @@ impl Manager {
         if ui.focus {
             return match code {
                 KeyCode::Left | KeyCode::Esc => {
+                    // Step back onto the picker (grabbed); Left again releases to the row.
                     self.auto_ui.focus = false;
+                    self.auto_ui.pick = Some(current);
                     Some(vec![])
                 }
                 KeyCode::Enter | KeyCode::Char(' ') => Some(self.open_auto_prompt(s)),
@@ -3399,7 +3401,6 @@ impl Manager {
             return Some(vec![]);
         }
         match code {
-            KeyCode::Right if current == AutoMode::StartPrompt => self.auto_ui.focus = true,
             KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
                 self.auto_ui.pick = Some(current)
             }
@@ -5928,13 +5929,15 @@ mod tests {
     #[allow(clippy::field_reassign_with_default)]
     fn prompt_control_takes_right_only_with_start_prompt_and_left_returns() {
         let mut m = auto_manager("start_prompt", None);
+        // Right: row -> picker -> prompt; Left: prompt -> picker -> row. No requests.
         press_all(&mut m, &[KeyCode::Right]);
+        assert!(!m.auto_ui.focus && m.auto_ui.pick.is_some());
+        assert!(api_args(press_all(&mut m, &[KeyCode::Right])).is_none());
         assert!(m.auto_ui.focus && m.auto_ui.pick.is_none());
         press_all(&mut m, &[KeyCode::Left]);
-        assert!(!m.auto_ui.focus && !m.options.back);
-        // From the grabbed picker, Right moves on to the control without a change.
-        assert!(api_args(press_all(&mut m, &[KeyCode::Enter, KeyCode::Right])).is_none());
-        assert!(m.auto_ui.focus && m.auto_ui.pick.is_none());
+        assert!(!m.auto_ui.focus && m.auto_ui.pick.is_some());
+        assert!(api_args(press_all(&mut m, &[KeyCode::Left])).is_none());
+        assert!(!m.auto_ui.focus && m.auto_ui.pick.is_none() && !m.options.back);
         // Start and Disabled have no control: Right grabs the picker as usual.
         for mode in ["start", "disabled"] {
             let mut m = auto_manager(mode, None);
@@ -5959,7 +5962,7 @@ mod tests {
     #[test]
     fn prompt_editor_saves_with_enter_discards_with_esc_and_clearing_resets() {
         let mut m = auto_manager("start_prompt", Some("old prompt"));
-        press_all(&mut m, &[KeyCode::Right, KeyCode::Enter]);
+        press_all(&mut m, &[KeyCode::Right, KeyCode::Right, KeyCode::Enter]);
         let d = m.dialog.as_ref().expect("editor open");
         assert_eq!(d.title, "Auto start prompt");
         assert_eq!(d.fields[0].input.value, "old prompt");
@@ -5975,7 +5978,7 @@ mod tests {
         );
         // Esc closes without saving.
         let mut m = auto_manager("start_prompt", Some("old"));
-        press_all(&mut m, &[KeyCode::Right, KeyCode::Enter]);
+        press_all(&mut m, &[KeyCode::Right, KeyCode::Right, KeyCode::Enter]);
         m.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         assert!(api_args(press_all(&mut m, &[KeyCode::Esc])).is_none());
         assert!(m.dialog.is_none());
@@ -5984,6 +5987,7 @@ mod tests {
         press_all(
             &mut m,
             &[
+                KeyCode::Right,
                 KeyCode::Right,
                 KeyCode::Enter,
                 KeyCode::Backspace,
@@ -5994,13 +5998,13 @@ mod tests {
         assert_eq!(&args[5..], ["--mode", "start_prompt"]);
         // No custom prompt: the field starts empty (the default is only a hint).
         let mut m = auto_manager("start_prompt", None);
-        press_all(&mut m, &[KeyCode::Right, KeyCode::Enter]);
+        press_all(&mut m, &[KeyCode::Right, KeyCode::Right, KeyCode::Enter]);
         assert_eq!(m.dialog.as_ref().unwrap().fields[0].input.value, "");
     }
     #[test]
     fn prompt_editor_stops_at_the_byte_limit() {
         let mut m = auto_manager("start_prompt", None);
-        press_all(&mut m, &[KeyCode::Right, KeyCode::Enter]);
+        press_all(&mut m, &[KeyCode::Right, KeyCode::Right, KeyCode::Enter]);
         m.dialog.as_mut().unwrap().paste(&"a".repeat(3999));
         m.dialog.as_mut().unwrap().paste("日本");
         let v = &m.dialog.as_ref().unwrap().fields[0].input.value;

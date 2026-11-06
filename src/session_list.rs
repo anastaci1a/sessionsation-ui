@@ -2429,11 +2429,11 @@ mod tests {
     #[test]
     fn prompt_control_shows_only_for_start_prompt_and_expands_when_active() {
         let idle = AutoUi::default();
-        // Minimised: arrow, value, then the glyph alone.
+        // Minimised: arrow, value, one space, then the glyph alone.
         let row = auto_row(&auto_session("start_prompt"), &idle);
         assert_eq!(
             painted(&row, true),
-            format!("● Auto start ↕ Start/Prompt  {PROMPT_GLYPH}").replace("↕", "›")
+            format!("● Auto start ↕ Start/Prompt {PROMPT_GLYPH}").replace("↕", "›")
         );
         // Grabbed picker or focused control: expanded, same start columns.
         let grabbed = auto_row(
@@ -2452,7 +2452,10 @@ mod tests {
         );
         let min = painted(&row, true);
         assert!(painted(&grabbed, true).starts_with("● Auto start "));
-        assert!(painted(&grabbed, true).ends_with(&format!("{PROMPT_GLYPH} {PROMPT_LABEL}")));
+        assert!(
+            painted(&grabbed, true)
+                .contains(&format!("Start/Prompt {PROMPT_GLYPH} {PROMPT_LABEL}"))
+        );
         assert!(painted(&focused, true).contains(&format!("{PROMPT_GLYPH} {PROMPT_LABEL} ◀")));
         let value_col = |s: &str| s.find("Start/Prompt").unwrap();
         assert_eq!(value_col(&min), value_col(&painted(&focused, true)));

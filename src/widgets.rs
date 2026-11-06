@@ -953,7 +953,7 @@ impl Row {
         {
             self.paint_preview(canvas, start, y, preview, selected && !back, back, grabbed);
             if let Some((text, focused)) = &self.trailing {
-                let at = start + UnicodeWidthStr::width(preview.as_str()) + 2;
+                let at = start + UnicodeWidthStr::width(preview.as_str()) + 1;
                 let focus = *focused && selected && !back;
                 let room = canvas.width.saturating_sub(at + 1);
                 let shown = ellipsize(text, room.saturating_sub(if focus { 2 } else { 0 }));
