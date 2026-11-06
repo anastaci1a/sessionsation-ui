@@ -522,9 +522,9 @@ session menu has an **Auto start** row beside Restart with the same Up/Down opti
 settings screen: `Start/Prompt`, `Start`, `Disabled` from top to bottom. `Disabled` is the default for
 every session, including new ones, and a session with no record shows `Disabled`. Enter or Right grabs
 the picker (the arrow before the value, as in settings), Up/Down choose without wrapping, Enter sets
-it with `api auto-start --mode start_prompt|start|disabled`, Esc reverts. `Start` resumes the session
-after its process disappears and sends nothing; `Start/Prompt` also sends the prompt once. Enabling
-needs a live session; a stopped one only keeps the row to switch it off. Against a backend that only
+it with `api auto-start --mode start_prompt|start|disabled`, Esc reverts. `Start` starts the session
+again after a host reboot or a crash and sends nothing; `Start/Prompt` also sends the prompt once. From
+contract 1.44 the row is offered on stopped and saved sessions too (live or not does not matter). Against a backend that only
 advertises `capabilities.auto_recover` (before 1.43.0) the menu keeps the old `Auto-recover: on/off`
 row (`api auto-recover --enable|--disable`); the UI picks the new row whenever
 `capabilities.auto_start` (or an `auto_start` record) is present, else the old one.

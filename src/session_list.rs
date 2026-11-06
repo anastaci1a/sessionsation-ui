@@ -257,7 +257,7 @@ fn auto_start_row(s: &Value, ui: &AutoUi) -> Option<(Row, Action)> {
                     let text = reason_text(s["capability_reasons"]["auto_start"].as_str()?);
                     (text != "unavailable").then_some(text)
                 })
-                .unwrap_or_else(|| "only for live sessions".into())
+                .unwrap_or_else(|| "unavailable".into())
         };
         return Some((
             Row::gate("Auto start", false).with_hover_reason(reason),
@@ -506,10 +506,14 @@ pub fn actions_with(s: &Value, resume: bool, ui: &AutoUi) -> Vec<(Row, Action)> 
     if s["availability"] != "archived"
         && let Some(row) = auto_start_row(s, ui).or_else(|| auto_recover_row(s))
     {
-        // Beside Restart/End; stopped sessions only keep it to switch it off.
+        // Beside Restart/End. A stopped or saved session has no Restart: since 1.44 the
+        // backend allows Auto start there too (it starts after a reboot or crash), so the
+        // row follows Rename whenever it is set, offered or advertised as available.
         if let Some(i) = rows.iter().position(|(_, a)| *a == Action::Restart) {
             rows.insert(i, row);
-        } else if (auto_recover_on(s) || auto_mode(s) != AutoMode::Disabled)
+        } else if (auto_recover_on(s)
+            || auto_mode(s) != AutoMode::Disabled
+            || s["capabilities"]["auto_start"] == true)
             && let Some(i) = rows.iter().position(|(_, a)| *a == Action::Rename)
         {
             rows.insert(i + 1, row);
@@ -2385,6 +2389,34 @@ mod tests {
             .unwrap()
             .0;
         assert!(!row.enabled);
+    }
+    #[test]
+    fn auto_start_is_available_on_stopped_and_saved_sessions() {
+        // 1.44+: the setting is independent of running state; there is no Restart row.
+        for availability in ["stopped", "saved"] {
+            let s = json!({"availability":availability,"provider":"claude","capabilities":{"rename":true,"resume":true,"auto_start":true},
+                "auto_start":{"mode":"disabled"}});
+            let row = actions_with(&s, true, &AutoUi::default())
+                .into_iter()
+                .find(|(_, a)| *a == Action::AutoStart)
+                .unwrap_or_else(|| panic!("no Auto start row for {availability}"))
+                .0;
+            assert!(row.enabled, "{availability}");
+            assert!(
+                painted(&row, false).contains("Disabled"),
+                "{}",
+                painted(&row, false)
+            );
+        }
+        // Without the capability it stays an unavailable row with the backend reason.
+        let mut off = json!({"availability":"stopped","provider":"claude","capabilities":{"rename":true,"auto_start":false},
+            "capability_reasons":{"auto_start":"AUTO_RECOVER_UNSUPPORTED: hosted"},"auto_start":{"mode":"disabled"}});
+        off["capabilities"]["resume"] = json!(true);
+        let rows = actions_with(&off, true, &AutoUi::default());
+        assert!(
+            rows.iter()
+                .all(|(r, a)| *a != Action::AutoStart || !r.enabled)
+        );
     }
     #[test]
     fn auto_start_options_run_start_prompt_start_disabled() {
