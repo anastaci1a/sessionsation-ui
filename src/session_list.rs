@@ -994,7 +994,7 @@ pub fn paint_with(
         .max()
         .unwrap_or(0);
     // The account column sits one space after the longest name.
-    let columns = 1 + account_width;
+    let mut columns = 1 + account_width;
     let longest = sessions
         .iter()
         .map(|s| UnicodeWidthStr::width(full_name(s).as_str()))
@@ -1006,9 +1006,14 @@ pub fn paint_with(
     while name_width > 8 && !fits(name_width) {
         name_width -= 1;
     }
-    let show_accounts = !sessions.is_empty() && fits(name_width);
-    if !show_accounts {
-        name_width = longest.min(budget).min(canvas.width.saturating_sub(8));
+    let show_accounts = !sessions.is_empty();
+    if show_accounts && !fits(name_width) {
+        // Too narrow for the comfortable layout: the account column (the right
+        // side) is never dropped. The name gives way first, down to one cell
+        // (`…`); only when even that leaves no room is the account tag cut.
+        let room = canvas.width.saturating_sub(8);
+        name_width = longest.min(budget).min(room.saturating_sub(columns)).max(1);
+        columns = columns.min(room.saturating_sub(name_width).max(1));
     }
     let table_width = name_width + if show_accounts { columns } else { 0 };
     let layout = session_layout(sessions);
@@ -1089,7 +1094,7 @@ pub fn paint_with(
         let mut x = left + 2 + name_width;
         // This row's own visible end: its account tag, or its name without accounts.
         let row_end = if show_accounts {
-            x + 1 + UnicodeWidthStr::width(account_tag(session).as_str())
+            x + 1 + UnicodeWidthStr::width(account_tag(session).as_str()).min(columns - 1)
         } else {
             left + 2 + UnicodeWidthStr::width(rows[index].label.trim_end())
         };
@@ -1098,6 +1103,8 @@ pub fn paint_with(
             let glows = row_glows(session, extras.spinners);
             let tag = account_tag(session);
             let rest = tag.split_once(' ').map_or("", |(_, r)| r);
+            let rest = crate::widgets::ellipsize(rest, columns.saturating_sub(3));
+            let rest = rest.as_str();
             let tint = dim(if selected { SECONDARY } else { MUTED }, options.back);
             // The selected-bullet level only on the selected row; others (and the
             // back arrow or badge focus) use the dim bullet level.
@@ -2761,5 +2768,103 @@ mod tests {
         assert_ne!(plain.cells[4 * 100 + x].fg, dim(&plain, x, 4, false));
         let back = find(&plain, 3, "◀").unwrap();
         assert_eq!(plain.cells[3 * 100 + back].fg, SECONDARY);
+    }
+    fn narrow_sessions() -> Vec<Value> {
+        vec![
+            json!({"id":"a","name":"localica-agent-19 | localica","account_id":"codex:p","account_label":"codex-acct-long-label","availability":"running","provider":"codex"}),
+            json!({"id":"b","name":"界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界","account_id":"codex:p","availability":"saved"}),
+            json!({"id":"c","name":"x","account_id":"claude:q","account_label":"averyveryveryverylongaccountlabelhere","availability":"saved"}),
+            json!({"id":"d","name":"🚀 localica-lead | localica 🚀🚀 very long title indeed","account_id":"claude:q","availability":"saved"}),
+        ]
+    }
+    fn row_cells(c: &Canvas, y: usize) -> (String, usize) {
+        let s: String = c.cells[y * c.width..(y + 1) * c.width]
+            .iter()
+            .map(|c| c.glyph.as_str())
+            .collect();
+        let w = UnicodeWidthStr::width(s.trim_end());
+        (s, w)
+    }
+    /// Every session row at `width`: its text and display width, with the session.
+    fn rendered(sessions: &[Value], width: usize, selected: usize) -> Vec<(Value, String, usize)> {
+        let mut c = Canvas::new(width, 16);
+        let mut o = Options {
+            selected,
+            ..Options::default()
+        };
+        paint(&mut c, &mut o, sessions, true, 12, 100, 15);
+        session_layout(sessions)
+            .iter()
+            .enumerate()
+            .filter_map(|(row, i)| i.map(|i| (row, sessions[i].clone())))
+            .map(|(row, s)| {
+                let (line, w) = row_cells(&c, 3 + row);
+                (s, line, w)
+            })
+            .collect()
+    }
+    /// Short account tags on long names: the right column is whole at any width.
+    fn short_account_sessions() -> Vec<Value> {
+        let mut sessions = narrow_sessions();
+        for s in &mut sessions {
+            s["account_label"] = json!("acct");
+        }
+        sessions
+    }
+    #[test]
+    fn account_column_stays_whole_while_names_truncate_first() {
+        let sessions = short_account_sessions();
+        for width in [20, 24, 30, 36, 40, 44, 60, 80, 100, 140] {
+            for selected in [0usize, 1, 3] {
+                for (s, line, w) in rendered(&sessions, width, selected) {
+                    let tag = account_tag(&s);
+                    assert!(w <= width, "{width}: {line}");
+                    assert!(
+                        line.trim_end().ends_with(&tag),
+                        "{width}: account column cut or dropped: {line:?}"
+                    );
+                    if UnicodeWidthStr::width(full_name(&s).as_str()) > width / 2 {
+                        assert!(line.contains('…'), "{width}: name not ellipsised: {line:?}");
+                    }
+                }
+            }
+        }
+        // The long-title row keeps its tag even with long labels, once they fit.
+        for width in [50, 60, 100] {
+            for (s, line, w) in rendered(&narrow_sessions(), width, 0) {
+                assert!(w <= width, "{width}: {line}");
+                assert!(
+                    line.trim_end().ends_with(&account_tag(&s)),
+                    "{width}: {line:?}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn extreme_widths_cut_the_name_first_and_the_account_tag_last() {
+        let sessions = narrow_sessions();
+        for width in [12, 16, 20, 24, 30, 40, 49] {
+            for (s, line, w) in rendered(&sessions, width, 0) {
+                assert!(w <= width, "{width}: {line:?}");
+                let tag = account_tag(&s);
+                let icon = tag.chars().next().unwrap();
+                let at = line
+                    .find(icon)
+                    .unwrap_or_else(|| panic!("{width}: icon missing {line:?}"));
+                let shown = line[at..].trim_end();
+                let kept = shown.strip_suffix('…').unwrap_or(shown);
+                assert!(
+                    tag.starts_with(kept.trim_end()),
+                    "{width}: {shown:?} vs {tag:?}"
+                );
+                // The name is cut before any of the tag is.
+                if shown != tag {
+                    assert!(
+                        line[..at].trim().ends_with('…') || line[..at].trim().chars().count() <= 3,
+                        "{width}: {line:?}"
+                    );
+                }
+            }
+        }
     }
 }
