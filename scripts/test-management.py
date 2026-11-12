@@ -8,7 +8,7 @@ root=pathlib.Path(os.environ['FIXTURE_ROOT']);args=sys.argv;api=args[args.index(
 with (root/'calls.jsonl').open('a') as log:log.write(json.dumps(api)+'\\n')
 caps={'launch':{'version':1,'list':True},'resume':{'version':1,'list':True,'directory_selection':True},'providers':[{'id':'codex','account_limits':True,'enrollment':True,'account_deletion':True}]}
 accounts=[{'id':'codex:fixture'+str(i),'selectable':True,'enabled':True,'usage_fresh':True,'prefill':{'eligible':True,'valid_until':int(time.time())+60},'usage':{'observed_at':int(time.time()),'short':({'duration_minutes':300,'used_percent':95 if i==0 else 1} if i!=2 else None),'weekly':{'duration_minutes':10080,'used_percent':20 if i==0 else 94}},'switch_thresholds':{'customized':True,'short_percent':80,'weekly_percent':90}} for i in range(6)]
-session={'id':'11111111-1111-4111-8111-111111111111','generation':'captured','name':'Savedfixture','account_id':'codex:fixture0','account':'fixture0','availability':'saved','directory':str(root/'projects'),'capabilities':{'rename':True,'resume':True,'switch_account':False,'restart':False,'stop':False},'original_host':None}
+session={'id':'11111111-1111-4111-8111-111111111111','generation':'captured','name':'Savedfixture','space':'Origin','canonical':'Origin:Savedfixture','account_id':'codex:fixture0','account':'fixture0','availability':'saved','directory':str(root/'projects'),'capabilities':{'rename':True,'resume':True,'switch_account':False,'restart':False,'stop':False},'original_host':None}
 if (root/'space-fixture').exists():
  session.update(availability='running',attachment={'host':'herdr','target':'herdr/fixture/w1:p1'},capabilities={'rename':True,'move_space':True,'switch_account':True,'restart':True,'stop':True})
 receipt=None

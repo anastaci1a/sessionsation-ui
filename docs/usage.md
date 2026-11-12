@@ -764,3 +764,15 @@ Inline entries in Operations (`inline:true`, kind launch or resume) read like ot
 resumes (`New session` or `Resume`, named by the session name). They report `can_cancel`,
 `can_respond` and `can_recover` as false, so Cancel, Respond and Retry are never available for
 them. An `uncertain` phase reads as checking; unknown fields are ignored.
+
+## Space-scoped session names (backend 1.48)
+
+Session names are unique only within one HERDR Space, case-insensitively, and may contain `#`.
+Rows show `canonical` (`<space>:<name>`) when the backend sends it, for stopped and saved sessions
+too (they keep their Space), else the bare `name`. Rename and Start-name checks exclude only
+same-Space names; the Delete confirmation accepts the bare or the canonical name. Rename never moves a
+session (`SPACE_MISMATCH`: use Move to Space); `SESSION_NAME_EXISTS` reads "already used in this
+Space"; `AMBIGUOUS_SESSION` asks to select the session again. Start/Resume defaults to the session's
+stored Space when it exists (the backend recreates a missing one). The resume source check compares
+`name` and `space`, never `canonical`. A 1.47 backend sends none of these fields and behaves as before.
+`--create-space` is not offered; typing a new Space label keeps `--new-space`.

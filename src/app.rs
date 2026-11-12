@@ -56,6 +56,8 @@ fn resume_invalid(error: &str) -> bool {
         "SESSION_NOT_FOUND",
         "SAVED_DIRECTORY_UNAVAILABLE",
         "SESSION_NAME_EXISTS",
+        "SPACE_MISMATCH",
+        "AMBIGUOUS_SESSION",
         "ACCOUNT_UNAVAILABLE",
         "WORKSPACE_NOT_FOUND",
         "WORKSPACE_NAME_EXISTS",
@@ -89,6 +91,10 @@ fn resume_explanation(error: &str) -> String {
             "already running"
         } else if error.starts_with("SESSION_NAME_EXISTS") {
             "name taken"
+        } else if error.starts_with("SPACE_MISMATCH") {
+            "Space mismatch"
+        } else if error.starts_with("AMBIGUOUS_SESSION") {
+            "ambiguous name"
         } else if error.starts_with("ACCOUNT_UNAVAILABLE") {
             "account unavailable"
         } else if error.starts_with("SAVED_DIRECTORY_UNAVAILABLE") {

@@ -1,5 +1,5 @@
 import {createInterface} from 'node:readline';
-import {Client,executePlan,targetArgs,display,providerLabel,providerOf,addableProviders,filterAccounts,accountLabel,loginCommand} from './client.mjs';
+import {Client,executePlan,targetArgs,display,sessionName,providerLabel,providerOf,addableProviders,filterAccounts,accountLabel,loginCommand} from './client.mjs';
 
 const mode=process.argv[2]??'launcher';
 if (!['launcher','manage'].includes(mode)) { console.error('Usage: sessionsation-ui launcher|manage'); process.exit(2); }
@@ -35,7 +35,7 @@ async function launch() {
         if (!a) continue; args.push('--account',a.id);
       } else {
         const state=await client.call(['state']);
-        const s=await choose('Resume saved session',state.sessions.filter(s=>s.capabilities?.resume),s=>`${s.name} [${s.account_id}]`);
+        const s=await choose('Resume saved session',state.sessions.filter(s=>s.capabilities?.resume),s=>`${sessionName(s)} [${s.account_id}]`);
         if (!s) continue; args.push(...targetArgs(s));
       }
     }
@@ -43,21 +43,21 @@ async function launch() {
   }
 }
 async function sessionMenu(state) {
-  const s=await choose('Select session',state.sessions,s=>`${s.name} [${s.account_id}] ${s.availability}`);
+  const s=await choose('Select session',state.sessions,s=>`${sessionName(s)} [${s.account_id}] ${s.availability}`);
   if (!s) return;
   const choices=['inspect'];
   for (const [key,action] of [['rename','rename'],['switch_account','switch'],['restart','restart'],['stop','stop']])
     if (s.capabilities?.[key]) choices.push(action);
-  const action=await choose(s.name,choices,x=>x);
+  const action=await choose(sessionName(s),choices,x=>x);
   if (!action) return;
   if (action==='inspect') return show(s);
   const args=[action,...targetArgs(s)];
-  if (action==='rename') { const name=await ask('Unique name:'); if (!name) return; args.push('--name',name); }
+  if (action==='rename') { const name=await ask('New name (unique within its Space; rename never moves it):'); if (!name) return; args.push('--name',name); }
   if (action==='switch') {
     const a=await choose('Destination account',state.accounts.filter(a=>a.selectable && a.id!==s.account_id),a=>a.id);
     if (!a) return; args.push('--to',a.id);
   }
-  if (!await confirm(`${action} selected session ${s.name}?`)) return;
+  if (!await confirm(`${action} selected session ${sessionName(s)}?`)) return;
   show(await client.call(args)); print('Operation admitted; inspect Operations for completion or confirmation.');
 }
 async function accountMenu(state) {

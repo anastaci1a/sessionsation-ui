@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {Client,executePlan,validatePlan,targetArgs,display,addableProviders,providerLabel,filterAccounts,accountLabel,usageSummary,loginCommand} from '../src/client.mjs';
+import {Client,executePlan,validatePlan,targetArgs,display,addableProviders,providerLabel,filterAccounts,accountLabel,usageSummary,loginCommand,sessionName} from '../src/client.mjs';
 const run=promisify(execFile);
 async function fixture(t,body) {
   const dir=await mkdtemp(join(tmpdir(),'sessionsation-ui-'));
@@ -106,4 +106,8 @@ test('usage summary never turns missing, partial or unusable data into 0%',()=>{
 test('Claude login exec plan is shown as an exact quoted command and never executed',()=>{
   const argv=['/usr/bin/sessionsation','account','login','claude:new',"a b'c\u001b[2J"];
   assert.equal(loginCommand(argv),"/usr/bin/sessionsation account login claude:new 'a b'\\''c[2J'");
+});
+test('canonical name is preferred for display when present',()=>{
+  assert.equal(sessionName({name:'a#1',canonical:'Work:a#1'}),'Work:a#1');
+  assert.equal(sessionName({name:'a#1',canonical:null}),'a#1');
 });

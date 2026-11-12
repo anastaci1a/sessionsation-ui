@@ -603,6 +603,11 @@ fn refresh_resume_request(request: &mut Value, snapshot: &Value, fresh: &Value) 
             "SESSION_SOURCE_CHANGED: select the session again"
         );
     }
+    // `space` (1.48+) may be null/absent; `canonical` is derived and ignored.
+    ensure!(
+        snapshot["space"] == fresh["space"],
+        "SESSION_SOURCE_CHANGED: select the session again"
+    );
     request["expected_generation"] = fresh["generation"].clone();
     Ok(())
 }

@@ -847,8 +847,11 @@ pub fn session_row(sessions: &[Value], index: usize) -> usize {
 }
 /// Full session name without control characters (never pre-shortened).
 pub fn full_name(s: &Value) -> String {
-    s["name"]
+    // 1.48+: `canonical` (`<space>:<name>`) when present; 1.47 rows lack it.
+    s["canonical"]
         .as_str()
+        .filter(|c| !c.is_empty())
+        .or_else(|| s["name"].as_str())
         .unwrap_or("Unnamed")
         .chars()
         .filter(|c| !c.is_control())
@@ -1327,6 +1330,15 @@ pub fn paint_with(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn full_name_prefers_canonical_and_falls_back_to_name() {
+        assert_eq!(
+            full_name(&json!({"name":"a#1","canonical":"Work:a#1"})),
+            "Work:a#1"
+        );
+        assert_eq!(full_name(&json!({"name":"a#1","canonical":null})), "a#1");
+        assert_eq!(full_name(&json!({"name":"a#1"})), "a#1");
+    }
     fn text(c: &Canvas, y: usize) -> String {
         c.cells[y * c.width..(y + 1) * c.width]
             .iter()

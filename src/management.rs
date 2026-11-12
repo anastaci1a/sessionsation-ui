@@ -1772,6 +1772,11 @@ impl Manager {
             }
         }
     }
+    fn clear_excluded(&mut self) {
+        if let Some(field) = self.dialog.as_mut().and_then(|d| d.fields.first_mut()) {
+            field.excluded.clear();
+        }
+    }
     fn validate_dialog_names(&mut self) {
         let excluded = match &self.form {
             // Names are unique per provider; other providers may reuse them.
@@ -1781,12 +1786,36 @@ impl Manager {
                 .filter(|a| a.provider() == provider)
                 .filter_map(|a| a.id.split_once(':').map(|(_, name)| name.to_owned()))
                 .collect(),
-            Form::Rename(target) | Form::Placement(target, ..) => self
-                .sessions
-                .iter()
-                .filter(|s| s["id"] != target["id"])
-                .filter_map(|s| s["name"].as_str().map(str::to_owned))
-                .collect(),
+            // Names are unique only within one Space (1.48); 1.47 rows have no `space`
+            // and form one bucket, as before.
+            Form::Rename(target) => {
+                let space = target["space"].as_str().map(str::to_lowercase);
+                self.sessions
+                    .iter()
+                    .filter(|s| s["id"] != target["id"])
+                    .filter(|s| s["space"].as_str().map(str::to_lowercase) == space)
+                    .filter_map(|s| s["name"].as_str().map(str::to_owned))
+                    .collect()
+            }
+            Form::Placement(target, dest, _) => {
+                // Existing destination: its label; a new Space has no sessions yet.
+                let space = match dest {
+                    SpaceTarget::Existing(id) => self.space_choices["spaces"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|s| s["id"] == id.as_str())
+                        .and_then(|s| s["name"].as_str())
+                        .map(str::to_lowercase),
+                    SpaceTarget::New(_) => return self.clear_excluded(),
+                };
+                self.sessions
+                    .iter()
+                    .filter(|s| s["id"] != target["id"])
+                    .filter(|s| s["space"].as_str().map(str::to_lowercase) == space)
+                    .filter_map(|s| s["name"].as_str().map(str::to_owned))
+                    .collect()
+            }
             _ => return,
         };
         if let Some(field) = self.dialog.as_mut().and_then(|d| d.fields.first_mut()) {
@@ -4748,7 +4777,10 @@ impl Manager {
                 args
             }
             Form::SessionMutation(s, command) => {
-                if command == "delete-session" && value(0) != s["name"].as_str().unwrap_or("") {
+                if command == "delete-session"
+                    && value(0) != s["name"].as_str().unwrap_or("")
+                    && Some(value(0)) != s["canonical"].as_str()
+                {
                     return vec![];
                 }
                 let mut args = Self::target(&s, command);
@@ -5211,8 +5243,21 @@ impl Manager {
                         && original["socket"] == self.host["socket"])
                         .then(|| original["workspace_id"].as_str())
                         .flatten();
-                    let preferred = remembered
-                        .map(str::to_owned)
+                    // Resume reopens the stored Space (1.48), so default to it.
+                    let stored = (place == Place::Start)
+                        .then(|| session["space"].as_str())
+                        .flatten()
+                        .and_then(|label| {
+                            value["spaces"].as_array()?.iter().find_map(|s| {
+                                s["name"]
+                                    .as_str()?
+                                    .eq_ignore_ascii_case(label)
+                                    .then(|| s["id"].as_str().map(str::to_owned))
+                                    .flatten()
+                            })
+                        });
+                    let preferred = stored
+                        .or_else(|| remembered.map(str::to_owned))
                         .or_else(|| self.focused_space.clone());
                     self.space_choices = value;
                     self.space_session = session.clone();
@@ -5550,6 +5595,12 @@ impl Manager {
                     cached["generation"] = json!(generation);
                     if let Some(name) = value["name"].as_str() {
                         cached["name"] = json!(name);
+                    }
+                    // 1.48+: keep the Space and canonical name in step (absent on 1.47).
+                    for key in ["space", "canonical"] {
+                        if value.get(key).is_some() {
+                            cached[key] = value[key].clone();
+                        }
                     }
                     if matches!(self.form, Form::Progress) && self.foreground == Some(token) {
                         self.show(

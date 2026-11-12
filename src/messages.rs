@@ -71,7 +71,15 @@ pub fn describe(text: &str) -> String {
         "SAVED_DIRECTORY_UNAVAILABLE" => {
             "The saved directory is missing. Choose an available directory before resuming."
         }
-        "SESSION_NAME_EXISTS" => "Another session already uses this name. Choose a different name.",
+        "SESSION_NAME_EXISTS" => {
+            "This name is already used in this Space. Choose a different name."
+        }
+        "AMBIGUOUS_SESSION" => {
+            "Several sessions match that name. Select the session again to use its exact identity."
+        }
+        "SPACE_MISMATCH" => {
+            "The name belongs to a different Space. Rename never moves a session; use Move to Space."
+        }
         "WORKSPACE_NOT_FOUND" | "SPACE_NOT_FOUND" => {
             "The selected Space no longer exists. Choose another Space."
         }

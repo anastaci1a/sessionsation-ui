@@ -55,6 +55,8 @@ export const targetArgs = s => ['--session',s.id,'--expected-generation',s.gener
 export const display = value => String(value??'').replace(/[\x00-\x1f\x7f-\x9f]/g,'');
 export const PROVIDER_LABELS={codex:'Codex',claude:'Claude Code',gemini:'Gemini CLI',antigravity:'Antigravity CLI'};
 export const providerOf=a=>a?.provider??String(a?.id??'').split(':')[0]??'codex';
+// 1.48+: the canonical <space>:<name> when present (1.47 rows have none).
+export const sessionName=s=>display(s.canonical||s.name);
 export const providerLabel=p=>PROVIDER_LABELS[p]??display(p);
 /** Providers the backend implements and this client has a flow for. */
 export const addableProviders=caps=>(caps?.providers??[]).filter(p=>p.implemented===true&&p.id in PROVIDER_LABELS).map(p=>p.id);

@@ -219,7 +219,13 @@ impl Field {
         if matches!(&self.rule, Rule::Rename(original) if v == original) {
             return true;
         }
-        if self.excluded.contains(v) {
+        if matches!(self.rule, Rule::Name | Rule::Rename(_) | Rule::SpaceName) {
+            // Session and Space names are unique case-insensitively.
+            let folded = v.to_lowercase();
+            if self.excluded.iter().any(|e| e.to_lowercase() == folded) {
+                return false;
+            }
+        } else if self.excluded.contains(v) {
             return false;
         }
         match &self.rule {
@@ -1252,6 +1258,14 @@ mod tests {
         let bottom = rows(&c).iter().position(|r| r.contains("└──")).unwrap();
         assert_eq!(bottom - top, 5, "four text rows between the borders");
         assert!(rows(&c).iter().any(|r| r.contains("Save")));
+    }
+    #[test]
+    fn session_names_collide_case_insensitively_and_allow_hash() {
+        let mut f = Field::new("Name", "Dev#1").validated(Rule::Rename("dev#1".into()));
+        f.excluded = vec!["other".into()];
+        assert!(f.valid(), "own case change and '#' are allowed");
+        f.input.value = "OTHER".into();
+        assert!(!f.valid());
     }
     #[test]
     fn limited_editors_and_only_focused_field_has_a_cursor() {
