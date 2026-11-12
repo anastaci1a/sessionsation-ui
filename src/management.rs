@@ -3742,6 +3742,24 @@ impl Manager {
                     .unwrap_or_default()
             });
     }
+    /// Start only: the stored Space label when no Space with that label exists any more
+    /// (1.48 recreates it under the same label). `None` when it still exists or is unknown.
+    fn missing_stored_space(&self) -> Option<String> {
+        if self.place != Some(Place::Start) {
+            return None;
+        }
+        let label = self.space_session["space"]
+            .as_str()
+            .filter(|l| !l.is_empty())?;
+        let exists = self.space_choices["spaces"].as_array().is_some_and(|a| {
+            a.iter().any(|s| {
+                s["name"]
+                    .as_str()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(label))
+            })
+        });
+        (!exists).then(|| label.to_owned())
+    }
     fn new_space_dialog(&mut self) -> Vec<Intent> {
         let session = self.space_session.clone();
         self.show(
@@ -3756,7 +3774,11 @@ impl Manager {
             .flatten()
             .filter_map(|s| s["name"].as_str().map(str::to_owned))
             .collect();
-        let mut field = Field::new("Space name", "").validated(Rule::SpaceName);
+        let mut field = Field::new(
+            "Space name",
+            self.missing_stored_space().unwrap_or_default(),
+        )
+        .validated(Rule::SpaceName);
         field.excluded = taken;
         self.dialog.as_mut().unwrap().fields.push(field);
         vec![]
@@ -5264,6 +5286,13 @@ impl Manager {
                     self.enter(Page::Spaces(id(&session).into()));
                     self.place = Some(place);
                     self.preselect_space(preferred);
+                    // A vanished stored Space is recreated under its label: default to
+                    // `[create new space]` (prefilled), unless the backend cannot do it.
+                    if self.missing_stored_space().is_some()
+                        && self.rows().first().is_some_and(|r| r.enabled)
+                    {
+                        self.options.selected = 0;
+                    }
                 }
             }
             Purpose::AddToHerdr(session) => {
@@ -10996,6 +11025,37 @@ ok({'account_id':args[2],'provider':'claude','bypass_warning':value,'setting':'s
             assert!(refreshes(&sent));
             assert_eq!(m.dialog.as_ref().unwrap().title, "Session start requested");
         }
+    }
+    #[test]
+    fn start_defaults_to_stored_space_or_recreates_it_under_the_same_label() {
+        let run = |label: &str| {
+            let mut stopped = claude_session("stopped");
+            stopped["capabilities"]["resume"] = json!(true);
+            stopped["space"] = json!(label);
+            let mut m = placed(vec![stopped.clone()]);
+            m.capabilities["new_space"] = json!({"resume": true});
+            let (token, _) = api(&m.activate());
+            let sent = m.response(token, Ok(stopped));
+            let (token, _) = api(&sent);
+            m.response(token, Ok(space_choices()));
+            m
+        };
+        // Stored Space exists: preselected, no recreation.
+        let m = run("work");
+        assert!(m.missing_stored_space().is_none());
+        assert_eq!(
+            m.options.selected, 2,
+            "row 0 is [create new space], Work is w2"
+        );
+        // Stored Space is gone: [create new space], prefilled with the same label.
+        let mut m = run("Gone Space");
+        assert_eq!(m.missing_stored_space().as_deref(), Some("Gone Space"));
+        assert_eq!(m.options.selected, 0);
+        assert!(m.activate().is_empty());
+        assert_eq!(
+            m.dialog.as_ref().unwrap().fields[0].input.value,
+            "Gone Space"
+        );
     }
     #[test]
     fn create_new_space_names_then_confirms_for_start_and_move_when_advertised() {
