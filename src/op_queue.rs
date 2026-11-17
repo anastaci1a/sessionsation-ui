@@ -135,10 +135,20 @@ pub fn backend_running(operations: &[Value]) -> BTreeSet<String> {
         .filter_map(|o| o["id"].as_str().map(str::to_owned))
         .collect()
 }
+/// Phases after which a backend operation holds nothing. `expired` ends a compaction
+/// (or model change) whose window passed before the session was idle; its hold is released.
 pub fn terminal(phase: &str) -> bool {
     matches!(
         phase,
-        "complete" | "completed" | "cancelled" | "failed" | "recovered" | "abandoned" | "uncertain"
+        "complete"
+            | "completed"
+            | "cancelled"
+            | "failed"
+            | "recovered"
+            | "abandoned"
+            | "uncertain"
+            | "expired"
+            | "rolled_back"
     )
 }
 /// Running count: queue entries plus backend operations the queue does not track.
@@ -626,6 +636,19 @@ pub mod worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn expired_operations_are_not_running() {
+        let ops = vec![
+            serde_json::json!({"id":"c1","kind":"compaction","phase":"expired","session_id":"s1"}),
+            serde_json::json!({"id":"c2","kind":"compaction","phase":"waiting","session_id":"s2"}),
+        ];
+        assert!(terminal("expired") && terminal("rolled_back"));
+        assert_eq!(backend_running(&ops), BTreeSet::from(["c2".to_owned()]));
+        assert_eq!(
+            backend_busy(&ops),
+            BTreeSet::from(["session:s2".to_owned()])
+        );
+    }
     fn entry(resource: &str, state: State) -> Entry {
         let mut e = Entry::new(
             resource.into(),
